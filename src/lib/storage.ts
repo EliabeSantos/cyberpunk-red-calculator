@@ -3,6 +3,7 @@ import "client-only";
 import {
   calculateMaximumHitPoints,
   calculateMaximumHumanity,
+  calculateMaximumHumanityFromCyberware,
 } from "@/lib/calculations";
 import type { Character } from "@/types/character";
 
@@ -23,10 +24,18 @@ function isCharacter(value: unknown): value is Character {
   );
 }
 
-/** Normaliza fichas antigas e preserva dano/perda de Humanidade já registrados. */
+/** Normaliza fichas antigas e preserva dano/perda de Humanidade já registrados.
+ * A Maximum Humanity NÃO é recalculada a partir do EMP, pois ela deve
+ * refletir as penalidades do Cyberware instalado.
+ */
 function normalizeCharacter(character: Character): Character {
   const maximumHitPoints = calculateMaximumHitPoints(character.stats);
-  const maximumHumanity = calculateMaximumHumanity(character.stats);
+  // Maximum Humanity: usa o valor salvo se já existir (pós-criação com cyberware),
+  // senão calcula a partir do EMP (fichas antigas/sem cyberware).
+  const savedMaxHumanity = character.humanity?.max ?? 0;
+  const calculatedMaxHumanity = calculateMaximumHumanity(character.stats);
+  const maximumHumanity = savedMaxHumanity > 0 ? Math.min(savedMaxHumanity, calculatedMaxHumanity) : calculatedMaxHumanity;
+
   const oldHitPoints = character.combat?.hp;
   const oldHumanity = character.humanity;
   return {

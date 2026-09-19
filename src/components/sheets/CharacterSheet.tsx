@@ -10,9 +10,11 @@ import {
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
 import { applyReceivedDamage, rollDamageForLastAttack } from "@/lib/damage";
-import { getSkillBase } from "@/lib/calculations";
+import { getSkillBase, calculateEmpFromHumanity } from "@/lib/calculations";
 import { rollEvasion } from "@/lib/attacks";
 import { rollSkillCheck } from "@/lib/skills";
+import { removeCyberware } from "@/lib/cyberware";
+import { adjustHumanity } from "@/lib/humanity";
 import type { SkillCheckResult } from "@/lib/skills";
 import type { HumanityLossResult } from "@/lib/humanity";
 import StorePanel from "@/components/sheets/StorePanel";
@@ -76,6 +78,9 @@ export default function CharacterSheet({
   const [receivedDamage, setReceivedDamage] = useState("");
   const [hitLocation, setHitLocation] = useState<HitLocation>("body");
   const [combatError, setCombatError] = useState("");
+  const [humanityAdjustOpen, setHumanityAdjustOpen] = useState(false);
+  const [humanityAdjustValue, setHumanityAdjustValue] = useState("");
+  const [humanityAdjustReason, setHumanityAdjustReason] = useState("");
   const categoryOrder: SkillCategory[] = ["awareness", "body", "control", "education", "fighting", "performance", "ranged_weapon", "social", "technique"];
   const categoryNames: Record<SkillCategory, string> = {
     awareness: "Awareness", body: "Body", control: "Control", education: "Education", fighting: "Fighting", performance: "Performance", ranged_weapon: "Ranged Weapon", social: "Social", technique: "Technique",
@@ -142,6 +147,24 @@ export default function CharacterSheet({
     onUpdate(result.character);
     setLastHumanityLoss(result.cyberwareInstallation?.humanityLoss ?? null);
   }
+  function openHumanityAdjust() {
+    setHumanityAdjustValue(String(character.humanity.current));
+    setHumanityAdjustReason("");
+    setHumanityAdjustOpen(true);
+  }
+  function confirmHumanityAdjust() {
+    const value = Number(humanityAdjustValue);
+    if (!Number.isFinite(value)) return;
+    const resolution = adjustHumanity(character, value, humanityAdjustReason || "Ajuste manual");
+    if ("error" in resolution) return;
+    setHumanityAdjustOpen(false);
+    onUpdate(resolution.character);
+  }
+  function closeHumanityAdjust() {
+    setHumanityAdjustOpen(false);
+    setHumanityAdjustValue("");
+    setHumanityAdjustReason("");
+  }
   return (
     <main className="sheet-shell">
       <nav className="sheet-nav">
@@ -184,9 +207,23 @@ export default function CharacterSheet({
           </div>
           <div>
             <small>Humanidade</small>
-            <strong>
-              {character.humanity.current} <i>/</i> {character.humanity.max}
-            </strong>
+            <div style={{ display: "flex", alignItems: "baseline", gap: "0.35rem" }}>
+              <strong>
+                {character.humanity.current} <i>/</i> {character.humanity.max}
+              </strong>
+              <button
+                type="button"
+                className="upgrade-skill"
+                onClick={openHumanityAdjust}
+                style={{ padding: "0.2rem 0.4rem", fontSize: "0.6rem", height: "auto" }}
+              >
+                Ajustar
+              </button>
+            </div>
+          </div>
+          <div>
+            <small>EMP</small>
+            <strong>{calculateEmpFromHumanity(character.humanity.current)}</strong>
           </div>
           <div>
             <small>Armadura</small>
@@ -491,12 +528,25 @@ export default function CharacterSheet({
             <div className="equipment-list">
               {character.cyberware.map((item) => (
                 <article key={item.id}>
-                  <h3>{item.name}</h3>
-                  <small>
-                    {item.humanityLoss
-                      ? `Perda de Humanidade: ${item.humanityLoss}`
-                      : "Sem perda de Humanidade"}
-                  </small>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem" }}>
+                    <div>
+                      <h3>{item.name}</h3>
+                      <small>
+                        {item.humanityLoss
+                          ? `Perda de Humanidade: ${item.humanityLoss}`
+                          : "Sem perda de Humanidade"}
+                        {item.isBorgware ? " · Borgware" : ""}
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      className="equip-item"
+                      onClick={() => onUpdate(removeCyberware(character, item.id))}
+                      style={{ marginTop: "0.25rem" }}
+                    >
+                      Remover
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>
@@ -531,6 +581,55 @@ export default function CharacterSheet({
           )}
         </section>
       </section>
+      {humanityAdjustOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeHumanityAdjust}>
+          <section className="store-panel store-modal" role="dialog" aria-modal="true" aria-label="Ajustar Humanity" onMouseDown={(event) => event.stopPropagation()}>
+            <button type="button" className="close-modal" onClick={closeHumanityAdjust} aria-label="Fechar">×</button>
+            <div className="store-heading">
+              <div>
+                <p className="eyebrow">Humanidade</p>
+                <h2>Ajustar Humanity Atual</h2>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <div>
+                <small>Current Humanity</small>
+                <strong style={{ fontSize: "1.5rem" }}>{character.humanity.current} / {character.humanity.max}</strong>
+              </div>
+              <div>
+                <label style={{ display: "block", marginBottom: "0.35rem" }}>
+                  <small>Novo valor</small>
+                  <input
+                    type="number"
+                    min="0"
+                    max={character.humanity.max}
+                    value={humanityAdjustValue}
+                    onChange={(event) => setHumanityAdjustValue(event.target.value)}
+                    placeholder="0"
+                    style={{ width: "100%", marginTop: "0.25rem" }}
+                  />
+                </label>
+              </div>
+              <div>
+                <label style={{ display: "block", marginBottom: "0.35rem" }}>
+                  <small>Motivo (opcional)</small>
+                  <input
+                    type="text"
+                    value={humanityAdjustReason}
+                    onChange={(event) => setHumanityAdjustReason(event.target.value)}
+                    placeholder="Ex: Cyberware removido por engano"
+                    style={{ width: "100%", marginTop: "0.25rem" }}
+                  />
+                </label>
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginTop: "0.5rem" }}>
+                <button type="button" className="equip-item" onClick={closeHumanityAdjust}>Cancelar</button>
+                <button type="button" className="upgrade-skill" onClick={confirmHumanityAdjust} style={{ background: "var(--accent)", color: "#111700" }}>Confirmar</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

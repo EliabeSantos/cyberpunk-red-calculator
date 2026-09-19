@@ -78,10 +78,12 @@ export function changeAttributeAtCreation(character: Character, attribute: Attri
   if ((delta === 1 && !canIncreaseAttribute(character, attribute)) || (delta === -1 && !canDecreaseAttribute(character, attribute))) return character;
   const stats = { ...character.stats, [attribute]: character.stats[attribute] + delta };
   const maximumHitPoints = calculateMaximumHitPoints(stats);
+  const maximumHumanity = calculateMaximumHumanity(stats);
   return {
     ...character,
     stats,
     combat: { ...character.combat, hp: { current: maximumHitPoints, max: maximumHitPoints } },
+    humanity: { current: maximumHumanity, max: maximumHumanity },
   };
 }
 export function changeSkillAtCreation(character: Character, skillId: string, delta: 1 | -1): Character {

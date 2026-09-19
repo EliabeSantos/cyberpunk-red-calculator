@@ -13,7 +13,7 @@ export interface Skill { name: string; stat: AttributeName; category: import("@/
 export type Skills = Record<string, Skill>;
 export interface CombatStats { hp: { current: number; max: number }; stamina: { current: number; max: number }; armor: { head: number; body: number }; criticalInjuries: string[]; }
 export interface Weapon { id: string; catalogItemId?: string; name: string; damage: string; rateOfFire?: number; magazine?: number; ammo?: number; skill?: string; attackType?: import("@/types/attack").AttackType; }
-export interface CyberwareItem { id: string; name: string; humanityLoss?: string; installedAt: string; }
+export interface CyberwareItem { id: string; name: string; humanityLoss?: string; installedAt: string; isBorgware?: boolean; }
 export interface InventoryItem { id: string; name: string; quantity: number; category?: string; catalogItemId?: string; notes?: string; }
 export interface Progression { improvementPoints: number; }
 export interface Wallet { eurodollars: number; }

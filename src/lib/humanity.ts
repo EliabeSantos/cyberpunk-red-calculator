@@ -15,3 +15,43 @@ export function rollHumanityLoss(cyberware: { id: string; name: string; humanity
   const result: DiceResult | null = typeof cyberware.humanityLoss === "string" ? rollDice(cyberware.humanityLoss) : null;
   return { cyberwareId: cyberware.id, cyberwareName: cyberware.name, expression: result?.expression, rolls: result?.rolls ?? [], humanityLost: result?.total ?? (typeof cyberware.humanityLoss === "number" ? cyberware.humanityLoss : 0) };
 }
+
+/** Ajusta manualmente a Current Humanity do personagem.
+ * Não altera Maximum Humanity, não instala/remove cyberware, não gera Humanity Loss automática.
+ * Registra o ajuste no histórico para auditoria.
+ */
+export function adjustHumanity(
+  character: Character,
+  newHumanity: number,
+  reason: string = "Ajuste manual"
+): { character: Character; humanityBefore: number; humanityAfter: number } | { error: string } {
+  if (!Number.isFinite(newHumanity)) return { error: "Valor de Humanity inválido." };
+  if (newHumanity < 0) return { error: "Humanity não pode ser negativa." };
+  if (newHumanity > character.humanity.max) return { error: `Humanity não pode exceder o máximo (${character.humanity.max}).` };
+
+  const humanityBefore = character.humanity.current;
+  const humanityAfter = newHumanity;
+
+  const entry: RollHistoryEntry = {
+    id: crypto.randomUUID(),
+    type: "humanity_loss", // reutiliza o tipo existente; o label indica que foi ajuste
+    label: `Ajuste de Humanity: ${reason}`,
+    characterId: character.id,
+    expression: "ajuste",
+    rolls: [],
+    total: humanityAfter - humanityBefore,
+    timestamp: new Date().toISOString(),
+    humanityBefore,
+    humanityAfter,
+  };
+
+  return {
+    humanityBefore,
+    humanityAfter,
+    character: {
+      ...character,
+      humanity: { ...character.humanity, current: humanityAfter },
+      rollHistory: [entry, ...character.rollHistory],
+    },
+  };
+}
