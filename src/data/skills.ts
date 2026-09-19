@@ -1,69 +1,23 @@
 import { getRequiredSkillMinimum } from "@/data/characterCreation";
-import type { AttributeName, Attributes, Skill, Skills } from "@/types/character";
+import type { AttributeName, Skills, Stats } from "@/types/character";
 
-export type SkillDefinition = { name: string; stat: AttributeName; creation: { required: boolean; minimumLevel: number } };
+export type SkillCategory = "awareness" | "body" | "control" | "education" | "fighting" | "performance" | "ranged_weapon" | "social" | "technique";
+export type SkillDefinition = { name: string; stat: AttributeName; category: SkillCategory; costMultiplier: 1 | 2; creation: { required: boolean; minimumLevel: number } };
+type DefinitionInput = Omit<SkillDefinition, "creation">;
+const normal = (name: string, stat: AttributeName, category: SkillCategory): DefinitionInput => ({ name, stat, category, costMultiplier: 1 });
+const double = (name: string, stat: AttributeName, category: SkillCategory): DefinitionInput => ({ name, stat, category, costMultiplier: 2 });
 
-/** Catálogo inicial de perícias. Especializações poderão ser adicionadas depois. */
-const baseSkillDefinitions: Record<string, Omit<SkillDefinition, "creation">> = {
-  athletics: { name: "Atletismo", stat: "DEX" },
-  brawling: { name: "Briga", stat: "DEX" },
-  contortionist: { name: "Contorcionismo", stat: "DEX" },
-  dance: { name: "Dança", stat: "DEX" },
-  evasion: { name: "Evasão", stat: "DEX" },
-  martial_arts: { name: "Artes Marciais", stat: "DEX" },
-  melee_weapon: { name: "Arma Branca", stat: "DEX" },
-  stealth: { name: "Furtividade", stat: "DEX" },
-  pick_pocket: { name: "Furto", stat: "DEX" },
-  drive_land_vehicle: { name: "Condução", stat: "REF" },
-  handgun: { name: "Armas de Fogo Curtas", stat: "REF" },
-  heavy_weapons: { name: "Armas Pesadas", stat: "REF" },
-  shoulder_arms: { name: "Armas de Ombro", stat: "REF" },
-  autofire: { name: "Rajada Automática", stat: "REF" },
-  concentration: { name: "Concentração", stat: "WILL" },
-  endurance: { name: "Resistência", stat: "WILL" },
-  resist_torture_drugs: { name: "Resistir a Tortura/Drogas", stat: "WILL" },
-  bribery: { name: "Suborno", stat: "COOL" },
-  interrogation: { name: "Interrogatório", stat: "COOL" },
-  intimidation: { name: "Intimidação", stat: "COOL" },
-  streetwise: { name: "Streetwise", stat: "COOL" },
-  trading: { name: "Comércio", stat: "COOL" },
-  education: { name: "Educação", stat: "INT" },
-  business: { name: "Negócios", stat: "INT" },
-  deduction: { name: "Dedução", stat: "INT" },
-  language: { name: "Idioma", stat: "INT" },
-  local_expert: { name: "Especialista Local", stat: "INT" },
-  science: { name: "Ciência", stat: "INT" },
-  tactics: { name: "Tática", stat: "INT" },
-  perception: { name: "Percepção", stat: "INT" },
-  tracking: { name: "Rastreamento", stat: "INT" },
-  conceal_reveal_object: { name: "Esconder/Revelar Objeto", stat: "INT" },
-  first_aid: { name: "Primeiros Socorros", stat: "TECH" },
-  land_vehicle: { name: "Veículos Terrestres", stat: "TECH" },
-  basic_tech: { name: "Tecnologia Básica", stat: "TECH" },
-  cybertech: { name: "Cybertech", stat: "TECH" },
-  electronics_security: { name: "Eletrônica/Segurança", stat: "TECH" },
-  weaponstech: { name: "Tecnologia de Armas", stat: "TECH" },
-  pick_lock: { name: "Arrombar Fechaduras", stat: "TECH" },
-  composition: { name: "Composição", stat: "EMP" },
-  conversation: { name: "Conversação", stat: "EMP" },
-  human_perception: { name: "Percepção Humana", stat: "EMP" },
-  interpersonal: { name: "Interação", stat: "EMP" },
-  play_instrument: { name: "Instrumento Musical", stat: "EMP" },
-  play: { name: "Atuação", stat: "EMP" },
+/** As 66 perícias do Core Rulebook; especializações pertencem à instância da ficha, não ao catálogo. */
+const baseSkillDefinitions: Record<string, DefinitionInput> = {
+  concentration: normal("Concentração", "WILL", "awareness"), conceal_reveal_object: normal("Esconder/Revelar Objeto", "INT", "awareness"), lip_reading: normal("Leitura Labial", "INT", "awareness"), perception: normal("Percepção", "INT", "awareness"), tracking: normal("Rastreamento", "INT", "awareness"),
+  athletics: normal("Atletismo", "DEX", "body"), contortionist: normal("Contorcionismo", "DEX", "body"), dance: normal("Dança", "DEX", "body"), endurance: normal("Resistência", "WILL", "body"), resist_torture_drugs: normal("Resistir a Tortura/Drogas", "WILL", "body"), stealth: normal("Furtividade", "DEX", "body"),
+  drive_land_vehicle: normal("Condução de Veículo Terrestre", "REF", "control"), pilot_air_vehicle: double("Pilotar Veículo Aéreo", "REF", "control"), pilot_sea_vehicle: normal("Pilotar Veículo Marítimo", "REF", "control"), riding: normal("Cavalgar", "REF", "control"),
+  accounting: normal("Contabilidade", "INT", "education"), animal_handling: normal("Lidar com Animais", "INT", "education"), bureaucracy: normal("Burocracia", "INT", "education"), business: normal("Negócios", "INT", "education"), composition: normal("Composição", "INT", "education"), criminology: normal("Criminologia", "INT", "education"), cryptography: normal("Criptografia", "INT", "education"), deduction: normal("Dedução", "INT", "education"), education: normal("Educação", "INT", "education"), gamble: normal("Jogos de Azar", "INT", "education"), language: normal("Idioma", "INT", "education"), library_search: normal("Pesquisa em Biblioteca", "INT", "education"), local_expert: normal("Especialista Local", "INT", "education"), science: normal("Ciência", "INT", "education"), tactics: normal("Tática", "INT", "education"), wilderness_survival: normal("Sobrevivência Selvagem", "INT", "education"),
+  brawling: normal("Briga", "DEX", "fighting"), evasion: normal("Evasão", "DEX", "fighting"), martial_arts: double("Artes Marciais", "DEX", "fighting"), melee_weapon: normal("Arma Branca", "DEX", "fighting"),
+  acting: normal("Atuação", "COOL", "performance"), play_instrument: normal("Tocar Instrumento", "TECH", "performance"),
+  archery: normal("Arco e Flecha", "REF", "ranged_weapon"), autofire: double("Rajada Automática", "REF", "ranged_weapon"), handgun: normal("Armas de Fogo Curtas", "REF", "ranged_weapon"), heavy_weapons: double("Armas Pesadas", "REF", "ranged_weapon"), shoulder_arms: normal("Armas de Ombro", "REF", "ranged_weapon"),
+  bribery: normal("Suborno", "COOL", "social"), conversation: normal("Conversação", "EMP", "social"), human_perception: normal("Percepção Humana", "EMP", "social"), interrogation: normal("Interrogatório", "COOL", "social"), persuasion: normal("Persuasão", "COOL", "social"), personal_grooming: normal("Cuidados Pessoais", "COOL", "social"), streetwise: normal("Streetwise", "COOL", "social"), trading: normal("Comércio", "COOL", "social"), wardrobe_style: normal("Vestuário & Estilo", "COOL", "social"),
+  air_vehicle_tech: normal("Tecnologia de Veículos Aéreos", "TECH", "technique"), basic_tech: normal("Tecnologia Básica", "TECH", "technique"), cybertech: normal("Cybertech", "TECH", "technique"), demolitions: double("Demolições", "TECH", "technique"), electronics_security: double("Eletrônica/Segurança", "TECH", "technique"), first_aid: normal("Primeiros Socorros", "TECH", "technique"), forgery: normal("Falsificação", "TECH", "technique"), land_vehicle_tech: normal("Tecnologia de Veículos Terrestres", "TECH", "technique"), paint_draw_sculpt: normal("Pintar/Desenhar/Esculpir", "TECH", "technique"), paramedic: double("Paramédico", "TECH", "technique"), photography_film: normal("Fotografia/Filme", "TECH", "technique"), pick_lock: normal("Arrombar Fechaduras", "TECH", "technique"), pick_pocket: normal("Furto", "TECH", "technique"), sea_vehicle_tech: normal("Tecnologia de Veículos Marítimos", "TECH", "technique"), weaponstech: normal("Tecnologia de Armas", "TECH", "technique"),
 };
-/** Regras por perícia, incluindo mínimos obrigatórios de criação. */
-export const skillDefinitions: Record<string, SkillDefinition> = Object.fromEntries(
-  Object.entries(baseSkillDefinitions).map(([id, definition]) => {
-    const minimumLevel = getRequiredSkillMinimum(id);
-    return [id, { ...definition, creation: { required: minimumLevel > 0, minimumLevel } }];
-  }),
-);
-export function createDefaultSkills(attributes: Attributes): Skills {
-  return Object.fromEntries(
-    Object.entries(skillDefinitions).map(([id, definition]) => {
-      const base = attributes[definition.stat];
-      const skill: Skill = { name: definition.name, stat: definition.stat, level: definition.creation.minimumLevel, base, total: base + definition.creation.minimumLevel };
-      return [id, skill];
-    }),
-  );
-}
+export const skillDefinitions: Record<string, SkillDefinition> = Object.fromEntries(Object.entries(baseSkillDefinitions).map(([id, definition]) => { const minimumLevel = getRequiredSkillMinimum(id); return [id, { ...definition, creation: { required: minimumLevel > 0, minimumLevel } }]; }));
+export function createDefaultSkills(stats: Stats): Skills { return Object.fromEntries(Object.entries(skillDefinitions).map(([id, definition]) => { const level = definition.creation.minimumLevel; return [id, { name: definition.name, stat: definition.stat, category: definition.category, costMultiplier: definition.costMultiplier, level, base: stats[definition.stat] + level }]; })); }
