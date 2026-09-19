@@ -9,14 +9,16 @@ import {
   upgradeSkill,
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
-import { rollDamageForLastAttack } from "@/lib/damage";
+import { applyReceivedDamage, rollDamageForLastAttack } from "@/lib/damage";
 import { getSkillBase } from "@/lib/calculations";
+import { rollEvasion } from "@/lib/attacks";
 import type { HumanityLossResult } from "@/lib/humanity";
 import StorePanel from "@/components/sheets/StorePanel";
 import AttackActions from "@/components/combat/AttackActions";
-import type { AttackRollResult, DamageRollResult } from "@/types/attack";
+import type { AttackRollResult, DamageRollResult, EvasionRollResult } from "@/types/attack";
 import type { AttributeName, Character } from "@/types/character";
 import type { SkillCategory } from "@/data/skills";
+import { hitLocationLabels, hitLocations, type HitLocation } from "@/types/combat";
 import { roleDefinitions } from "@/data/roles";
 import { getCombatAwarenessTotal, getMakerSpecialtyPoints, getMedicineSpecialtyPoints, getNetActionsPerTurn, getRoleAbilityIPCost, spendIPOnRoleAbility } from "@/lib/roles";
 
@@ -65,6 +67,10 @@ export default function CharacterSheet({
     useState<HumanityLossResult | null>(null);
   const [lastAttack, setLastAttack] = useState<AttackRollResult | null>(null);
   const [lastDamage, setLastDamage] = useState<DamageRollResult | null>(null);
+  const [lastEvasion, setLastEvasion] = useState<EvasionRollResult | null>(null);
+  const [receivedDamage, setReceivedDamage] = useState("");
+  const [hitLocation, setHitLocation] = useState<HitLocation>("body");
+  const [combatError, setCombatError] = useState("");
   const categoryOrder: SkillCategory[] = ["awareness", "body", "control", "education", "fighting", "performance", "ranged_weapon", "social", "technique"];
   const categoryNames: Record<SkillCategory, string> = {
     awareness: "Awareness", body: "Body", control: "Control", education: "Education", fighting: "Fighting", performance: "Performance", ranged_weapon: "Ranged Weapon", social: "Social", technique: "Technique",
@@ -93,6 +99,16 @@ export default function CharacterSheet({
     if ("error" in resolution) return;
     onUpdate(resolution.character);
     setLastDamage(resolution.result);
+  }
+  function evade() {
+    const resolution = rollEvasion(character);
+    if ("error" in resolution) { setCombatError(resolution.error); return; }
+    setCombatError(""); setLastEvasion(resolution.result); onUpdate(resolution.character);
+  }
+  function receiveDamage() {
+    const resolution = applyReceivedDamage(character, Number(receivedDamage), hitLocation);
+    if ("error" in resolution) { setCombatError(resolution.error); return; }
+    setCombatError(""); setReceivedDamage(""); onUpdate(resolution.character);
   }
   function equipItem(inventoryItemId: string) {
     const result = equipInventoryItem(character, inventoryItemId);
@@ -288,6 +304,30 @@ export default function CharacterSheet({
                   </div>
                 );
               })()}
+            <h3>Defesa</h3>
+            <div className="combat-action">
+              <span>Evasion <small>DEX + nível + 1d10</small></span>
+              <button type="button" className="upgrade-skill" onClick={evade}>Rolar Evasion</button>
+            </div>
+            {lastEvasion && (
+            <div className="evasion-result" role="status">
+              <strong>Evasion</strong>
+              <span>{lastEvasion.stat.id}: {lastEvasion.stat.value} · Evasion: {lastEvasion.skill.value} · d10: [{lastEvasion.naturalRoll}]</span>
+              <b>Total: {lastEvasion.total}</b>
+            </div>
+          )}
+          <h3>Dano recebido</h3>
+            <div className="received-damage">
+              <select aria-label="Local do dano" value={hitLocation} onChange={(event) => setHitLocation(event.target.value as HitLocation)}>{hitLocations.map((location) => <option key={location} value={location}>{hitLocationLabels[location]}</option>)}</select>
+              <input type="number" min="1" step="1" value={receivedDamage} onChange={(event) => setReceivedDamage(event.target.value)} placeholder="Dano" />
+              <button type="button" className="upgrade-skill" onClick={receiveDamage}>Receber dano</button>
+            </div>
+            {combatError && <p className="form-error">{combatError}</p>}
+            <h3>Armadura</h3>
+            <div className="combat-grid">
+              <Metric label="Cabeça" value={`${character.combat.armor.head} SP`} />
+              <Metric label="Corpo e membros" value={`${character.combat.armor.body} SP`} />
+            </div>
             <h3>Lesões críticas</h3>
             {character.combat.criticalInjuries.length ? (
               <ul className="tag-list">

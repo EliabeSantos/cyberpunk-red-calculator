@@ -19,6 +19,7 @@ export function getAvailableAttacks(character: Character): AvailableAttack[] {
       context: { type: "weapon", weaponId: weapon.id },
     }));
   const martialArts = character.skills.martial_arts;
+  const brawling = character.skills.brawling;
   const skillAttacks: AvailableAttack[] =
     martialArts && martialArts.level > 0
       ? [
@@ -31,12 +32,14 @@ export function getAvailableAttacks(character: Character): AvailableAttack[] {
           },
         ]
       : [];
-  return [...weaponAttacks, ...skillAttacks];
+  const brawlingAttack: AvailableAttack[] = brawling && brawling.level > 0 ? [{ id: "skill:brawling", label: brawling.name, detail: `${brawling.stat} + ${brawling.name} + 1d10`, source: "skill", context: { type: "brawling", skillId: "brawling" } }] : [];
+  return [...weaponAttacks, ...skillAttacks, ...brawlingAttack];
 }
 
 function getAttackLabel(type: AttackContext["type"]): string {
   return type === "martial_arts"
     ? "Artes Marciais"
+    : type === "brawling" ? "Brawling"
     : type === "unarmed"
       ? "Ataque Desarmado"
       : "Ataque";
@@ -56,6 +59,8 @@ export function rollAttack(
   let weaponId = context.weaponId;
   let attackType = context.type;
   let damageDice: string | undefined;
+  if (context.type === "brawling") damageDice = "1d6";
+  if (context.type === "martial_arts") damageDice = "2d6";
   if (context.weaponId) {
     const weapon = character.weapons.find(
       (item) => item.id === context.weaponId,
@@ -125,4 +130,15 @@ export function rollAttack(
     },
     result,
   };
+}
+
+/** Defensive skill test. It shares Skill Base and dice rules, but is never an attack. */
+export function rollEvasion(character: Character, modifiers: import("@/types/attack").AttackModifier[] = []): { character: Character; result: import("@/types/attack").EvasionRollResult } | { error: string } {
+  const skill = character.skills.evasion;
+  if (!skill) return { error: "A perícia Evasion não existe na ficha." };
+  const roll = rollDice("1d10");
+  const total = roll.total + getSkillBase(character, "evasion") + modifiers.reduce((sum, item) => sum + item.value, 0);
+  const result = { evasionId: crypto.randomUUID(), roll, stat: { id: skill.stat, value: character.stats[skill.stat] }, skill: { id: "evasion" as const, value: skill.level }, skillBase: getSkillBase(character, "evasion"), modifiers, total, naturalRoll: roll.rolls[0] };
+  const entry: RollHistoryEntry = { id: crypto.randomUUID(), type: "evasion", label: "Evasion", characterId: character.id, expression: roll.expression, rolls: roll.rolls, total, timestamp: new Date().toISOString(), stat: { id: skill.stat, value: character.stats[skill.stat] }, skill: { id: "evasion", value: skill.level }, modifiers };
+  return { character: { ...character, rollHistory: [entry, ...character.rollHistory] }, result };
 }

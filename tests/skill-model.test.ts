@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { rollAttack } from "../src/lib/attacks.ts";
+import { getAvailableAttacks, rollAttack, rollEvasion } from "../src/lib/attacks.ts";
+import { applyReceivedDamage, rollDamage } from "../src/lib/damage.ts";
 import { getSkillBase } from "../src/lib/calculations.ts";
-import { getAttributePointsRemaining, getCreationPointSummary, getSkillPointsSpent, validateCharacterCreation } from "../src/lib/characterCreation.ts";
+import { getAttributePointsRemaining, getCreationPointSummary, getSkillPointsSpent, validateCharacterCreation, validateCharacterEdit } from "../src/lib/characterCreation.ts";
 import { skillDefinitions } from "../src/data/skills.ts";
 import { statNames, createEmptyCharacter } from "../src/types/character.ts";
 import { addMulticlassRole, addPrimaryRole, getCombatAwarenessTotal, getMakerSpecialtyPoints, getMedicineSpecialtyPoints, getMotoSkillBonus, getNetActionsPerTurn, getRoleAbilityIPCost, spendIPOnRoleAbility } from "../src/lib/roles.ts";
@@ -107,4 +108,76 @@ test("Role rank rules, multiclass and IP are independent from skills", () => {
   assert.equal(upgraded?.roleAbilities[0].rank, 5);
   assert.equal(upgraded?.ip, 0);
   assert.equal(getMotoSkillBonus(addMulticlassRole(addPrimaryRole(createEmptyCharacter("moto"), "nomad"), "solo") ?? addPrimaryRole(createEmptyCharacter("moto2"), "nomad")), 4);
+});
+test("Brawling is an unarmed attack only when its level is positive", () => {
+  const character = createEmptyCharacter("brawling-test");
+  character.skills.brawling.level = 0;
+  assert.equal(getAvailableAttacks(character).some((attack) => attack.context.type === "brawling"), false);
+  character.stats.DEX = 6;
+  character.skills.brawling.level = 3;
+  const brawling = getAvailableAttacks(character).find((attack) => attack.context.type === "brawling");
+  assert.ok(brawling);
+  const random = Math.random; Math.random = () => 0.4;
+  try {
+    const result = rollAttack(character, brawling!.context);
+    assert.ok("result" in result);
+    if ("result" in result) { assert.equal(result.result.total, 14); assert.equal(result.result.damageDice, "1d6"); assert.ok(!("error" in rollDamage(result.result))); }
+  } finally { Math.random = random; }
+});
+
+test("Evasion uses Skill Base, records history, and does not alter HP", () => {
+  const character = createEmptyCharacter("evasion-test");
+  character.stats.DEX = 6; character.skills.evasion.level = 4;
+  const hp = character.combat.hp.current;
+  const random = Math.random; Math.random = () => 0.4;
+  try {
+    const result = rollEvasion(character);
+    assert.ok("result" in result);
+    if ("result" in result) { assert.equal(result.result.skillBase, 10); assert.equal(result.result.total, 15); assert.equal(result.character.combat.hp.current, hp); assert.equal(result.character.rollHistory[0].type, "evasion"); }
+  } finally { Math.random = random; }
+});
+
+test("received damage clamps HP and records before/after without rolling", () => {
+  const character = createEmptyCharacter("damage-test");
+  character.combat.hp = { current: 10, max: 40 };
+  const result = applyReceivedDamage(character, 12);
+  assert.ok("character" in result);
+  if ("character" in result) { assert.equal(result.character.combat.hp.current, 0); assert.equal(result.character.combat.hp.max, 40); assert.deepEqual([result.character.rollHistory[0].amount, result.character.rollHistory[0].hpBefore, result.character.rollHistory[0].hpAfter], [12, 10, 0]); }
+  assert.ok("error" in applyReceivedDamage(character, 0));
+  assert.ok("error" in applyReceivedDamage(character, -5));
+  assert.ok("error" in applyReceivedDamage(character, Number.NaN));
+});
+test("Martial Arts supplies central damage dice without a weapon", () => {
+  const character = createEmptyCharacter("martial-test");
+  character.skills.martial_arts.level = 4;
+  const martial = getAvailableAttacks(character).find((attack) => attack.context.type === "martial_arts");
+  assert.ok(martial); const result = rollAttack(character, martial!.context);
+  assert.ok("result" in result); if ("result" in result) assert.equal(result.result.damageDice, "2d6");
+});
+
+test("localized armor absorbs damage and loses one SP only on penetration", () => {
+  const character = createEmptyCharacter("armor-test"); character.combat.hp = { current: 40, max: 40 }; character.combat.armor = { head: 11, body: 11 };
+  const absorbed = applyReceivedDamage(character, 8, "body"); assert.ok("character" in absorbed);
+  if ("character" in absorbed) { assert.equal(absorbed.character.combat.hp.current, 40); assert.equal(absorbed.character.combat.armor.body, 11); }
+  const penetrated = applyReceivedDamage(character, 15, "head"); assert.ok("character" in penetrated);
+  if ("character" in penetrated) { assert.equal(penetrated.character.combat.hp.current, 36); assert.equal(penetrated.character.combat.armor.head, 10); assert.equal(penetrated.character.rollHistory[0].hitLocation, "head"); assert.equal(penetrated.character.rollHistory[0].damageAbsorbed, 11); assert.equal(penetrated.character.rollHistory[0].damageToHP, 4); }
+});
+test("creation retains the level-six Skill cap while edit accepts IP-evolved levels", () => {
+  const character = addPrimaryRole(createEmptyCharacter("edit-validation"), "solo");
+  character.identity.name = "V";
+  character.skills.handgun.level = 7;
+  assert.equal(validateCharacterCreation(character).errors.some((error) => error.includes("Handgun ultrapassou")), true);
+  character.skills.handgun.level = 10;
+  assert.equal(validateCharacterEdit(character).errors.some((error) => error.includes("Handgun")), false);
+});
+
+test("Evasion result exposes DEX, Skill Level, d10 and total for the UI", () => {
+  const character = createEmptyCharacter("evasion-ui");
+  character.stats.DEX = 7; character.skills.evasion.level = 6;
+  const random = Math.random; Math.random = () => 0.7;
+  try {
+    const result = rollEvasion(character);
+    assert.ok("result" in result);
+    if ("result" in result) { assert.deepEqual(result.result.stat, { id: "DEX", value: 7 }); assert.deepEqual(result.result.skill, { id: "evasion", value: 6 }); assert.equal(result.result.naturalRoll, 8); assert.equal(result.result.total, 21); }
+  } finally { Math.random = random; }
 });

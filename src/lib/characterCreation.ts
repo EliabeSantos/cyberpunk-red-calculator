@@ -115,3 +115,18 @@ export function finalizeCharacterCreation(character: Character): Character {
   if (!validation.valid) throw new Error(validation.errors.join(" "));
   return { ...character, progression: { improvementPoints: 0 } };
 }
+/** Validates persisted characters without applying one-time Complete Package caps. */
+export function validateCharacterEdit(character: Character): CreationValidation {
+  const errors: string[] = [];
+  const summary = getCreationPointSummary(character);
+  for (const attribute of Object.keys(character.stats) as AttributeName[]) {
+    const value = character.stats[attribute];
+    if (!Number.isInteger(value) || value < 0 || value > 10) errors.push(`${attribute} deve ficar entre 0 e 10.`);
+  }
+  for (const [id, skill] of Object.entries(character.skills)) {
+    if (!Number.isInteger(skill.level) || skill.level < getSkillMinimum(id) || skill.level > 10) errors.push(`${skill.name} deve ficar entre ${getSkillMinimum(id)} e 10.`);
+  }
+  if (!character.identity.name.trim()) errors.push("Informe o nome do personagem.");
+  if (!character.primaryRole || character.roleAbilities.length === 0) errors.push("Selecione uma Role.");
+  return { valid: errors.length === 0, errors, summary };
+}

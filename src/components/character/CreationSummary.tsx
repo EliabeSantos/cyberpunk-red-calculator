@@ -1,10 +1,10 @@
-import { getCreationPointSummary, validateCharacterCreation } from "@/lib/characterCreation";
+import { getCreationPointSummary, validateCharacterCreation, validateCharacterEdit } from "@/lib/characterCreation";
 import type { Character } from "@/types/character";
 
-type Props = { character: Character };
-export default function CreationSummary({ character }: Props) {
+type Props = { character: Character; mode?: "creation" | "edit" };
+export default function CreationSummary({ character, mode = "creation" }: Props) {
   const summary = getCreationPointSummary(character);
-  const validation = validateCharacterCreation(character);
+  const validation = mode === "creation" ? validateCharacterCreation(character) : validateCharacterEdit(character);
   return (
     <section className="creation-summary" aria-live="polite">
       <div>

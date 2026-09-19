@@ -15,3 +15,9 @@
 .skill-allocation-group .skill-allocation-row:last-child { border-bottom: 0; }
 @media (max-width: 700px) { .skill-allocation-list { grid-template-columns: 1fr; } }
 .role-ability { display: grid; gap: .35rem; padding: .55rem 0; border-bottom: 1px solid #29312c; }.role-ability strong { color: var(--accent); }.role-ability span, .role-ability small { color: var(--muted); font-size: .72rem; }.role-ability button { justify-self: start; }
+
+.combat-action, .received-damage { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem 0; border-bottom: 1px solid #29312c; font-size: .8rem; }.combat-action small { display: block; color: var(--muted); font-size: .65rem; }.received-damage input { width: 5rem; }
+
+.received-damage select { width: auto; min-width: 8rem; }.received-damage { flex-wrap: wrap; }
+
+.evasion-result { display: grid; gap: .3rem; margin-top: .65rem; border: 1px solid var(--accent); background: #15200e; padding: .7rem; }.evasion-result strong, .evasion-result b { color: var(--accent); }.evasion-result span { color: var(--muted); font: .68rem var(--font-geist-mono), monospace; }
