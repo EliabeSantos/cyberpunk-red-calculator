@@ -1,0 +1,19 @@
+"use client";
+
+import { useMemo, useState } from "react";
+
+import { catalogItems, type ItemCategory } from "@/data/items";
+import { addEurodollars, canPurchaseItem, purchaseItem } from "@/lib/store";
+import type { Character } from "@/types/character";
+
+type Props = { character: Character; onUpdate: (character: Character) => void };
+const categoryLabels: Record<ItemCategory, string> = { cyberware: "Cyberware", weapon: "Armas", armor: "Armaduras", healing: "Cura", grenade: "Granadas", ammunition: "Munição", electronics: "Eletrônicos", netrunner: "Netrunner", tool: "Ferramentas", drone: "Drones", survival: "Sobrevivência", clothing: "Vestuário", consumable: "Consumíveis", drug: "Drogas", gear: "Equipamento", mission_item: "Missão" };
+
+export default function StorePanel({ character, onUpdate }: Props) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState(""); const [category, setCategory] = useState<"all" | ItemCategory>("all"); const [income, setIncome] = useState(0); const [notice, setNotice] = useState("");
+  const items = useMemo(() => catalogItems.filter((item) => (category === "all" || item.category === category) && item.name.toLocaleLowerCase("pt-BR").includes(query.toLocaleLowerCase("pt-BR"))), [category, query]);
+  function buy(itemId: string) { const result = purchaseItem(character, itemId); if ("error" in result) { setNotice(result.error === "insufficient-funds" ? "Saldo insuficiente para esta compra." : "Item não encontrado."); return; } onUpdate(result.character); setNotice(`${result.item.name} adicionado ao inventário.`); }
+  function addFunds() { const updated = addEurodollars(character, income); if (updated !== character) { onUpdate(updated); setIncome(0); setNotice("Eurodólares adicionados."); } }
+  return <><button type="button" className="open-store-button" onClick={() => setOpen(true)}>Comprar itens · €$ {character.wallet.eurodollars.toLocaleString("pt-BR")}</button>{open && <div className="modal-backdrop" role="presentation" onMouseDown={() => setOpen(false)}><section className="store-panel store-modal" role="dialog" aria-modal="true" aria-label="Loja de itens" onMouseDown={(event) => event.stopPropagation()}><button type="button" className="close-modal" onClick={() => setOpen(false)} aria-label="Fechar loja">×</button><div className="store-heading"><div><p className="eyebrow">Mercado</p><h2>Comprar itens</h2></div><div className="wallet"><small>Saldo</small><strong>€$ {character.wallet.eurodollars.toLocaleString("pt-BR")}</strong></div></div><div className="wallet-actions"><input type="number" min="1" value={income || ""} onChange={(event) => setIncome(Math.max(0, Number(event.target.value) || 0))} placeholder="Eurodólares" /><button type="button" onClick={addFunds} disabled={!income}>Adicionar saldo</button></div><p className="store-help">Registre pagamentos recebidos pelo personagem antes de comprar. Cada compra desconta o preço automaticamente.</p><div className="store-filters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar item" /><select value={category} onChange={(event) => setCategory(event.target.value as "all" | ItemCategory)}><option value="all">Todas as categorias</option>{Object.entries(categoryLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></div>{notice && <p className="store-notice" role="status">{notice}</p>}<div className="store-items">{items.map((item) => { const purchasable = canPurchaseItem(character, item); return <article className="store-item" key={item.id}><div><small>{categoryLabels[item.category]}</small><h3>{item.name}</h3>{item.effects?.[0] && <p>{item.effects[0]}</p>}</div><div className="item-purchase"><strong>€$ {item.price.toLocaleString("pt-BR")}</strong><button type="button" disabled={!purchasable} onClick={() => buy(item.id)}>{purchasable ? "Comprar" : "Saldo insuficiente"}</button></div></article>; })}</div></section></div>}</>;
+}

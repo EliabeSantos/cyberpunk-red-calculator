@@ -1,0 +1,1 @@
+export type { Skill, Skills } from "@/types/character";

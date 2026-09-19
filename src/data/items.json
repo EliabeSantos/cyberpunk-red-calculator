@@ -1,0 +1,1303 @@
+{
+  "version": "1.0.0",
+  "source": "cyberpunk-red-calculator",
+  "items": [
+    {
+      "id": "sandevistan",
+      "name": "Sandevistan",
+      "category": "cyberware",
+      "subcategory": "neuralware",
+      "source": "adapted_2077",
+      "price": 1000,
+      "rarity": "rare",
+      "humanityLoss": "2d6",
+      "description": "Implante neural que acelera a percepção e os reflexos do usuário.",
+      "effects": [
+        "1 vez por combate, ativar como Ação.",
+        "+4 Iniciativa durante 1 rodada.",
+        "+1 REF para testes de reação durante o efeito."
+      ]
+    },
+    {
+      "id": "kerenzikov",
+      "name": "Kerenzikov",
+      "category": "cyberware",
+      "subcategory": "neuralware",
+      "source": "adapted_2077",
+      "price": 750,
+      "rarity": "rare",
+      "humanityLoss": "2d6",
+      "effects": [
+        "+2 Iniciativa se o personagem tiver se movido pelo menos 4 metros na rodada.",
+        "+1 Evasão durante movimento."
+      ]
+    },
+    {
+      "id": "neural_link",
+      "name": "Neural Link",
+      "category": "cyberware",
+      "subcategory": "neuralware",
+      "source": "adapted_2077",
+      "price": 500,
+      "rarity": "common",
+      "humanityLoss": "1d6",
+      "effects": [
+        "Permite instalar cyberware que exige conexão neural."
+      ]
+    },
+    {
+      "id": "reflex_tuner",
+      "name": "Reflex Tuner",
+      "category": "cyberware",
+      "subcategory": "neuralware",
+      "source": "adapted_2077",
+      "price": 600,
+      "rarity": "uncommon",
+      "humanityLoss": "1d6",
+      "effects": [
+        "1 vez por combate, pode repetir Iniciativa."
+      ]
+    },
+    {
+      "id": "combat_awareness",
+      "name": "Combat Awareness Processor",
+      "category": "cyberware",
+      "subcategory": "neuralware",
+      "source": "adapted_2077",
+      "price": 1200,
+      "rarity": "rare",
+      "humanityLoss": "2d6",
+      "effects": [
+        "+2 Percepção durante combate."
+      ]
+    },
+    {
+      "id": "smart_link",
+      "name": "Smart Weapon Link",
+      "category": "cyberware",
+      "subcategory": "neuralware",
+      "source": "adapted_2077",
+      "price": 1000,
+      "rarity": "rare",
+      "humanityLoss": "2d6",
+      "effects": [
+        "Permite utilizar armas Smart.",
+        "+1 em ataques com armas compatíveis."
+      ]
+    },
+    {
+      "id": "pain_editor",
+      "name": "Pain Editor",
+      "category": "cyberware",
+      "subcategory": "internal",
+      "source": "adapted_2077",
+      "price": 2000,
+      "rarity": "very_rare",
+      "humanityLoss": "3d6",
+      "effects": [
+        "1 vez por combate, ignora penalidade de ferimento durante 1 rodada."
+      ]
+    },
+    {
+      "id": "adrenaline_booster",
+      "name": "Adrenaline Booster",
+      "category": "cyberware",
+      "subcategory": "internal",
+      "source": "adapted_2077",
+      "price": 900,
+      "rarity": "rare",
+      "humanityLoss": "2d6",
+      "effects": [
+        "+2 MOVE durante 1 rodada.",
+        "Após o efeito, -1 em testes físicos durante 1 rodada."
+      ]
+    },
+    {
+      "id": "nano_repair",
+      "name": "Nano Repair System",
+      "category": "cyberware",
+      "subcategory": "internal",
+      "source": "homebrew",
+      "price": 2500,
+      "rarity": "very_rare",
+      "humanityLoss": "3d6",
+      "effects": [
+        "Recupera 2 HP no início da rodada durante 3 rodadas."
+      ]
+    },
+    {
+      "id": "gorilla_arms",
+      "name": "Gorilla Arms",
+      "category": "cyberware",
+      "subcategory": "cyberarm",
+      "source": "adapted_2077",
+      "price": 1500,
+      "rarity": "rare",
+      "humanityLoss": "2d6",
+      "effects": [
+        "+2 Briga.",
+        "Ataques desarmados causam +1d6."
+      ]
+    },
+    {
+      "id": "mantis_blades",
+      "name": "Mantis Blades",
+      "category": "cyberware",
+      "subcategory": "cyberarm",
+      "source": "adapted_2077",
+      "price": 2000,
+      "rarity": "very_rare",
+      "humanityLoss": "3d6",
+      "damage": "3d6",
+      "rof": 2,
+      "effects": [
+        "Lâminas retráteis nos braços.",
+        "Utilizam Arma Branca."
+      ]
+    },
+    {
+      "id": "monowire",
+      "name": "Monowire",
+      "category": "cyberware",
+      "subcategory": "cyberarm",
+      "source": "adapted_2077",
+      "price": 1800,
+      "rarity": "very_rare",
+      "humanityLoss": "3d6",
+      "damage": "3d6",
+      "range": "4m",
+      "effects": [
+        "Pode atacar alvos a distância curta.",
+        "Utiliza Arma Branca."
+      ]
+    },
+    {
+      "id": "projectile_launch_system",
+      "name": "Projectile Launch System",
+      "category": "cyberware",
+      "subcategory": "cyberarm",
+      "source": "adapted_2077",
+      "price": 1800,
+      "rarity": "very_rare",
+      "humanityLoss": "3d6",
+      "damage": "5d6",
+      "rof": 1,
+      "effects": [
+        "Lança projéteis explosivos.",
+        "Área de explosão de 2 metros."
+      ]
+    },
+    {
+      "id": "cyberarm",
+      "name": "Cyberarm",
+      "category": "cyberware",
+      "subcategory": "cyberarm",
+      "source": "official",
+      "price": 500,
+      "rarity": "common",
+      "humanityLoss": "2d6",
+      "effects": [
+        "Braço cibernético substituto.",
+        "Pode receber aprimoramentos."
+      ]
+    },
+    {
+      "id": "cyberleg",
+      "name": "Cyberleg",
+      "category": "cyberware",
+      "subcategory": "cyberleg",
+      "source": "official",
+      "price": 500,
+      "rarity": "common",
+      "humanityLoss": "2d6",
+      "effects": [
+        "Perna cibernética substituta."
+      ]
+    },
+    {
+      "id": "reinforced_tendons",
+      "name": "Reinforced Tendons",
+      "category": "cyberware",
+      "subcategory": "cyberleg",
+      "source": "adapted_2077",
+      "price": 1200,
+      "rarity": "rare",
+      "humanityLoss": "2d6",
+      "effects": [
+        "Permite saltos excepcionalmente altos.",
+        "-2 na dificuldade de testes de salto."
+      ]
+    },
+    {
+      "id": "optical_camo",
+      "name": "Optical Camo",
+      "category": "cyberware",
+      "subcategory": "external",
+      "source": "adapted_2077",
+      "price": 1800,
+      "rarity": "very_rare",
+      "humanityLoss": "3d6",
+      "effects": [
+        "Ação para ativar.",
+        "+4 Furtividade durante 1 rodada.",
+        "Termina ao realizar ataque."
+      ]
+    },
+    {
+      "id": "subdermal_armor",
+      "name": "Subdermal Armor",
+      "category": "cyberware",
+      "subcategory": "external",
+      "source": "adapted_2077",
+      "price": 1200,
+      "rarity": "rare",
+      "humanityLoss": "3d6",
+      "sp": 11,
+      "effects": [
+        "Proteção sob a pele.",
+        "Não acumula com armadura corporal."
+      ]
+    },
+    {
+      "id": "skin_weave",
+      "name": "Skin Weave",
+      "category": "cyberware",
+      "subcategory": "external",
+      "source": "official",
+      "price": 700,
+      "rarity": "uncommon",
+      "humanityLoss": "2d6",
+      "sp": 7,
+      "effects": [
+        "Proteção sob a pele."
+      ]
+    },
+    {
+      "id": "cybereye",
+      "name": "Cybereye",
+      "category": "cyberware",
+      "subcategory": "cyberoptics",
+      "source": "official",
+      "price": 500,
+      "rarity": "common",
+      "humanityLoss": "1d6",
+      "effects": [
+        "Pode receber até 2 aprimoramentos ópticos."
+      ]
+    },
+    {
+      "id": "night_vision",
+      "name": "Night Vision",
+      "category": "cyberware",
+      "subcategory": "cyberoptics",
+      "source": "official",
+      "price": 300,
+      "rarity": "common",
+      "humanityLoss": 1,
+      "requires": "cybereye",
+      "effects": [
+        "Reduz penalidades causadas por pouca iluminação."
+      ]
+    },
+    {
+      "id": "thermal_optics",
+      "name": "Thermal Optics",
+      "category": "cyberware",
+      "subcategory": "cyberoptics",
+      "source": "adapted_2077",
+      "price": 500,
+      "rarity": "uncommon",
+      "humanityLoss": "1d6",
+      "requires": "cybereye",
+      "effects": [
+        "Permite detectar fontes de calor."
+      ]
+    },
+    {
+      "id": "targeting_scope",
+      "name": "Targeting Scope",
+      "category": "cyberware",
+      "subcategory": "cyberoptics",
+      "source": "official",
+      "price": 500,
+      "rarity": "uncommon",
+      "humanityLoss": 1,
+      "requires": "cybereye",
+      "effects": [
+        "+1 em ataques de longa distância."
+      ]
+    },
+    {
+      "id": "cyberaudio",
+      "name": "Cyberaudio",
+      "category": "cyberware",
+      "subcategory": "cyberaudio",
+      "source": "official",
+      "price": 500,
+      "rarity": "common",
+      "humanityLoss": "1d6",
+      "effects": [
+        "Pode receber aprimoramentos auditivos."
+      ]
+    },
+    {
+      "id": "audio_filter",
+      "name": "Audio Filter",
+      "category": "cyberware",
+      "subcategory": "cyberaudio",
+      "source": "official",
+      "price": 250,
+      "rarity": "common",
+      "humanityLoss": 1,
+      "requires": "cyberaudio",
+      "effects": [
+        "+2 para identificar sons."
+      ]
+    },
+
+    {
+      "id": "heavy_pistol",
+      "name": "Heavy Pistol",
+      "category": "weapon",
+      "subcategory": "handgun",
+      "source": "official",
+      "price": 100,
+      "damage": "3d6",
+      "rof": 2,
+      "ammo": 8,
+      "concealable": true
+    },
+    {
+      "id": "very_heavy_pistol",
+      "name": "Very Heavy Pistol",
+      "category": "weapon",
+      "subcategory": "handgun",
+      "source": "official",
+      "price": 100,
+      "damage": "4d6",
+      "rof": 1,
+      "ammo": 8,
+      "concealable": false
+    },
+    {
+      "id": "medium_pistol",
+      "name": "Medium Pistol",
+      "category": "weapon",
+      "subcategory": "handgun",
+      "source": "official",
+      "price": 50,
+      "damage": "2d6",
+      "rof": 2,
+      "ammo": 12,
+      "concealable": true
+    },
+    {
+      "id": "light_pistol",
+      "name": "Light Pistol",
+      "category": "weapon",
+      "subcategory": "handgun",
+      "source": "official",
+      "price": 50,
+      "damage": "1d6",
+      "rof": 2,
+      "ammo": 12,
+      "concealable": true
+    },
+    {
+      "id": "smg",
+      "name": "SMG",
+      "category": "weapon",
+      "subcategory": "smg",
+      "source": "official",
+      "price": 100,
+      "damage": "2d6",
+      "rof": 1,
+      "ammo": 30,
+      "concealable": true,
+      "qualities": [
+        "autofire"
+      ]
+    },
+    {
+      "id": "heavy_smg",
+      "name": "Heavy SMG",
+      "category": "weapon",
+      "subcategory": "smg",
+      "source": "official",
+      "price": 100,
+      "damage": "3d6",
+      "rof": 1,
+      "ammo": 40,
+      "concealable": false,
+      "qualities": [
+        "autofire"
+      ]
+    },
+    {
+      "id": "assault_rifle",
+      "name": "Assault Rifle",
+      "category": "weapon",
+      "subcategory": "rifle",
+      "source": "official",
+      "price": 500,
+      "damage": "5d6",
+      "rof": 1,
+      "ammo": 25,
+      "concealable": false,
+      "qualities": [
+        "autofire"
+      ]
+    },
+    {
+      "id": "sniper_rifle",
+      "name": "Sniper Rifle",
+      "category": "weapon",
+      "subcategory": "rifle",
+      "source": "official",
+      "price": 500,
+      "damage": "5d6",
+      "rof": 1,
+      "ammo": 4,
+      "concealable": false
+    },
+    {
+      "id": "shotgun",
+      "name": "Shotgun",
+      "category": "weapon",
+      "subcategory": "shotgun",
+      "source": "official",
+      "price": 500,
+      "damage": "5d6",
+      "rof": 1,
+      "ammo": 8,
+      "concealable": false
+    },
+    {
+      "id": "grenade_launcher",
+      "name": "Grenade Launcher",
+      "category": "weapon",
+      "subcategory": "heavy",
+      "source": "official",
+      "price": 500,
+      "damage": "6d6",
+      "rof": 1,
+      "ammo": 1,
+      "concealable": false
+    },
+    {
+      "id": "rocket_launcher",
+      "name": "Rocket Launcher",
+      "category": "weapon",
+      "subcategory": "heavy",
+      "source": "official",
+      "price": 500,
+      "damage": "8d6",
+      "rof": 1,
+      "ammo": 1,
+      "concealable": false
+    },
+    {
+      "id": "combat_knife",
+      "name": "Combat Knife",
+      "category": "weapon",
+      "subcategory": "melee",
+      "source": "official",
+      "price": 50,
+      "damage": "2d6",
+      "rof": 2,
+      "concealable": true
+    },
+    {
+      "id": "heavy_melee_weapon",
+      "name": "Heavy Melee Weapon",
+      "category": "weapon",
+      "subcategory": "melee",
+      "source": "official",
+      "price": 100,
+      "damage": "3d6",
+      "rof": 2,
+      "concealable": false
+    },
+    {
+      "id": "medium_melee_weapon",
+      "name": "Medium Melee Weapon",
+      "category": "weapon",
+      "subcategory": "melee",
+      "source": "official",
+      "price": 50,
+      "damage": "2d6",
+      "rof": 2,
+      "concealable": true
+    },
+    {
+      "id": "very_heavy_melee_weapon",
+      "name": "Very Heavy Melee Weapon",
+      "category": "weapon",
+      "subcategory": "melee",
+      "source": "homebrew",
+      "price": 500,
+      "damage": "4d6",
+      "rof": 1,
+      "concealable": false
+    },
+    {
+      "id": "smart_pistol",
+      "name": "Smart Pistol",
+      "category": "weapon",
+      "subcategory": "smart",
+      "source": "adapted_2077",
+      "price": 750,
+      "damage": "3d6",
+      "rof": 2,
+      "ammo": 12,
+      "concealable": true,
+      "requires": "smart_link"
+    },
+    {
+      "id": "smart_smg",
+      "name": "Smart SMG",
+      "category": "weapon",
+      "subcategory": "smart",
+      "source": "adapted_2077",
+      "price": 1000,
+      "damage": "3d6",
+      "rof": 1,
+      "ammo": 30,
+      "concealable": false,
+      "qualities": [
+        "autofire"
+      ],
+      "requires": "smart_link"
+    },
+    {
+      "id": "tech_pistol",
+      "name": "Tech Pistol",
+      "category": "weapon",
+      "subcategory": "tech",
+      "source": "adapted_2077",
+      "price": 750,
+      "damage": "4d6",
+      "rof": 1,
+      "ammo": 10,
+      "concealable": true,
+      "qualities": [
+        "charge"
+      ]
+    },
+    {
+      "id": "tech_rifle",
+      "name": "Tech Rifle",
+      "category": "weapon",
+      "subcategory": "tech",
+      "source": "adapted_2077",
+      "price": 1500,
+      "damage": "5d6",
+      "rof": 1,
+      "ammo": 20,
+      "concealable": false,
+      "qualities": [
+        "charge"
+      ]
+    },
+    {
+      "id": "power_shotgun",
+      "name": "Power Shotgun",
+      "category": "weapon",
+      "subcategory": "shotgun",
+      "source": "adapted_2077",
+      "price": 750,
+      "damage": "5d6",
+      "rof": 1,
+      "ammo": 8,
+      "concealable": false
+    },
+    {
+      "id": "precision_rifle",
+      "name": "Precision Rifle",
+      "category": "weapon",
+      "subcategory": "rifle",
+      "source": "adapted_2077",
+      "price": 1000,
+      "damage": "5d6",
+      "rof": 1,
+      "ammo": 12,
+      "concealable": false
+    },
+
+    {
+      "id": "light_armorjack_body",
+      "name": "Light Armorjack Body",
+      "category": "armor",
+      "subcategory": "body",
+      "source": "official",
+      "price": 100,
+      "sp": 11,
+      "penalty": 0
+    },
+    {
+      "id": "light_armorjack_head",
+      "name": "Light Armorjack Head",
+      "category": "armor",
+      "subcategory": "head",
+      "source": "official",
+      "price": 100,
+      "sp": 11,
+      "penalty": 0
+    },
+    {
+      "id": "medium_armorjack_body",
+      "name": "Medium Armorjack Body",
+      "category": "armor",
+      "subcategory": "body",
+      "source": "official",
+      "price": 500,
+      "sp": 12,
+      "penalty": -2
+    },
+    {
+      "id": "medium_armorjack_head",
+      "name": "Medium Armorjack Head",
+      "category": "armor",
+      "subcategory": "head",
+      "source": "official",
+      "price": 500,
+      "sp": 12,
+      "penalty": -2
+    },
+    {
+      "id": "heavy_armorjack",
+      "name": "Heavy Armorjack",
+      "category": "armor",
+      "subcategory": "body",
+      "source": "official",
+      "price": 1000,
+      "sp": 13,
+      "penalty": -2
+    },
+    {
+      "id": "ballistic_vest",
+      "name": "Ballistic Vest",
+      "category": "armor",
+      "subcategory": "body",
+      "source": "homebrew",
+      "price": 50,
+      "sp": 10,
+      "penalty": 0,
+      "concealable": true
+    },
+    {
+      "id": "tactical_armor",
+      "name": "Tactical Armor",
+      "category": "armor",
+      "subcategory": "body",
+      "source": "homebrew",
+      "price": 750,
+      "sp": 14,
+      "penalty": -2
+    },
+    {
+      "id": "heavy_combat_armor",
+      "name": "Heavy Combat Armor",
+      "category": "armor",
+      "subcategory": "body",
+      "source": "homebrew",
+      "price": 1500,
+      "sp": 15,
+      "penalty": -4
+    },
+    {
+      "id": "tactical_helmet",
+      "name": "Tactical Helmet",
+      "category": "armor",
+      "subcategory": "head",
+      "source": "homebrew",
+      "price": 100,
+      "sp": 12,
+      "penalty": 0
+    },
+    {
+      "id": "ballistic_mask",
+      "name": "Ballistic Mask",
+      "category": "armor",
+      "subcategory": "head",
+      "source": "homebrew",
+      "price": 100,
+      "sp": 11,
+      "penalty": 0,
+      "concealable": true
+    },
+
+    {
+      "id": "basic_medkit",
+      "name": "Basic Medkit",
+      "category": "healing",
+      "source": "official",
+      "price": 20,
+      "effects": [
+        "Permite testes básicos de Primeiros Socorros."
+      ]
+    },
+    {
+      "id": "advanced_medkit",
+      "name": "Advanced Medkit",
+      "category": "healing",
+      "source": "official",
+      "price": 100,
+      "effects": [
+        "+2 em Primeiros Socorros."
+      ]
+    },
+    {
+      "id": "stim",
+      "name": "Stim",
+      "category": "healing",
+      "source": "adapted_2077",
+      "price": 50,
+      "effects": [
+        "Recupera 5 HP.",
+        "Aplicação como Ação."
+      ]
+    },
+    {
+      "id": "trauma_injector",
+      "name": "Trauma Injector",
+      "category": "healing",
+      "source": "adapted_2077",
+      "price": 100,
+      "effects": [
+        "Estabiliza personagem Mortally Wounded.",
+        "Recupera 2 HP."
+      ]
+    },
+    {
+      "id": "maxdoc",
+      "name": "MaxDoc",
+      "category": "healing",
+      "source": "adapted_2077",
+      "price": 100,
+      "effects": [
+        "Recupera 10 HP."
+      ],
+      "limitations": [
+        "Uma utilização por combate."
+      ]
+    },
+    {
+      "id": "bounce_back",
+      "name": "Bounce Back",
+      "category": "healing",
+      "source": "adapted_2077",
+      "price": 100,
+      "effects": [
+        "Recupera 2 HP por rodada durante 3 rodadas."
+      ]
+    },
+    {
+      "id": "painkiller",
+      "name": "Painkiller",
+      "category": "healing",
+      "source": "homebrew",
+      "price": 20,
+      "effects": [
+        "Reduz penalidade de ferimentos durante 1 hora."
+      ]
+    },
+
+    {
+      "id": "frag_grenade",
+      "name": "Frag Grenade",
+      "category": "grenade",
+      "source": "official",
+      "price": 50,
+      "damage": "5d6",
+      "area": "3m"
+    },
+    {
+      "id": "flashbang",
+      "name": "Flashbang",
+      "category": "grenade",
+      "source": "official",
+      "price": 50,
+      "area": "3m",
+      "effects": [
+        "Pode deixar alvos atordoados."
+      ]
+    },
+    {
+      "id": "smoke_grenade",
+      "name": "Smoke Grenade",
+      "category": "grenade",
+      "source": "official",
+      "price": 50,
+      "area": "5m",
+      "duration": "3 rounds"
+    },
+    {
+      "id": "emp_grenade",
+      "name": "EMP Grenade",
+      "category": "grenade",
+      "source": "adapted_2077",
+      "price": 100,
+      "area": "3m",
+      "effects": [
+        "Pode desativar cyberware e eletrônicos."
+      ]
+    },
+    {
+      "id": "incendiary_grenade",
+      "name": "Incendiary Grenade",
+      "category": "grenade",
+      "source": "adapted_2077",
+      "price": 100,
+      "area": "3m",
+      "damage": "3d6",
+      "effects": [
+        "Cria uma área em chamas."
+      ]
+    },
+    {
+      "id": "gas_grenade",
+      "name": "Gas Grenade",
+      "category": "grenade",
+      "source": "homebrew",
+      "price": 100,
+      "area": "4m",
+      "duration": "3 rounds",
+      "effects": [
+        "Cria uma nuvem de gás."
+      ]
+    },
+
+    {
+      "id": "pistol_ammo",
+      "name": "Pistol Ammunition",
+      "category": "ammunition",
+      "source": "official",
+      "price": 20,
+      "quantity": 50
+    },
+    {
+      "id": "smg_ammo",
+      "name": "SMG Ammunition",
+      "category": "ammunition",
+      "source": "official",
+      "price": 20,
+      "quantity": 50
+    },
+    {
+      "id": "rifle_ammo",
+      "name": "Rifle Ammunition",
+      "category": "ammunition",
+      "source": "official",
+      "price": 30,
+      "quantity": 50
+    },
+    {
+      "id": "shotgun_shells",
+      "name": "Shotgun Shells",
+      "category": "ammunition",
+      "source": "official",
+      "price": 20,
+      "quantity": 20
+    },
+    {
+      "id": "ap_ammo",
+      "name": "Armor Piercing Ammunition",
+      "category": "ammunition",
+      "source": "homebrew",
+      "price": 100,
+      "quantity": 20,
+      "effects": [
+        "Reduz o SP efetivo do alvo em 2."
+      ]
+    },
+    {
+      "id": "incendiary_ammo",
+      "name": "Incendiary Ammunition",
+      "category": "ammunition",
+      "source": "homebrew",
+      "price": 100,
+      "quantity": 20,
+      "effects": [
+        "Pode incendiar alvos."
+      ]
+    },
+    {
+      "id": "smart_ammo",
+      "name": "Smart Ammunition",
+      "category": "ammunition",
+      "source": "adapted_2077",
+      "price": 150,
+      "quantity": 20,
+      "effects": [
+        "Pode corrigir parcialmente a trajetória de armas Smart."
+      ]
+    },
+
+    {
+      "id": "agent",
+      "name": "Agent",
+      "category": "electronics",
+      "source": "official",
+      "price": 100,
+      "effects": [
+        "Comunicação.",
+        "Mapas.",
+        "Contatos.",
+        "Acesso à DataPool."
+      ]
+    },
+    {
+      "id": "cyberdeck",
+      "name": "Cyberdeck",
+      "category": "netrunner",
+      "source": "official",
+      "price": 500,
+      "effects": [
+        "Permite acessar arquiteturas NET."
+      ]
+    },
+    {
+      "id": "portable_scanner",
+      "name": "Portable Scanner",
+      "category": "electronics",
+      "source": "homebrew",
+      "price": 100,
+      "effects": [
+        "Detecta dispositivos eletrônicos próximos."
+      ]
+    },
+    {
+      "id": "signal_jammer",
+      "name": "Signal Jammer",
+      "category": "electronics",
+      "source": "homebrew",
+      "price": 250,
+      "effects": [
+        "Interfere em comunicações sem fio."
+      ]
+    },
+    {
+      "id": "lockpick_set",
+      "name": "Lockpick Set",
+      "category": "tool",
+      "source": "official",
+      "price": 50,
+      "effects": [
+        "+1 em testes para abrir fechaduras mecânicas."
+      ]
+    },
+    {
+      "id": "electronic_lockpick",
+      "name": "Electronic Lockpick",
+      "category": "tool",
+      "source": "homebrew",
+      "price": 150,
+      "effects": [
+        "+2 contra fechaduras eletrônicas."
+      ]
+    },
+    {
+      "id": "multitool",
+      "name": "Multitool",
+      "category": "tool",
+      "source": "homebrew",
+      "price": 50,
+      "effects": [
+        "+1 em Tecnologia Básica usando ferramentas."
+      ]
+    },
+    {
+      "id": "surveillance_drone",
+      "name": "Surveillance Drone",
+      "category": "drone",
+      "source": "homebrew",
+      "price": 500,
+      "effects": [
+        "Reconhecimento remoto.",
+        "Transmissão de vídeo."
+      ]
+    },
+    {
+      "id": "breach_device",
+      "name": "Breach Device",
+      "category": "netrunner",
+      "source": "homebrew",
+      "price": 300,
+      "effects": [
+        "+2 em um teste de Electronic Security."
+      ]
+    },
+
+    {
+      "id": "flashlight",
+      "name": "Flashlight",
+      "category": "survival",
+      "source": "official",
+      "price": 20,
+      "effects": [
+        "Ilumina áreas escuras."
+      ]
+    },
+    {
+      "id": "rope",
+      "name": "Utility Rope",
+      "category": "survival",
+      "source": "homebrew",
+      "price": 20,
+      "quantity": 30,
+      "unit": "meters"
+    },
+    {
+      "id": "breathing_mask",
+      "name": "Breathing Mask",
+      "category": "survival",
+      "source": "homebrew",
+      "price": 50,
+      "effects": [
+        "Filtra fumaça e partículas."
+      ]
+    },
+    {
+      "id": "portable_oxygen",
+      "name": "Portable Oxygen",
+      "category": "survival",
+      "source": "homebrew",
+      "price": 100,
+      "duration": "30 minutes"
+    },
+    {
+      "id": "climbing_gear",
+      "name": "Climbing Gear",
+      "category": "survival",
+      "source": "homebrew",
+      "price": 100,
+      "effects": [
+        "+2 em testes relacionados a escalada."
+      ]
+    },
+    {
+      "id": "thermal_blanket",
+      "name": "Thermal Blanket",
+      "category": "survival",
+      "source": "homebrew",
+      "price": 20,
+      "effects": [
+        "Protege contra frio extremo."
+      ]
+    },
+
+    {
+      "id": "street_jacket",
+      "name": "Street Jacket",
+      "category": "clothing",
+      "source": "homebrew",
+      "price": 50
+    },
+    {
+      "id": "armored_jacket",
+      "name": "Armored Jacket",
+      "category": "clothing",
+      "source": "homebrew",
+      "price": 200,
+      "sp": 5
+    },
+    {
+      "id": "corporate_suit",
+      "name": "Corporate Suit",
+      "category": "clothing",
+      "source": "homebrew",
+      "price": 100,
+      "effects": [
+        "+1 em testes sociais em ambientes corporativos."
+      ]
+    },
+    {
+      "id": "nomad_gear",
+      "name": "Nomad Gear",
+      "category": "clothing",
+      "source": "homebrew",
+      "price": 100,
+      "effects": [
+        "+1 em testes de sobrevivência fora de áreas urbanas."
+      ]
+    },
+    {
+      "id": "gang_colors",
+      "name": "Gang Colors",
+      "category": "clothing",
+      "source": "homebrew",
+      "price": 50,
+      "effects": [
+        "+1 em testes sociais com membros da gangue correspondente."
+      ]
+    },
+
+    {
+      "id": "energy_drink",
+      "name": "Energy Drink",
+      "category": "consumable",
+      "source": "homebrew",
+      "price": 10,
+      "effects": [
+        "+1 em um teste físico na próxima hora."
+      ]
+    },
+    {
+      "id": "food_pack",
+      "name": "Prepak Food",
+      "category": "consumable",
+      "source": "official",
+      "price": 20
+    },
+    {
+      "id": "water_pack",
+      "name": "Water Pack",
+      "category": "consumable",
+      "source": "homebrew",
+      "price": 10
+    },
+    {
+      "id": "stimulant",
+      "name": "Combat Stimulant",
+      "category": "drug",
+      "source": "homebrew",
+      "price": 100,
+      "effects": [
+        "+2 Resistência durante 3 rodadas."
+      ],
+      "sideEffects": [
+        "-2 Resistência durante 1 rodada após o efeito."
+      ]
+    },
+    {
+      "id": "focus_drug",
+      "name": "Focus",
+      "category": "drug",
+      "source": "adapted_2077",
+      "price": 150,
+      "effects": [
+        "+2 concentração durante 3 rodadas."
+      ],
+      "sideEffects": [
+        "-1 COOL durante 1 rodada."
+      ]
+    },
+    {
+      "id": "berserk_implant_drug",
+      "name": "Berserk Stim",
+      "category": "drug",
+      "source": "adapted_2077",
+      "price": 200,
+      "effects": [
+        "+2 BODY para testes físicos durante 2 rodadas.",
+        "Ignora penalidade de ferimentos durante o efeito."
+      ],
+      "sideEffects": [
+        "Após o efeito, -2 em todos os testes físicos durante 1 rodada."
+      ]
+    },
+
+    {
+      "id": "grenade_bandolier",
+      "name": "Grenade Bandolier",
+      "category": "gear",
+      "source": "homebrew",
+      "price": 100,
+      "effects": [
+        "Permite transportar até 6 granadas de acesso rápido."
+      ]
+    },
+    {
+      "id": "weapon_holster",
+      "name": "Quick Weapon Holster",
+      "category": "gear",
+      "source": "homebrew",
+      "price": 100,
+      "effects": [
+        "Sacar arma como ação livre uma vez por rodada."
+      ]
+    },
+    {
+      "id": "ammo_carrier",
+      "name": "Ammo Carrier",
+      "category": "gear",
+      "source": "homebrew",
+      "price": 50,
+      "effects": [
+        "Transporta munição adicional."
+      ]
+    },
+    {
+      "id": "breach_spike",
+      "name": "Breach Spike",
+      "category": "netrunner",
+      "source": "homebrew",
+      "price": 200,
+      "effects": [
+        "Permite realizar uma tentativa adicional de invasão."
+      ]
+    },
+    {
+      "id": "signal_booster",
+      "name": "Signal Booster",
+      "category": "electronics",
+      "source": "homebrew",
+      "price": 200,
+      "effects": [
+        "Aumenta alcance de comunicação."
+      ]
+    },
+    {
+      "id": "encrypted_shard",
+      "name": "Encrypted Data Shard",
+      "category": "mission_item",
+      "source": "homebrew",
+      "price": 0,
+      "effects": [
+        "Pode conter dados criptografados.",
+        "Pode ser utilizado como item de missão."
+      ]
+    },
+    {
+      "id": "corp_access_card",
+      "name": "Corporate Access Card",
+      "category": "mission_item",
+      "source": "homebrew",
+      "price": 0,
+      "effects": [
+        "Fornece acesso limitado a instalações corporativas."
+      ]
+    },
+    {
+      "id": "fake_id",
+      "name": "Forged ID",
+      "category": "mission_item",
+      "source": "homebrew",
+      "price": 100,
+      "effects": [
+        "Pode permitir acesso a locais restritos dependendo da qualidade da falsificação."
+      ]
+    },
+    {
+      "id": "corporate_badge",
+      "name": "Corporate Badge",
+      "category": "mission_item",
+      "source": "homebrew",
+      "price": 50,
+      "effects": [
+        "Identificação corporativa."
+      ]
+    },
+    {
+      "id": "military_access_chip",
+      "name": "Military Access Chip",
+      "category": "mission_item",
+      "source": "homebrew",
+      "price": 500,
+      "effects": [
+        "Pode abrir sistemas de acesso militar compatíveis."
+      ]
+    }
+  ]
+}
