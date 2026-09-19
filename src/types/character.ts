@@ -14,12 +14,12 @@ export interface CyberwareItem { id: string; name: string; humanityLoss?: string
 export interface InventoryItem { id: string; name: string; quantity: number; category?: string; catalogItemId?: string; notes?: string; }
 export interface Progression { improvementPoints: number; }
 export interface Wallet { eurodollars: number; }
-export interface RollHistoryEntry { id: string; type: "humanity_loss" | "attack"; label: string; characterId: string; expression: string; rolls: number[]; total: number; timestamp: string; cyberwareId?: string; cyberwareName?: string; humanityBefore?: number; humanityAfter?: number; attackType?: import("@/types/attack").AttackType; weaponId?: string; stat?: { id: AttributeName; value: number }; skill?: { id: string; value: number }; modifiers?: import("@/types/attack").AttackModifier[]; }
+export interface RollHistoryEntry { id: string; type: "humanity_loss" | "attack" | "damage"; label: string; characterId: string; expression: string; rolls: number[]; total: number; timestamp: string; cyberwareId?: string; cyberwareName?: string; humanityBefore?: number; humanityAfter?: number; attackType?: import("@/types/attack").AttackType; weaponId?: string; attackId?: string; damageDice?: string; stat?: { id: AttributeName; value: number }; skill?: { id: string; value: number }; modifiers?: import("@/types/attack").AttackModifier[]; }
 
 /** Estado persistido de um personagem já criado. Pontos de criação não são recursos persistidos. */
 export interface Character {
   id: string; schemaVersion: 1; createdAt: string; updatedAt: string;
-  identity: CharacterIdentity; attributes: Attributes; skills: Skills; progression: Progression; wallet: Wallet; rollHistory: RollHistoryEntry[];
+  identity: CharacterIdentity; attributes: Attributes; skills: Skills; progression: Progression; wallet: Wallet; rollHistory: RollHistoryEntry[]; lastAttack?: import("@/types/attack").AttackRollResult; lastDamage?: import("@/types/attack").DamageRollResult;
   combat: CombatStats; humanity: { current: number; max: number }; luck: { current: number; max: number };
   weapons: Weapon[]; cyberware: CyberwareItem[]; inventory: InventoryItem[];
 }
