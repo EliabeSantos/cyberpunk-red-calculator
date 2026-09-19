@@ -1,12 +1,12 @@
 "use client";
 
+import { getAvailableAttacks, rollAttack } from "@/lib/attacks";
 import type { AttackRollResult } from "@/types/attack";
-import { rollAttack } from "@/lib/attacks";
 import type { Character } from "@/types/character";
 
-type Props = { character: Character; onUpdate: (character: Character) => void; onResult: (result: AttackRollResult) => void; };
+type Props = { character: Character; onUpdate: (character: Character) => void; onResult: (result: AttackRollResult) => void };
 export default function AttackActions({ character, onUpdate, onResult }: Props) {
-  const attackableWeapons = character.weapons.filter((weapon) => weapon.attackType && weapon.skill);
-  function attack(weaponId: string) { const resolution = rollAttack(character, { type: "weapon", weaponId }); if ("error" in resolution) return; onUpdate(resolution.character); onResult(resolution.result); }
-  return <div className="attack-actions">{attackableWeapons.length ? attackableWeapons.map((weapon) => <button type="button" key={weapon.id} onClick={() => attack(weapon.id)}><span>{weapon.name}</span><small>{weapon.skill} + 1d10</small><b>Rolar ataque</b></button>) : <p className="sheet-empty">Equipe uma arma com perfil de ataque para rolar.</p>}</div>;
+  const attacks = getAvailableAttacks(character);
+  function attack(attackId: string) { const availableAttack = attacks.find((item) => item.id === attackId); if (!availableAttack) return; const resolution = rollAttack(character, availableAttack.context); if ("error" in resolution) return; onUpdate(resolution.character); onResult(resolution.result); }
+  return <div className="attack-actions">{attacks.length ? attacks.map((availableAttack) => <button type="button" key={availableAttack.id} onClick={() => attack(availableAttack.id)}><span>{availableAttack.label}</span><small>{availableAttack.detail}</small><b>Rolar ataque</b></button>) : <p className="sheet-empty">Equipe uma arma ou aumente uma perícia de ataque para rolar.</p>}</div>;
 }

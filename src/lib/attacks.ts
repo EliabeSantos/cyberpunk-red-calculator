@@ -1,13 +1,29 @@
 import { rollDice } from "@/lib/dice";
-import type { AttackContext, AttackRollResult } from "@/types/attack";
+import type { AttackContext, AttackRollResult, AvailableAttack } from "@/types/attack";
 import type { Character, RollHistoryEntry } from "@/types/character";
 
+
+/** Descobre ataques a partir de armas E de perícias, sem depender da UI. */
+export function getAvailableAttacks(character: Character): AvailableAttack[] {
+  const weaponAttacks: AvailableAttack[] = character.weapons
+    .filter((weapon) => weapon.attackType && weapon.skill)
+    .map((weapon) => ({ id: `weapon:${weapon.id}`, label: weapon.name, detail: `${weapon.skill} + 1d10`, source: "weapon", context: { type: "weapon", weaponId: weapon.id } }));
+  const martialArts = character.skills.martial_arts;
+  const skillAttacks: AvailableAttack[] = martialArts && martialArts.level > 0
+    ? [{ id: "skill:martial_arts", label: martialArts.name, detail: `${martialArts.stat} + ${martialArts.name} + 1d10`, source: "skill", context: { type: "martial_arts", skillId: "martial_arts" } }]
+    : [];
+  return [...weaponAttacks, ...skillAttacks];
+}
+
+function getAttackLabel(type: AttackContext["type"]): string {
+  return type === "martial_arts" ? "Artes Marciais" : type === "unarmed" ? "Ataque Desarmado" : "Ataque";
+}
 export type AttackResolution = { character: Character; result: AttackRollResult } | { error: string };
 
 /** Resolve apenas a rolagem para acertar, sem calcular dano ou DV. */
 export function rollAttack(character: Character, context: AttackContext): AttackResolution {
   const modifiers = context.modifiers ?? [];
-  let skillId = context.skillId; let label = "Ataque"; let weaponId = context.weaponId; let attackType = context.type;
+  let skillId = context.skillId; let label = getAttackLabel(context.type); let weaponId = context.weaponId; let attackType = context.type;
   if (context.weaponId) {
     const weapon = character.weapons.find((item) => item.id === context.weaponId);
     if (!weapon) return { error: "Arma não encontrada." };
