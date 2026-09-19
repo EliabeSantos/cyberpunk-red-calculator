@@ -20,6 +20,8 @@ import type { AttributeName, Character } from "@/types/character";
 import type { SkillCategory } from "@/data/skills";
 import { hitLocationLabels, hitLocations, type HitLocation } from "@/types/combat";
 import { roleDefinitions } from "@/data/roles";
+import { getSellPrice, sellInventoryItem } from "@/lib/store";
+import { getCatalogItem } from "@/data/items";
 import { getCombatAwarenessTotal, getMakerSpecialtyPoints, getMedicineSpecialtyPoints, getNetActionsPerTurn, getRoleAbilityIPCost, spendIPOnRoleAbility } from "@/lib/roles";
 
 type CharacterSheetProps = {
@@ -109,6 +111,11 @@ export default function CharacterSheet({
     const resolution = applyReceivedDamage(character, Number(receivedDamage), hitLocation);
     if ("error" in resolution) { setCombatError(resolution.error); return; }
     setCombatError(""); setReceivedDamage(""); onUpdate(resolution.character);
+  }
+  function sellItem(inventoryItemId: string) {
+    const result = sellInventoryItem(character, inventoryItemId);
+    if ("error" in result) { setCombatError("Não foi possível vender este item."); return; }
+    setCombatError(""); onUpdate(result.character);
   }
   function equipItem(inventoryItemId: string) {
     const result = equipInventoryItem(character, inventoryItemId);
@@ -471,7 +478,8 @@ export default function CharacterSheet({
               {character.inventory.map((item) => (
                 <li key={item.id}>
                   <strong>{item.quantity}×</strong>
-                  <span>{item.name}</span>
+                  <span>{item.name}{item.catalogItemId && (() => { const catalogItem = getCatalogItem(item.catalogItemId); return catalogItem ? <small>Compra: €$ {catalogItem.price.toLocaleString("pt-BR")} · Venda: €$ {getSellPrice(catalogItem.price).toLocaleString("pt-BR")}/un.</small> : null; })()}</span>
+                  {item.catalogItemId && <button type="button" className="equip-item" onClick={() => sellItem(item.id)}>Vender 1</button>}
                   {isEquippableItem(item) && (
                     <button
                       type="button"

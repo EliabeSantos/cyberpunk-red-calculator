@@ -7,6 +7,8 @@ import { getSkillBase } from "../src/lib/calculations.ts";
 import { getAttributePointsRemaining, getCreationPointSummary, getSkillPointsSpent, validateCharacterCreation, validateCharacterEdit } from "../src/lib/characterCreation.ts";
 import { skillDefinitions } from "../src/data/skills.ts";
 import { statNames, createEmptyCharacter } from "../src/types/character.ts";
+import { catalogItems } from "../src/data/items.ts";
+import { getItemForFree, getSellPrice, purchaseItem, sellInventoryItem } from "../src/lib/store.ts";
 import { addMulticlassRole, addPrimaryRole, getCombatAwarenessTotal, getMakerSpecialtyPoints, getMedicineSpecialtyPoints, getMotoSkillBonus, getNetActionsPerTurn, getRoleAbilityIPCost, spendIPOnRoleAbility } from "../src/lib/roles.ts";
 
 function characterWith(ref: number, handgunLevel: number) {
@@ -180,4 +182,23 @@ test("Evasion result exposes DEX, Skill Level, d10 and total for the UI", () => 
     assert.ok("result" in result);
     if ("result" in result) { assert.deepEqual(result.result.stat, { id: "DEX", value: 7 }); assert.deepEqual(result.result.skill, { id: "evasion", value: 6 }); assert.equal(result.result.naturalRoll, 8); assert.equal(result.result.total, 21); }
   } finally { Math.random = random; }
+});
+test("paid, free, and sale inventory flows share catalog prices safely", () => {
+  const item = catalogItems.find((candidate) => candidate.price === 100) ?? catalogItems.find((candidate) => candidate.price > 0)!;
+  const paidCharacter = createEmptyCharacter("paid-store"); paidCharacter.wallet.eurodollars = item.price;
+  const purchase = purchaseItem(paidCharacter, item.id); assert.ok("character" in purchase);
+  if ("character" in purchase) { assert.equal(purchase.character.wallet.eurodollars, 0); assert.equal(purchase.character.inventory[0].quantity, item.quantity ?? 1); }
+  const freeCharacter = createEmptyCharacter("free-store"); freeCharacter.wallet.eurodollars = 100;
+  const free = getItemForFree(freeCharacter, item.id); assert.ok("character" in free);
+  if ("character" in free) { assert.equal(free.character.wallet.eurodollars, 100); assert.equal(free.character.inventory[0].quantity, item.quantity ?? 1); }
+  const sellCharacter = free.character;
+  const sold = sellInventoryItem(sellCharacter, sellCharacter.inventory[0].id); assert.ok("character" in sold);
+  if ("character" in sold) { assert.equal(sold.character.wallet.eurodollars, 100 + getSellPrice(item.price)); assert.equal(sold.character.inventory.length, 0); }
+});
+
+test("sale validates quantity and never allows negative inventory", () => {
+  const item = catalogItems.find((candidate) => candidate.price > 0)!;
+  let character = getItemForFree(createEmptyCharacter("sale-quantity"), item.id); assert.ok("character" in character);
+  if ("character" in character) { const failed = sellInventoryItem(character.character, character.character.inventory[0].id, character.character.inventory[0].quantity + 1); assert.deepEqual(failed, { error: "invalid-quantity" }); assert.equal(character.character.inventory[0].quantity, item.quantity ?? 1); }
+  assert.equal(getSellPrice(50), 5); assert.equal(getSellPrice(100), 10); assert.equal(getSellPrice(500), 50); assert.equal(getSellPrice(1000), 100);
 });
