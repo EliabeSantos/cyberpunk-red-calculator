@@ -12,6 +12,8 @@ import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
 import { applyReceivedDamage, rollDamageForLastAttack } from "@/lib/damage";
 import { getSkillBase } from "@/lib/calculations";
 import { rollEvasion } from "@/lib/attacks";
+import { rollSkillCheck } from "@/lib/skills";
+import type { SkillCheckResult } from "@/lib/skills";
 import type { HumanityLossResult } from "@/lib/humanity";
 import StorePanel from "@/components/sheets/StorePanel";
 import AttackActions from "@/components/combat/AttackActions";
@@ -70,6 +72,7 @@ export default function CharacterSheet({
   const [lastAttack, setLastAttack] = useState<AttackRollResult | null>(null);
   const [lastDamage, setLastDamage] = useState<DamageRollResult | null>(null);
   const [lastEvasion, setLastEvasion] = useState<EvasionRollResult | null>(null);
+  const [skillRollResults, setSkillRollResults] = useState<Record<string, SkillCheckResult | null>>({});
   const [receivedDamage, setReceivedDamage] = useState("");
   const [hitLocation, setHitLocation] = useState<HitLocation>("body");
   const [combatError, setCombatError] = useState("");
@@ -90,7 +93,14 @@ export default function CharacterSheet({
   }
   function improveSkill(skillId: string) {
     const updated = upgradeSkill(character, skillId);
-    if (updated) onUpdate(updated);
+    if (updated) {
+      setSkillRollResults((prev) => {
+        const next = { ...prev };
+        delete next[skillId];
+        return next;
+      });
+      onUpdate(updated);
+    }
   }
   function improveRole(roleId: import("@/types/roles").RoleId) {
     const updated = spendIPOnRoleAbility(character, roleId);
@@ -101,6 +111,15 @@ export default function CharacterSheet({
     if ("error" in resolution) return;
     onUpdate(resolution.character);
     setLastDamage(resolution.result);
+  }
+  function handleRollSkillCheck(character: Character, skillId: string) {
+    const resolution = rollSkillCheck(character, skillId);
+    if ("error" in resolution) return;
+    setSkillRollResults((prev) => ({
+      ...prev,
+      [skillId]: resolution.result,
+    }));
+    onUpdate(resolution.character);
   }
   function evade() {
     const resolution = rollEvasion(character);
@@ -380,6 +399,7 @@ export default function CharacterSheet({
                   const base = getSkillBase(character, id);
                   const cost = getSkillUpgradeCost(skill.level, skill.costMultiplier);
                   const canUpgrade = canUpgradeSkill(character, id);
+                  const rollResult = skillRollResults[id] ?? null;
                   return (
                     <div className="skill-row" key={id}>
                       <span>
@@ -388,10 +408,23 @@ export default function CharacterSheet({
                           STAT: {skill.stat} · LEVEL: {skill.level} · BASE: {base}{skill.costMultiplier === 2 ? " · custo x2" : ""}
                         </small>
                       </span>
-                      <button type="button" className="upgrade-skill" disabled={!canUpgrade} onClick={() => improveSkill(id)}>
-                        ↑ {cost} IP
-                      </button>
+                      <div className="skill-actions">
+                        <button type="button" className="upgrade-skill" disabled={!canUpgrade} onClick={() => improveSkill(id)}>
+                          ↑ {cost} IP
+                        </button>
+                        <button
+                          type="button"
+                          className="upgrade-skill"
+                          onClick={() => handleRollSkillCheck(character, id)}
+                          aria-label={`Rolar ${skill.name}`}
+                        >
+                          🎲
+                        </button>
+                      </div>
                       <strong>{base}</strong>
+                      {rollResult && (
+                        <span className="skill-roll-result">= {rollResult.total}</span>
+                      )}
                     </div>
                   );
                 })}
