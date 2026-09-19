@@ -31,7 +31,19 @@ function normalizeCharacter(character: Character): Character {
   const oldHumanity = character.humanity;
   return {
     ...character,
+    // Fichas antigas podem conter `base`; Base agora é sempre calculada sob demanda.
+    skills: Object.fromEntries(
+      Object.entries(character.skills).map(([id, skill]) => {
+        const { base: _legacyBase, ...currentSkill } = skill as typeof skill & { base?: number };
+        return [id, currentSkill];
+      }),
+    ),
     wallet: character.wallet ?? { eurodollars: 0 },
+    primaryRole: character.primaryRole ?? null,
+    roleAbilities: character.roleAbilities ?? [],
+    ip: character.ip ?? character.progression?.improvementPoints ?? 0,
+    teamMembers: character.teamMembers ?? [],
+    familyVehicles: character.familyVehicles ?? [],
     progression: character.progression ?? { improvementPoints: 0 },
     rollHistory: character.rollHistory ?? [],
     humanity: {

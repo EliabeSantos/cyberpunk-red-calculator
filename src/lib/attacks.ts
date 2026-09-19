@@ -1,3 +1,4 @@
+import { getSkillBase } from "@/lib/calculations";
 import { rollDice } from "@/lib/dice";
 import type {
   AttackContext,
@@ -88,8 +89,7 @@ export function rollAttack(
     stat: { id: skill.stat, value: character.stats[skill.stat] },
     skill: { id: skillId, value: skill.level },
     modifiers,
-    total:
-      roll.total + character.stats[skill.stat] + skill.level + modifierTotal,
+    total: roll.total + getSkillBase(character, skillId) + modifierTotal,
     weaponId,
     damageDice,
     naturalRoll,

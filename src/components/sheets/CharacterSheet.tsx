@@ -10,11 +10,15 @@ import {
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
 import { rollDamageForLastAttack } from "@/lib/damage";
+import { getSkillBase } from "@/lib/calculations";
 import type { HumanityLossResult } from "@/lib/humanity";
 import StorePanel from "@/components/sheets/StorePanel";
 import AttackActions from "@/components/combat/AttackActions";
 import type { AttackRollResult, DamageRollResult } from "@/types/attack";
 import type { AttributeName, Character } from "@/types/character";
+import type { SkillCategory } from "@/data/skills";
+import { roleDefinitions } from "@/data/roles";
+import { getCombatAwarenessTotal, getMakerSpecialtyPoints, getMedicineSpecialtyPoints, getNetActionsPerTurn, getRoleAbilityIPCost, spendIPOnRoleAbility } from "@/lib/roles";
 
 type CharacterSheetProps = {
   character: Character;
@@ -61,18 +65,14 @@ export default function CharacterSheet({
     useState<HumanityLossResult | null>(null);
   const [lastAttack, setLastAttack] = useState<AttackRollResult | null>(null);
   const [lastDamage, setLastDamage] = useState<DamageRollResult | null>(null);
-  const skillsByStat = statOrder
-    .map(
-      (stat) =>
-        [
-          stat,
-          Object.entries(character.skills).filter(
-            ([, skill]) => skill.stat === stat,
-          ),
-        ] as const,
-    )
+  const categoryOrder: SkillCategory[] = ["awareness", "body", "control", "education", "fighting", "performance", "ranged_weapon", "social", "technique"];
+  const categoryNames: Record<SkillCategory, string> = {
+    awareness: "Awareness", body: "Body", control: "Control", education: "Education", fighting: "Fighting", performance: "Performance", ranged_weapon: "Ranged Weapon", social: "Social", technique: "Technique",
+  };
+  const skillsByCategory = categoryOrder
+    .map((category) => [category, Object.entries(character.skills).filter(([, skill]) => skill.category === category)] as const)
     .filter(([, skills]) => skills.length > 0);
-  const availableIP = character.progression?.improvementPoints ?? 0;
+  const availableIP = character.ip;
   function grantIP() {
     const updated = grantImprovementPoints(character, ipToGrant);
     if (updated !== character) {
@@ -82,6 +82,10 @@ export default function CharacterSheet({
   }
   function improveSkill(skillId: string) {
     const updated = upgradeSkill(character, skillId);
+    if (updated) onUpdate(updated);
+  }
+  function improveRole(roleId: import("@/types/roles").RoleId) {
+    const updated = spendIPOnRoleAbility(character, roleId);
     if (updated) onUpdate(updated);
   }
   function rollDamage() {
@@ -185,8 +189,24 @@ export default function CharacterSheet({
               ))}
             </div>
           </section>
+          <section className="sheet-panel role-panel">
+            <PanelTitle number="02">Role</PanelTitle>
+            {character.primaryRole ? character.roleAbilities.map((ability) => {
+              const role = roleDefinitions[ability.roleId];
+              const nextRank = ability.rank + 1;
+              const cost = getRoleAbilityIPCost(nextRank);
+              return <div className="role-ability" key={ability.roleId}>
+                <strong>{role.name}</strong><span>{role.abilityName} · Rank {ability.rank}</span>
+                {ability.abilityId === "combat_awareness" && <small>Combat Awareness Points: {getCombatAwarenessTotal(character)} / {ability.rank}</small>}
+                {ability.abilityId === "interface" && <small>NET Actions: {getNetActionsPerTurn(ability.rank)}</small>}
+                {ability.abilityId === "maker" && <small>Maker specialty points: {getMakerSpecialtyPoints(ability.rank)}</small>}
+                {ability.abilityId === "medicine" && <small>Medicine specialty points: {getMedicineSpecialtyPoints(ability.rank)}</small>}
+                {ability.rank < 10 && <button type="button" className="upgrade-skill" disabled={availableIP < cost} onClick={() => improveRole(ability.roleId)}>↑ Rank {nextRank} · {cost} IP</button>}
+              </div>;
+            }) : <EmptyState>Nenhuma Role selecionada.</EmptyState>}
+          </section>
           <section className="sheet-panel">
-            <PanelTitle number="02">Combate</PanelTitle>
+            <PanelTitle number="03">Combate</PanelTitle>
             <div className="combat-grid">
               <Metric
                 label="HP"
@@ -280,7 +300,7 @@ export default function CharacterSheet({
             )}
           </section>
           <section className="sheet-panel ip-panel">
-            <PanelTitle number="03">Progressão</PanelTitle>
+            <PanelTitle number="05">Progressão</PanelTitle>
             <p>
               IP disponível <strong>{availableIP}</strong>
             </p>
@@ -302,35 +322,29 @@ export default function CharacterSheet({
           </section>
         </aside>
         <section className="sheet-panel skills-panel">
-          <PanelTitle number="04">
+          <PanelTitle number="05">
             Perícias <span>{Object.keys(character.skills).length}</span>
           </PanelTitle>
           <div className="skills-groups">
-            {skillsByStat.map(([stat, skills]) => (
-              <div className="skill-group" key={stat}>
-                <h3>
-                  {stat} <small>{statNames[stat]}</small>
-                </h3>
+            {skillsByCategory.map(([category, skills]) => (
+              <div className="skill-group" key={category}>
+                <h3>{categoryNames[category]}</h3>
                 {skills.map(([id, skill]) => {
-                  const cost = getSkillUpgradeCost(skill.level);
+                  const base = getSkillBase(character, id);
+                  const cost = getSkillUpgradeCost(skill.level, skill.costMultiplier);
                   const canUpgrade = canUpgradeSkill(character, id);
                   return (
                     <div className="skill-row" key={id}>
                       <span>
                         {skill.name}
                         <small>
-                          {skill.stat} {skill.base} + nível {skill.level}
+                          STAT: {skill.stat} · LEVEL: {skill.level} · BASE: {base}{skill.costMultiplier === 2 ? " · custo x2" : ""}
                         </small>
                       </span>
-                      <button
-                        type="button"
-                        className="upgrade-skill"
-                        disabled={!canUpgrade}
-                        onClick={() => improveSkill(id)}
-                      >
+                      <button type="button" className="upgrade-skill" disabled={!canUpgrade} onClick={() => improveSkill(id)}>
                         ↑ {cost} IP
                       </button>
-                      <strong>{skill.base}</strong>
+                      <strong>{base}</strong>
                     </div>
                   );
                 })}

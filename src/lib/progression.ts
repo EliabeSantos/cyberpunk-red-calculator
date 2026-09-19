@@ -1,53 +1,24 @@
 import { PROGRESSION_RULES } from "@/data/progression";
-import { calculateSkillValues } from "@/lib/calculations";
 import type { Character } from "@/types/character";
 
-export function getSkillUpgradeCost(currentLevel: number): number {
-  return (currentLevel + 1) * PROGRESSION_RULES.skillUpgradeCostPerLevel;
+export function getSkillUpgradeCost(currentLevel: number, costMultiplier: 1 | 2 = 1): number {
+  return (currentLevel + 1) * PROGRESSION_RULES.skillUpgradeCostPerLevel * costMultiplier;
 }
-export function canUpgradeSkill(
-  character: Character,
-  skillId: string,
-  availableIP = character.progression.improvementPoints,
-): boolean {
+export function canUpgradeSkill(character: Character, skillId: string, availableIP = character.ip): boolean {
   const skill = character.skills[skillId];
-  return Boolean(
-    skill &&
-    skill.level < PROGRESSION_RULES.maximumSkillLevel &&
-    availableIP >= getSkillUpgradeCost(skill.level),
-  );
+  return Boolean(skill && skill.level < PROGRESSION_RULES.maximumSkillLevel && availableIP >= getSkillUpgradeCost(skill.level, skill.costMultiplier));
 }
-export function upgradeSkill(
-  character: Character,
-  skillId: string,
-): Character | null {
+export function upgradeSkill(character: Character, skillId: string): Character | null {
   if (!canUpgradeSkill(character, skillId)) return null;
   const skill = character.skills[skillId];
-  const cost = getSkillUpgradeCost(skill.level);
+  const cost = getSkillUpgradeCost(skill.level, skill.costMultiplier);
   return {
     ...character,
-    skills: {
-      ...character.skills,
-      [skillId]: calculateSkillValues(character.stats, {
-        ...skill,
-        level: skill.level + 1,
-      }),
-    },
-    progression: {
-      improvementPoints: character.progression.improvementPoints - cost,
-    },
+    ip: character.ip - cost,
+    skills: { ...character.skills, [skillId]: { ...skill, level: skill.level + 1 } },
+    progression: { improvementPoints: character.ip - cost },
   };
 }
-export function grantImprovementPoints(
-  character: Character,
-  amount: number,
-): Character {
-  return amount > 0
-    ? {
-        ...character,
-        progression: {
-          improvementPoints: character.progression.improvementPoints + amount,
-        },
-      }
-    : character;
+export function grantImprovementPoints(character: Character, amount: number): Character {
+  return amount > 0 ? { ...character, ip: character.ip + amount, progression: { improvementPoints: character.ip + amount } } : character;
 }

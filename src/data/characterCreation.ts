@@ -1,19 +1,31 @@
 import type { AttributeName } from "@/types/character";
 
+/** Complete Package: pools independentes para STATs e Perícias. */
 export const CHARACTER_CREATION_RULES = {
-  attributePoints: 80,
-  skillPoints: 62,
+  attributePoints: 62,
+  skillPoints: 86,
   skillMaximum: 6,
   requiredSkills: {
+    athletics: 2,
+    brawling: 2,
     concentration: 2,
+    conversation: 2,
+    education: 2,
+    evasion: 2,
+    first_aid: 2,
+    human_perception: 2,
+    language: 2,
+    local_expert: 2,
     perception: 2,
+    persuasion: 2,
+    stealth: 2,
   },
 } as const;
 
 export const ATTRIBUTE_CREATION_RULES: Record<AttributeName, { minimum: number; maximum: number }> = {
-  INT: { minimum: 0, maximum: 10 }, REF: { minimum: 0, maximum: 10 }, DEX: { minimum: 0, maximum: 10 },
-  TECH: { minimum: 0, maximum: 10 }, COOL: { minimum: 0, maximum: 10 }, WILL: { minimum: 0, maximum: 10 },
-  LUCK: { minimum: 0, maximum: 10 }, MOVE: { minimum: 0, maximum: 10 }, BODY: { minimum: 0, maximum: 10 }, EMP: { minimum: 0, maximum: 10 },
+  INT: { minimum: 2, maximum: 8 }, REF: { minimum: 2, maximum: 8 }, DEX: { minimum: 2, maximum: 8 },
+  TECH: { minimum: 2, maximum: 8 }, COOL: { minimum: 2, maximum: 8 }, WILL: { minimum: 2, maximum: 8 },
+  LUCK: { minimum: 2, maximum: 8 }, MOVE: { minimum: 2, maximum: 8 }, BODY: { minimum: 2, maximum: 8 }, EMP: { minimum: 2, maximum: 8 },
 };
 
 export function getRequiredSkillMinimum(skillId: string): number {
