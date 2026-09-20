@@ -13,21 +13,24 @@ import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, type D
 import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold } from "@/lib/calculations";
 import { rollEvasion } from "@/lib/attacks";
 import { rollSkillCheck } from "@/lib/skills";
+import { rollQuickhack } from "@/lib/quickhacks";
+import { getQuickhacksForCharacter, quickhackDefinitions, quickhackCategoriesOrder } from "@/data/quickhacks";
 import { removeCyberware } from "@/lib/cyberware";
 import { adjustHumanity } from "@/lib/humanity";
 import type { SkillCheckResult } from "@/lib/skills";
 import type { HumanityLossResult } from "@/lib/humanity";
+import type { QuickhackRollResult, QuickhackCategory } from "@/lib/quickhacks";
 import StorePanel from "@/components/sheets/StorePanel";
 import AttackActions from "@/components/combat/AttackActions";
 import type { AttackRollResult, DamageRollResult, EvasionRollResult } from "@/types/attack";
 import type { AttributeName, Character } from "@/types/character";
 import type { SkillCategory } from "@/data/skills";
 import { hitLocationLabels, hitLocations, type HitLocation } from "@/types/combat";
-import { roleDefinitions } from "@/data/roles";
-import type { RoleAbilityData, RoleAbilityId } from "@/data/roles";
 import { getSellPrice, sellInventoryItem } from "@/lib/store";
 import { getCatalogItem } from "@/data/items";
 import { getCombatAwarenessTotal, getMakerSpecialtyPoints, getMedicineSpecialtyPoints, getNetActionsPerTurn, getRoleAbilityIPCost, spendIPOnRoleAbility } from "@/lib/roles";
+import { roleDefinitions } from "@/data/roles";
+import type { RoleAbilityData, RoleAbilityId } from "@/data/roles";
 
 type CharacterSheetProps = {
   character: Character;
@@ -81,17 +84,34 @@ export default function CharacterSheet({
   const [combatError, setCombatError] = useState("");
   const [lastDamageDealt, setLastDamageDealt] = useState<DamageApplicationResult | null>(null);
   const [lastDamageReceived, setLastDamageReceived] = useState<DamageApplicationResult | null>(null);
+  const [lastQuickhack, setLastQuickhack] = useState<QuickhackRollResult | null>(null);
+  const [rollingQuickhack, setRollingQuickhack] = useState<{ id: string; roll: number } | null>(null);
+  const [quickhackError, setQuickhackError] = useState("");
   const [humanityAdjustOpen, setHumanityAdjustOpen] = useState(false);
   const [humanityAdjustValue, setHumanityAdjustValue] = useState("");
   const [humanityAdjustReason, setHumanityAdjustReason] = useState("");
   const [expandedRoleAbility, setExpandedRoleAbility] = useState<RoleAbilityId | null>(null);
   const categoryOrder: SkillCategory[] = ["awareness", "body", "control", "education", "fighting", "performance", "ranged_weapon", "social", "technique"];
+  const statNames: Record<AttributeName, string> = {
+    INT: "Inteligência",
+    REF: "Reflexos",
+    DEX: "Destreza",
+    TECH: "Técnica",
+    COOL: "Frieza",
+    WILL: "Vontade",
+    LUCK: "Sorte",
+    MOVE: "Movimento",
+    BODY: "Corpo",
+    EMP: "Empatia",
+  };
   const categoryNames: Record<SkillCategory, string> = {
     awareness: "Awareness", body: "Body", control: "Control", education: "Education", fighting: "Fighting", performance: "Performance", ranged_weapon: "Ranged Weapon", social: "Social", technique: "Technique",
   };
   const skillsByCategory = categoryOrder
     .map((category) => [category, Object.entries(character.skills).filter(([, skill]) => skill.category === category)] as const)
     .filter(([, skills]) => skills.length > 0);
+  const availableQuickhacks = getQuickhacksForCharacter(character);
+  const hasQuickhacks = availableQuickhacks.length > 0;
   const availableIP = character.ip;
   function grantIP() {
     const updated = grantImprovementPoints(character, ipToGrant);
@@ -121,7 +141,7 @@ export default function CharacterSheet({
     const damageRoll = resolution.result;
     onUpdate(resolution.character);
     setLastDamage(damageRoll);
-    setLastDamageDealt(null); // Clear previous damage dealt result
+    setLastDamageDealt(null);
   }
   function handleRollSkillCheck(character: Character, skillId: string) {
     const resolution = rollSkillCheck(character, skillId);
@@ -131,6 +151,20 @@ export default function CharacterSheet({
       [skillId]: resolution.result,
     }));
     onUpdate(resolution.character);
+  }
+  function handleRollQuickhack(quickhackId: string) {
+    const resolution = rollQuickhack(character, quickhackId);
+    if ("error" in resolution) {
+      setQuickhackError(resolution.error);
+      return;
+    }
+    setQuickhackError("");
+    // Show immediate visual feedback with the dice roll
+    setRollingQuickhack({ id: quickhackId, roll: resolution.result.roll.rolls[0] });
+    setLastQuickhack(resolution.result);
+    onUpdate(resolution.character);
+    // Clear the rolling indicator after a brief moment
+    setTimeout(() => setRollingQuickhack(null), 1500);
   }
   function evade() {
     const resolution = rollEvasion(character);
@@ -170,6 +204,9 @@ export default function CharacterSheet({
     setHumanityAdjustOpen(false);
     setHumanityAdjustValue("");
     setHumanityAdjustReason("");
+  }
+  function openQuickhackPanel() {
+    // TODO: implementar se necessário
   }
   return (
     <main className="sheet-shell">
@@ -213,19 +250,9 @@ export default function CharacterSheet({
           </div>
           <div>
             <small>Humanidade</small>
-            <div style={{ display: "flex", alignItems: "baseline", gap: "0.35rem" }}>
-              <strong>
-                {character.humanity.current} <i>/</i> {character.humanity.max}
-              </strong>
-              <button
-                type="button"
-                className="upgrade-skill"
-                onClick={openHumanityAdjust}
-                style={{ padding: "0.2rem 0.4rem", fontSize: "0.6rem", height: "auto" }}
-              >
-                Ajustar
-              </button>
-            </div>
+            <strong>
+              {character.humanity.current} <i>/</i> {character.humanity.max}
+            </strong>
           </div>
           <div>
             <small>EMP</small>
@@ -390,51 +417,6 @@ export default function CharacterSheet({
                         = <b>{lastDamage.total}</b>
                       </span>
                     )}
-                    {lastDamageDealt && lastDamageDealt.damage > 0 && (
-                      <div className="damage-application-result" role="status">
-                        <div>
-                          <small>Dano Causado</small>
-                          <strong>{lastDamageDealt.damage}</strong>
-                        </div>
-                        <div>
-                          <small>Localização</small>
-                          <strong>{hitLocationLabels[lastDamageDealt.location]}</strong>
-                        </div>
-                        {lastDamageDealt.crossedWoundThreshold && (
-                          <div className="seriously-wounded" role="alert">
-                            <span>⚠ Seriously Wounded</span>
-                          </div>
-                        )}
-                        {lastDamageDealt.criticalInjuryTriggered && (
-                          <div className="critical-injury-result" role="alert">
-                            <strong>Critical Injury</strong>
-                            {lastDamageDealt.criticalInjury && (
-                              <>
-                                <div>
-                                  <small>Rolagem</small>
-                                  <strong>2d6 = {lastDamageDealt.criticalInjury.roll}</strong>
-                                </div>
-                                <div>
-                                  <small>Localização</small>
-                                  <strong>{hitLocationLabels[lastDamageDealt.criticalInjury.location]}</strong>
-                                </div>
-                                <div>
-                                  <small>Ferimento</small>
-                                  <strong>{lastDamageDealt.criticalInjury.name}</strong>
-                                </div>
-                                <div>
-                                  <small>Efeito</small>
-                                  <span>{lastDamageDealt.criticalInjury.effect}</span>
-                                </div>
-                              </>
-                            )}
-                            {lastDamageDealt.criticalInjuryFromDice && !lastDamageDealt.criticalInjury && (
-                              <span>Critical Injury causada por dados de dano (dois ou mais 6).</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 );
               })()}
@@ -464,7 +446,6 @@ export default function CharacterSheet({
             </div>
             <h3>Lesões críticas</h3>
             {(() => {
-              // Use the most recent critical injury from recent damage, or fall back to the most recent persisted injury
               const displayInjury = lastDamageReceived?.criticalInjuryTriggered
                 ? lastDamageReceived.criticalInjury
                 : character.combat.criticalInjuries[character.combat.criticalInjuries.length - 1];
@@ -547,8 +528,9 @@ export default function CharacterSheet({
             </div>
             <small>IP é separado e só existe após a criação.</small>
           </section>
-        </aside>
-        <section className="sheet-panel skills-panel">
+          </aside>
+        <div className="sheet-main">
+          <section className="sheet-panel skills-panel">
           <PanelTitle number="05">
             Perícias <span>{Object.keys(character.skills).length}</span>
           </PanelTitle>
@@ -593,7 +575,65 @@ export default function CharacterSheet({
             ))}
           </div>
         </section>
-      </section>
+        <section className="sheet-panel quickhacks-panel">
+            <PanelTitle number="06">Quickhacks</PanelTitle>
+            {quickhackError && <p className="form-error">{quickhackError}</p>}
+            {availableQuickhacks.length === 0 ? (
+              <p className="sheet-empty">
+                {character.skills.interface?.level > 0
+                  ? "Nenhum quickhack disponível."
+                  : "Requer perícia Interface (nível 1+) para usar quickhacks."}
+              </p>
+            ) : (
+              <div className="quickhacks-groups">
+                {quickhackCategoriesOrder.map((category) => (
+                  <div className="quickhack-group" key={category}>
+                    <h3>{category}</h3>
+                    {availableQuickhacks
+                      .filter((qh) => qh.category === category)
+                      .map((quickhack) => (
+                    <div className="quickhack-row" key={quickhack.id}>
+                      <div>
+                        <strong>{quickhack.name}</strong>
+                        <small>
+                          DV: {quickhack.dv} · {quickhack.target} · {quickhack.duration}
+                        </small>
+                      </div>
+                      <div className="quickhack-actions">
+                        <button
+                          type="button"
+                          className="upgrade-skill"
+                          onClick={() => handleRollQuickhack(quickhack.id)}
+                          aria-label={`Rolar ${quickhack.name}`}
+                          disabled={rollingQuickhack?.id === quickhack.id}
+                        >
+                          {rollingQuickhack?.id === quickhack.id ? (
+                            <span className="rolling-indicator">🎲 {rollingQuickhack.roll}</span>
+                          ) : (
+                            "🎲"
+                          )}
+                        </button>
+                      </div>
+                      <strong>DV {quickhack.dv}</strong>
+                      {lastQuickhack && lastQuickhack.quickhackId === quickhack.id && (
+                        <span className="quickhack-result">
+                          <span className="quickhack-roll-breakdown">
+                            {lastQuickhack.success ? "✓" : "✗"} Interface {lastQuickhack.skill.value} + {lastQuickhack.roll.expression}: {lastQuickhack.roll.rolls
+                              .map((roll) => `[${roll}]`)
+                              .join(" ")} = {lastQuickhack.roll.total}
+                          </span>
+                          <span className="quickhack-total">Total: <b>{lastQuickhack.total}</b> vs DV {quickhack.dv}</span>
+                          <small>{quickhack.effect}</small>
+                          <small>{quickhack.duration}</small>
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+          </section>
       <StorePanel character={character} onUpdate={onUpdate} />
       {character.rollHistory.some(
         (entry) => entry.type === "humanity_loss",
@@ -705,6 +745,7 @@ export default function CharacterSheet({
           )}
         </section>
       </section>
+        </div>
       {humanityAdjustOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={closeHumanityAdjust}>
           <section className="store-panel store-modal" role="dialog" aria-modal="true" aria-label="Ajustar Humanity" onMouseDown={(event) => event.stopPropagation()}>
@@ -754,9 +795,11 @@ export default function CharacterSheet({
           </section>
         </div>
       )}
+    </section>
     </main>
   );
 }
+
 function PanelTitle({
   number,
   children,
