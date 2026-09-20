@@ -24,6 +24,7 @@ import type { AttributeName, Character } from "@/types/character";
 import type { SkillCategory } from "@/data/skills";
 import { hitLocationLabels, hitLocations, type HitLocation } from "@/types/combat";
 import { roleDefinitions } from "@/data/roles";
+import type { RoleAbilityData, RoleAbilityId } from "@/data/roles";
 import { getSellPrice, sellInventoryItem } from "@/lib/store";
 import { getCatalogItem } from "@/data/items";
 import { getCombatAwarenessTotal, getMakerSpecialtyPoints, getMedicineSpecialtyPoints, getNetActionsPerTurn, getRoleAbilityIPCost, spendIPOnRoleAbility } from "@/lib/roles";
@@ -83,6 +84,7 @@ export default function CharacterSheet({
   const [humanityAdjustOpen, setHumanityAdjustOpen] = useState(false);
   const [humanityAdjustValue, setHumanityAdjustValue] = useState("");
   const [humanityAdjustReason, setHumanityAdjustReason] = useState("");
+  const [expandedRoleAbility, setExpandedRoleAbility] = useState<RoleAbilityId | null>(null);
   const categoryOrder: SkillCategory[] = ["awareness", "body", "control", "education", "fighting", "performance", "ranged_weapon", "social", "technique"];
   const categoryNames: Record<SkillCategory, string> = {
     awareness: "Awareness", body: "Body", control: "Control", education: "Education", fighting: "Fighting", performance: "Performance", ranged_weapon: "Ranged Weapon", social: "Social", technique: "Technique",
@@ -276,16 +278,36 @@ export default function CharacterSheet({
             <PanelTitle number="02">Role</PanelTitle>
             {character.primaryRole ? character.roleAbilities.map((ability) => {
               const role = roleDefinitions[ability.roleId];
+              const abilityData = role.abilityData as RoleAbilityData | undefined;
               const nextRank = ability.rank + 1;
               const cost = getRoleAbilityIPCost(nextRank);
-              return <div className="role-ability" key={ability.roleId}>
-                <strong>{role.name}</strong><span>{role.abilityName} · Rank {ability.rank}</span>
-                {ability.abilityId === "combat_awareness" && <small>Combat Awareness Points: {getCombatAwarenessTotal(character)} / {ability.rank}</small>}
-                {ability.abilityId === "interface" && <small>NET Actions: {getNetActionsPerTurn(ability.rank)}</small>}
-                {ability.abilityId === "maker" && <small>Maker specialty points: {getMakerSpecialtyPoints(ability.rank)}</small>}
-                {ability.abilityId === "medicine" && <small>Medicine specialty points: {getMedicineSpecialtyPoints(ability.rank)}</small>}
-                {ability.rank < 10 && <button type="button" className="upgrade-skill" disabled={availableIP < cost} onClick={() => improveRole(ability.roleId)}>↑ Rank {nextRank} · {cost} IP</button>}
-              </div>;
+              const isExpanded = expandedRoleAbility === ability.abilityId;
+              return (
+                <div className="role-ability" key={ability.roleId}>
+                  <div className="role-ability-header" onClick={() => setExpandedRoleAbility(isExpanded ? null : ability.abilityId)}>
+                    <strong>{role.name}</strong>
+                    <span>{role.abilityName} · Rank {ability.rank}</span>
+                    <span className="expand-icon">{isExpanded ? "▼" : "▶"}</span>
+                  </div>
+                  {isExpanded && abilityData && (
+                    <div className="role-ability-detail">
+                      <div className="detail-section">
+                        <small>Descrição</small>
+                        <p>{abilityData.description}</p>
+                      </div>
+                      <div className="detail-section">
+                        <small>Efeito no nível {ability.rank}</small>
+                        <p>{abilityData.effectsByLevel[ability.rank] || "Nenhum efeito descrito para este nível."}</p>
+                      </div>
+                    </div>
+                  )}
+                  {ability.abilityId === "combat_awareness" && <small>Combat Awareness Points: {getCombatAwarenessTotal(character)} / {ability.rank}</small>}
+                  {ability.abilityId === "interface" && <small>NET Actions: {getNetActionsPerTurn(ability.rank)}</small>}
+                  {ability.abilityId === "maker" && <small>Maker specialty points: {getMakerSpecialtyPoints(ability.rank)}</small>}
+                  {ability.abilityId === "medicine" && <small>Medicine specialty points: {getMedicineSpecialtyPoints(ability.rank)}</small>}
+                  {ability.rank < 10 && <button type="button" className="upgrade-skill" disabled={availableIP < cost} onClick={() => improveRole(ability.roleId)}>↑ Rank {nextRank} · {cost} IP</button>}
+                </div>
+              );
             }) : <EmptyState>Nenhuma Role selecionada.</EmptyState>}
           </section>
           <section className="sheet-panel">
