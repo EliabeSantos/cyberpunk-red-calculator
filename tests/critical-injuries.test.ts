@@ -225,7 +225,10 @@ test("rollDamage uses rollDice from existing dice system", () => {
       modifiers: [],
       total: 16,
       naturalRoll: 5,
-      critical: null,
+      critical: false,
+      fumble: false,
+      diceRolls: [{ value: 5, type: "normal" as const }],
+      diceTotal: 5,
       damageDice: "2d6",
     } as import("../src/types/attack.ts").AttackRollResult;
     const result = rollDamage(attack);

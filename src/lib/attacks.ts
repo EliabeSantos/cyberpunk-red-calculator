@@ -49,6 +49,13 @@ export type AttackResolution =
   | { character: Character; result: AttackRollResult }
   | { error: string };
 
+function getUnarmedDamageDice(body: number): string {
+  if (body >= 9) return "4d6";
+  if (body >= 7) return "3d6";
+  if (body >= 5) return "2d6";
+  return "1d6";
+}
+
 /** Resolve apenas a rolagem para acertar, sem calcular dano ou DV. */
 export function rollAttack(
   character: Character,
@@ -60,8 +67,9 @@ export function rollAttack(
   let weaponId = context.weaponId;
   let attackType = context.type;
   let damageDice: string | undefined;
-  if (context.type === "brawling") damageDice = "1d6";
-  if (context.type === "martial_arts") damageDice = "2d6";
+  if (context.type === "brawling" || context.type === "martial_arts") {
+    damageDice = getUnarmedDamageDice(character.stats.BODY);
+  }
   if (context.weaponId) {
     const weapon = character.weapons.find(
       (item) => item.id === context.weaponId,
@@ -111,50 +119,86 @@ export function rollAttack(
     attackModifiers.push({ source: "STAT (lesão)", value: injuryModifiers.statModifiers[skill.stat] });
   }
   
-  const injuryModifierTotal = attackModifiers
-    .filter(m => m.source !== undefined)
-    .reduce((total, modifier) => total + (modifier.value || 0), 0);
-
-  const attackRoll = rollDice("1d10");
-  const naturalRoll = attackRoll.rolls[0];
+  // Rolagem de 1d10 com exploding dice (crítico em 10, falha crítica em 1)
+  interface RollDetail { value: number; type: "normal" | "crit" | "fumble" | "crit_add" | "fumble_sub"; }
+  let allRolls: RollDetail[] = [];
+  let diceTotal = 0;
+  let isCritical = false;
+  let isFumble = false;
   
+  function rollExplodingD10(): number {
+    const roll = rollDice("1d10");
+    const rollValue = roll.rolls[0];
+    allRolls.push({ value: rollValue, type: "normal" });
+    diceTotal += rollValue;
+    
+    // Se rolou 10, rola UMA vez mais e ADICIONA (crítico)
+    if (rollValue === 10) {
+      isCritical = true;
+      allRolls[allRolls.length - 1].type = "crit";
+      const nextRoll = rollDice("1d10");
+      const nextValue = nextRoll.rolls[0];
+      allRolls.push({ value: nextValue, type: "crit_add" });
+      diceTotal += nextValue;
+      return diceTotal;
+    }
+    
+    // Se rolou 1, rola UMA vez mais e SUBTRAI (falha crítica)
+    if (rollValue === 1) {
+      isFumble = true;
+      allRolls[allRolls.length - 1].type = "fumble";
+      const nextRoll = rollDice("1d10");
+      const nextValue = nextRoll.rolls[0];
+      allRolls.push({ value: nextValue, type: "fumble_sub" });
+      diceTotal -= nextValue;
+      return diceTotal;
+    }
+    
+    return diceTotal;
+  }
+  
+  rollExplodingD10();
+
   // Calcula o total do STAT com modificadores de lesão
   const statValue = character.stats[skill.stat];
   const statModifier = injuryModifiers.statModifiers[skill.stat] || 0;
   const modifiedStatValue = statValue + statModifier;
   
+  const baseSkill = getSkillBase(character, skillId);
   const modifierTotal = modifiers.reduce(
     (total, modifier) => total + modifier.value,
     0,
   );
+  
+  const injuryModifierSum = attackModifiers.reduce((sum, m) => sum + m.value, 0);
+
+  const total = modifiedStatValue + skill.level + diceTotal + modifierTotal + injuryModifierSum;
 
   const result: AttackRollResult = {
     attackId: crypto.randomUUID(),
     attackType,
     label,
-    roll: rollDice("1d10"),
-    stat: { id: skill.stat, value: character.stats[skill.stat] + (injuryModifiers.statModifiers[skill.stat] || 0) },
+    roll: { expression: "1d10", rolls: allRolls.map(r => r.value), total: diceTotal },
+    stat: { id: skill.stat, value: modifiedStatValue },
     skill: { id: skillId, value: skill.level },
     modifiers: attackModifiers,
-    total: rollDice("1d10").total + getSkillBase(character, skillId) + modifierTotal + injuryModifiers.allPhysicalModifier + injuryModifiers.allActionsModifier + statModifier + (injuryModifiers.rangedModifier || 0) + (injuryModifiers.meleeModifier || 0) + injuryModifiers.twoHandedModifier,
+    total,
     weaponId,
     damageDice,
-    naturalRoll: rollDice("1d10").rolls[0],
-    critical:
-      rollDice("1d10").rolls[0] === 10
-        ? "critical_success"
-        : rollDice("1d10").rolls[0] === 1
-          ? "critical_failure"
-          : null,
+    naturalRoll: allRolls[0]?.value ?? 0,
+    critical: isCritical,
+    fumble: isFumble,
+    diceRolls: allRolls,
+    diceTotal,
   };
   const entry: RollHistoryEntry = {
     id: crypto.randomUUID(),
     type: "attack",
     label,
     characterId: character.id,
-    expression: rollDice("1d10").expression,
-    rolls: rollDice("1d10").rolls,
-    total: result.total,
+    expression: `1d10${isCritical ? " (crítico!)" : ""}${isFumble ? " (falha crítica!)" : ""}`,
+    rolls: allRolls.map(r => r.value),
+    total,
     timestamp: new Date().toISOString(),
     attackId: result.attackId,
     attackType: result.attackType,
@@ -178,14 +222,82 @@ export function rollAttack(
 export function rollEvasion(character: Character, modifiers: import("@/types/attack").AttackModifier[] = []): { character: Character; result: import("@/types/attack").EvasionRollResult } | { error: string } {
   const skill = character.skills.evasion;
   if (!skill) return { error: "A perícia Evasion não existe na ficha." };
-  const roll = rollDice("1d10");
   
+  // Rolagem de 1d10 com exploding dice (crítico em 10, falha crítica em 1)
+  interface RollDetail { value: number; type: "normal" | "crit" | "fumble" | "crit_add" | "fumble_sub"; }
+  let allRolls: RollDetail[] = [];
+  let diceTotal = 0;
+  let isCritical = false;
+  let isFumble = false;
+  
+  function rollExplodingD10(): number {
+    const roll = rollDice("1d10");
+    const rollValue = roll.rolls[0];
+    allRolls.push({ value: rollValue, type: "normal" });
+    diceTotal += rollValue;
+    
+    // Se rolou 10, rola UMA vez mais e ADICIONA (crítico)
+    if (rollValue === 10) {
+      isCritical = true;
+      allRolls[allRolls.length - 1].type = "crit";
+      const nextRoll = rollDice("1d10");
+      const nextValue = nextRoll.rolls[0];
+      allRolls.push({ value: nextValue, type: "crit_add" });
+      diceTotal += nextValue;
+      return diceTotal;
+    }
+    
+    // Se rolou 1, rola UMA vez mais e SUBTRAI (falha crítica)
+    if (rollValue === 1) {
+      isFumble = true;
+      allRolls[allRolls.length - 1].type = "fumble";
+      const nextRoll = rollDice("1d10");
+      const nextValue = nextRoll.rolls[0];
+      allRolls.push({ value: nextValue, type: "fumble_sub" });
+      diceTotal -= nextValue;
+      return diceTotal;
+    }
+    
+    return diceTotal;
+  }
+  
+  rollExplodingD10();
+
   // Aplica modificadores de Critical Injury
   const injuryModifiers = getCriticalInjuryModifiers(character);
   const injuryModifierTotal = injuryModifiers.allPhysicalModifier + injuryModifiers.allActionsModifier + (injuryModifiers.statModifiers[skill.stat] || 0);
   
-  const total = roll.total + getSkillBase(character, "evasion") + modifiers.reduce((sum, item) => sum + item.value, 0) + injuryModifierTotal;
-  const result = { evasionId: crypto.randomUUID(), roll, stat: { id: skill.stat, value: character.stats[skill.stat] }, skill: { id: "evasion" as const, value: skill.level }, skillBase: getSkillBase(character, "evasion"), modifiers, total, naturalRoll: roll.rolls[0] };
-  const entry: RollHistoryEntry = { id: crypto.randomUUID(), type: "evasion", label: "Evasion", characterId: character.id, expression: roll.expression, rolls: roll.rolls, total, timestamp: new Date().toISOString(), stat: { id: skill.stat, value: character.stats[skill.stat] }, skill: { id: "evasion", value: skill.level }, modifiers };
+  const baseSkill = getSkillBase(character, "evasion");
+  const total = baseSkill + diceTotal + modifiers.reduce((sum, item) => sum + item.value, 0) + injuryModifierTotal;
+  
+  const result = { 
+    evasionId: crypto.randomUUID(), 
+    roll: { expression: "1d10", rolls: allRolls.map(r => r.value), total: diceTotal }, 
+    stat: { id: skill.stat, value: character.stats[skill.stat] }, 
+    skill: { id: "evasion" as const, value: skill.level }, 
+    skillBase: baseSkill, 
+    modifiers, 
+    total, 
+    naturalRoll: allRolls[0]?.value ?? 0,
+    critical: isCritical,
+    fumble: isFumble,
+    diceRolls: allRolls,
+    diceTotal,
+  };
+  
+  const entry: RollHistoryEntry = { 
+    id: crypto.randomUUID(), 
+    type: "evasion", 
+    label: "Evasion", 
+    characterId: character.id, 
+    expression: `1d10${isCritical ? " (crítico!)" : ""}${isFumble ? " (falha crítica!)" : ""}`, 
+    rolls: allRolls.map(r => r.value), 
+    total, 
+    timestamp: new Date().toISOString(), 
+    stat: { id: skill.stat, value: character.stats[skill.stat] }, 
+    skill: { id: "evasion", value: skill.level }, 
+    modifiers 
+  };
+  
   return { character: { ...character, rollHistory: [entry, ...character.rollHistory] }, result };
 }

@@ -126,12 +126,49 @@ export function rollSkillCheck(
     totalModifier += socialModifier;
   }
   
-  // Rolagem de 1d10
-  const roll = rollDice("1d10");
+  // Rolagem de 1d10 com exploding dice (crítico em 10, falha crítica em 1)
+  interface RollDetail { value: number; type: "normal" | "crit" | "fumble" | "crit_add" | "fumble_sub"; }
+  let allRolls: RollDetail[] = [];
+  let diceTotal = 0;
+  let isCritical = false;
+  let isFumble = false;
+  
+  function rollExplodingD10(): number {
+    const roll = rollDice("1d10");
+    const rollValue = roll.rolls[0];
+    allRolls.push({ value: rollValue, type: "normal" });
+    diceTotal += rollValue;
+    
+    // Se rolou 10, rola UMA vez mais e ADICIONA (crítico)
+    if (rollValue === 10) {
+      isCritical = true;
+      allRolls[allRolls.length - 1].type = "crit";
+      const nextRoll = rollDice("1d10");
+      const nextValue = nextRoll.rolls[0];
+      allRolls.push({ value: nextValue, type: "crit_add" });
+      diceTotal += nextValue;
+      return diceTotal;
+    }
+    
+    // Se rolou 1, rola UMA vez mais e SUBTRAI (falha crítica)
+    if (rollValue === 1) {
+      isFumble = true;
+      allRolls[allRolls.length - 1].type = "fumble";
+      const nextRoll = rollDice("1d10");
+      const nextValue = nextRoll.rolls[0];
+      allRolls.push({ value: nextValue, type: "fumble_sub" });
+      diceTotal -= nextValue;
+      return diceTotal;
+    }
+    
+    return diceTotal;
+  }
+  
+  rollExplodingD10();
 
-  // Total = STAT + Skill Level + d10 + Modifiers
+  // Total = STAT + Skill Level + d10 (com exploding) + Modifiers
   const finalStatValue = statValue + statModifier;
-  const total = finalStatValue + skill.level + roll.total + totalModifier;
+  const total = finalStatValue + skill.level + diceTotal + totalModifier;
 
   const result: SkillCheckResult = {
     skillId,
@@ -142,9 +179,12 @@ export function rollSkillCheck(
     statModifier,
     skillLevel: skill.level,
     skillModifier,
-    diceRoll: roll.total,
+    diceRoll: diceTotal,
     totalModifier,
     total,
+    critical: isCritical,
+    fumble: isFumble,
+    diceRolls: allRolls,
   };
 
   // Prepara lista de modificadores para o histórico
@@ -166,8 +206,8 @@ export function rollSkillCheck(
     type: "skill_check",
     label: skill.name,
     characterId: character.id,
-    expression: roll.expression,
-    rolls: roll.rolls,
+    expression: `1d10${isCritical ? " (crítico!)" : ""}${isFumble ? " (falha crítica!)" : ""}`,
+    rolls: allRolls.map((r) => r.value),
     total,
     timestamp: new Date().toISOString(),
     stat: { id: definition.stat, value: modifiedStatValue },
@@ -195,4 +235,7 @@ export interface SkillCheckResult {
   diceRoll: number;
   totalModifier: number;
   total: number;
+  critical: boolean;
+  fumble: boolean;
+  diceRolls: { value: number; type: "normal" | "crit" | "fumble" | "crit_add" | "fumble_sub" }[];
 }

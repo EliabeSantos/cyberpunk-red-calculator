@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 
 import {
   canUpgradeSkill,
@@ -78,7 +78,7 @@ export default function CharacterSheet({
   const [lastAttack, setLastAttack] = useState<AttackRollResult | null>(null);
   const [lastDamage, setLastDamage] = useState<DamageRollResult | null>(null);
   const [lastEvasion, setLastEvasion] = useState<EvasionRollResult | null>(null);
-  const [skillRollResults, setSkillRollResults] = useState<Record<string, SkillCheckResult | null>>({});
+  const [lastSkillRoll, setLastSkillRoll] = useState<{ skillId: string; result: SkillCheckResult } | null>(null);
   const [receivedDamage, setReceivedDamage] = useState("");
   const [hitLocation, setHitLocation] = useState<HitLocation>("body");
   const [combatError, setCombatError] = useState("");
@@ -86,6 +86,7 @@ export default function CharacterSheet({
   const [lastDamageReceived, setLastDamageReceived] = useState<DamageApplicationResult | null>(null);
   const [lastQuickhack, setLastQuickhack] = useState<QuickhackRollResult | null>(null);
   const [rollingQuickhack, setRollingQuickhack] = useState<{ id: string; roll: number } | null>(null);
+  const [rollingSkill, setRollingSkill] = useState<{ id: string; roll: number } | null>(null);
   const [quickhackError, setQuickhackError] = useState("");
   const [humanityAdjustOpen, setHumanityAdjustOpen] = useState(false);
   const [humanityAdjustValue, setHumanityAdjustValue] = useState("");
@@ -123,11 +124,10 @@ export default function CharacterSheet({
   function improveSkill(skillId: string) {
     const updated = upgradeSkill(character, skillId);
     if (updated) {
-      setSkillRollResults((prev) => {
-        const next = { ...prev };
-        delete next[skillId];
-        return next;
-      });
+      // Clear last skill roll if it's the skill being upgraded
+      if (lastSkillRoll?.skillId === skillId) {
+        setLastSkillRoll(null);
+      }
       onUpdate(updated);
     }
   }
@@ -146,11 +146,12 @@ export default function CharacterSheet({
   function handleRollSkillCheck(character: Character, skillId: string) {
     const resolution = rollSkillCheck(character, skillId);
     if ("error" in resolution) return;
-    setSkillRollResults((prev) => ({
-      ...prev,
-      [skillId]: resolution.result,
-    }));
+    // Show immediate visual feedback with the dice roll
+    setRollingSkill({ id: skillId, roll: resolution.result.diceRoll });
+    setLastSkillRoll({ skillId, result: resolution.result });
     onUpdate(resolution.character);
+    // Clear the rolling indicator after a brief moment
+    setTimeout(() => setRollingSkill(null), 1500);
   }
   function handleRollQuickhack(quickhackId: string) {
     const resolution = rollQuickhack(character, quickhackId);
@@ -375,14 +376,28 @@ export default function CharacterSheet({
                 const attack = lastAttack ?? character.lastAttack!;
                 return (
                   <div className="attack-result" role="status">
-                    <strong>{attack.label}</strong>
-                    <span>
-                      1d10: [{attack.naturalRoll}] · {attack.stat.id}:{" "}
-                      {attack.stat.value} · {attack.skill.id}:{" "}
-                      {attack.skill.value}
+                    <span className="roll-header">
+                      {attack.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
+                      {attack.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
                     </span>
+                    <span className="roll-formula">
+                      {attack.stat.id} {attack.stat.value} + {attack.skill.id} {attack.skill.value} + 1d10
+                    </span>
+                    <span className="roll-dice">
+                      {attack.diceRolls?.map((r: any, idx: number) => (
+                        <React.Fragment key={idx}>
+                          {r.type === "crit" && <strong className="die-crit">[{r.value}]</strong>}
+                          {r.type === "crit_add" && <strong className="die-crit">+[{r.value}]</strong>}
+                          {r.type === "fumble" && <strong className="die-fumble">[{r.value}]</strong>}
+                          {r.type === "fumble_sub" && <strong className="die-fumble">−[{r.value}]</strong>}
+                          {r.type === "normal" && <span className="die-normal">[{r.value}]</span>}
+                          {" "}
+                        </React.Fragment>
+                      ))}
+                    </span>
+                    <span className="roll-subtotal">= {attack.diceTotal}</span>
                     {attack.modifiers.length > 0 && (
-                      <span>
+                      <span className="roll-mod">
                         {attack.modifiers
                           .map(
                             (modifier) =>
@@ -391,14 +406,7 @@ export default function CharacterSheet({
                           .join(" · ")}
                       </span>
                     )}
-                    <b>Total: {attack.total}</b>
-                    {attack.critical && (
-                      <small>
-                        {attack.critical === "critical_success"
-                          ? "Crítico natural: 10"
-                          : "Falha crítica natural: 1"}
-                      </small>
-                    )}
+                    <span className="roll-total">= <b>{attack.total}</b></span>
                     {attack.damageDice && (
                       <button
                         type="button"
@@ -415,6 +423,17 @@ export default function CharacterSheet({
                           .map((roll) => `[${roll}]`)
                           .join(" ")}{" "}
                         = <b>{lastDamage.total}</b>
+                        {(() => {
+                          const sixCount = lastDamage.roll.rolls.filter((r) => r === 6).length;
+                          if (sixCount >= 2) {
+                            return (
+                              <span className="critical-injury-warning">
+                                ⚠ CRITICAL INJURY! O ataque rolou {sixCount} resultados 6.
+                              </span>
+                            );
+                          }
+                          return null;
+                        })()}
                       </span>
                     )}
                   </div>
@@ -427,9 +446,27 @@ export default function CharacterSheet({
             </div>
             {lastEvasion && (
             <div className="evasion-result" role="status">
-              <strong>Evasion</strong>
-              <span>{lastEvasion.stat.id}: {lastEvasion.stat.value} · Evasion: {lastEvasion.skill.value} · d10: [{lastEvasion.naturalRoll}]</span>
-              <b>Total: {lastEvasion.total}</b>
+              <span className="roll-header">
+                {lastEvasion.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
+                {lastEvasion.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
+              </span>
+              <span className="roll-formula">
+                {lastEvasion.stat.id} {lastEvasion.stat.value} + Evasion {lastEvasion.skill.value} + 1d10
+              </span>
+              <span className="roll-dice">
+                {lastEvasion.diceRolls?.map((r: any, idx: number) => (
+                  <React.Fragment key={idx}>
+                    {r.type === "crit" && <strong className="die-crit">[{r.value}]</strong>}
+                    {r.type === "crit_add" && <strong className="die-crit">+[{r.value}]</strong>}
+                    {r.type === "fumble" && <strong className="die-fumble">[{r.value}]</strong>}
+                    {r.type === "fumble_sub" && <strong className="die-fumble">−[{r.value}]</strong>}
+                    {r.type === "normal" && <span className="die-normal">[{r.value}]</span>}
+                    {" "}
+                  </React.Fragment>
+                ))}
+              </span>
+              <span className="roll-subtotal">= {lastEvasion.diceTotal}</span>
+              <span className="roll-total">= <b>{lastEvasion.total}</b></span>
             </div>
           )}
           <h3>Dano recebido</h3>
@@ -542,7 +579,7 @@ export default function CharacterSheet({
                   const base = getSkillBase(character, id);
                   const cost = getSkillUpgradeCost(skill.level, skill.costMultiplier);
                   const canUpgrade = canUpgradeSkill(character, id);
-                  const rollResult = skillRollResults[id] ?? null;
+                  const rollResult = lastSkillRoll?.skillId === id ? lastSkillRoll.result : null;
                   return (
                     <div className="skill-row" key={id}>
                       <span>
@@ -560,13 +597,45 @@ export default function CharacterSheet({
                           className="upgrade-skill"
                           onClick={() => handleRollSkillCheck(character, id)}
                           aria-label={`Rolar ${skill.name}`}
+                          disabled={rollingSkill?.id === id}
                         >
-                          🎲
+                          {rollingSkill?.id === id ? (
+                            <span className="rolling-indicator">🎲 {rollingSkill.roll}</span>
+                          ) : (
+                            "🎲"
+                          )}
                         </button>
                       </div>
                       <strong>{base}</strong>
                       {rollResult && (
-                        <span className="skill-roll-result">= {rollResult.total}</span>
+                        <span className="skill-roll-result">
+                          <span className="roll-header">
+                            {rollResult.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
+                            {rollResult.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
+                          </span>
+                          <span className="roll-formula">
+                            {rollResult.statId} {rollResult.statBase} + {rollResult.skillName} {rollResult.skillLevel} + 1d10
+                          </span>
+                          <span className="roll-dice">
+                            {rollResult.diceRolls.map((r, idx) => (
+                              <React.Fragment key={idx}>
+                                {r.type === "crit" && <strong className="die-crit">[{r.value}]</strong>}
+                                {r.type === "crit_add" && <strong className="die-crit">+[{r.value}]</strong>}
+                                {r.type === "fumble" && <strong className="die-fumble">[{r.value}]</strong>}
+                                {r.type === "fumble_sub" && <strong className="die-fumble">−[{r.value}]</strong>}
+                                {r.type === "normal" && <span className="die-normal">[{r.value}]</span>}
+                                {" "}
+                              </React.Fragment>
+                            ))}
+                          </span>
+                          <span className="roll-subtotal">= {rollResult.diceRoll}</span>
+                          {rollResult.totalModifier !== 0 && (
+                            <span className="roll-mod">
+                              {rollResult.totalModifier >= 0 ? "+" : ""}{rollResult.totalModifier}
+                            </span>
+                          )}
+                          <span className="roll-total">= <b>{rollResult.total}</b></span>
+                        </span>
                       )}
                     </div>
                   );
