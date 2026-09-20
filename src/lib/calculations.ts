@@ -1,11 +1,120 @@
 import type { Stats } from "@/types/character";
 import type { Character } from "@/types/character";
+import type { AttributeName } from "@/types/character";
+import type { CriticalInjury } from "@/data/criticalInjuries";
 
 export function calculateMaximumHitPoints(stats: Pick<Stats, "BODY" | "WILL">): number {
   return 10 + 5 * Math.floor((stats.BODY + stats.WILL) / 2);
 }
 export function calculateMaximumHumanity(stats: Pick<Stats, "EMP">): number {
   return stats.EMP * 10;
+}
+
+/** Calcula todos os modificadores ativos das Critical Injuries do personagem.
+ * Retorna um objeto com os modificadores agrupados por tipo para fácil aplicação.
+ */
+export function getCriticalInjuryModifiers(character: Pick<Character, "combat">): {
+  statModifiers: Record<AttributeName, number>;
+  skillModifiers: Record<string, number>;
+  moveModifier: number;
+  allPhysicalModifier: number;
+  allMentalModifier: number;
+  allActionsModifier: number;
+  rangedModifier: number;
+  meleeModifier: number;
+  fineManipulationModifier: number;
+  twoHandedModifier: number;
+  socialModifier: number;
+  deathSaveModifier: number;
+  /** Lista de descrições dos modificadores para exibição na UI */
+  descriptions: string[];
+} {
+  const injuries = character.combat?.criticalInjuries || [];
+  
+  const result = {
+    statModifiers: {} as Record<AttributeName, number>,
+    skillModifiers: {} as Record<string, number>,
+    moveModifier: 0,
+    allPhysicalModifier: 0,
+    allMentalModifier: 0,
+    allActionsModifier: 0,
+    rangedModifier: 0,
+    meleeModifier: 0,
+    fineManipulationModifier: 0,
+    twoHandedModifier: 0,
+    socialModifier: 0,
+    deathSaveModifier: 0,
+    descriptions: [] as string[],
+  };
+
+  for (const injury of injuries) {
+    for (const mod of injury.modifiers || []) {
+      switch (mod.type) {
+        case "stat":
+          if (mod.stat) {
+            result.statModifiers[mod.stat] = (result.statModifiers[mod.stat] || 0) + mod.value;
+            result.descriptions.push(`${injury.name}: ${mod.description}`);
+          }
+          break;
+        case "skill":
+          if (mod.skillId) {
+            result.skillModifiers[mod.skillId] = (result.skillModifiers[mod.skillId] || 0) + mod.value;
+            result.descriptions.push(`${injury.name}: ${mod.description}`);
+          }
+          break;
+        case "move":
+          result.moveModifier += mod.value;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "all_physical":
+          result.allPhysicalModifier += mod.value;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "all_mental":
+          result.allMentalModifier += mod.value;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "all_actions":
+          result.allActionsModifier += mod.value;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "ranged":
+          result.rangedModifier += mod.value;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "melee":
+          result.meleeModifier += mod.value;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "fine_manipulation":
+          result.fineManipulationModifier += mod.value;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "two_handed":
+          result.twoHandedModifier += mod.value;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "social":
+          result.socialModifier += mod.value;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "death_save":
+          result.deathSaveModifier += mod.value;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+      }
+    }
+  }
+
+  return result;
+}
+
+/** Calcula o Wound Threshold (limiar de ferimento grave).
+ * Em Cyberpunk RED, o Wound Threshold é metade do HP máximo (arredondado para baixo).
+ * Personagens com HP <= Wound Threshold estão "Seriously Wounded".
+ */
+export function calculateWoundThreshold(maxHP: number): number {
+  return Math.floor(maxHP / 2);
 }
 
 /** Calcula a Humanity Máxima baseada no Cyberware instalado.

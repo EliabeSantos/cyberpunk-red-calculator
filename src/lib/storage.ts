@@ -5,7 +5,8 @@ import {
   calculateMaximumHumanity,
   calculateMaximumHumanityFromCyberware,
 } from "@/lib/calculations";
-import type { Character } from "@/types/character";
+import type { Character, CriticalInjury } from "@/types/character";
+import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjuries";
 
 const STORAGE_PREFIX = "cyberpunk-red-toolkit";
 const CHARACTERS_KEY = `${STORAGE_PREFIX}:characters:v1`;
@@ -38,6 +39,29 @@ function normalizeCharacter(character: Character): Character {
 
   const oldHitPoints = character.combat?.hp;
   const oldHumanity = character.humanity;
+  
+  // Normaliza criticalInjuries: converte strings antigas para objetos CriticalInjury
+  const normalizedCriticalInjuries: CriticalInjury[] = (character.combat?.criticalInjuries || []).map((injury: unknown) => {
+    if (typeof injury === "string") {
+      // String antiga: tenta encontrar na tabela oficial pelo nome
+      const allInjuries = [...bodyCriticalInjuries, ...headCriticalInjuries];
+      const match = allInjuries.find((ci) => injury.includes(ci.name));
+      if (match) return match;
+      // Fallback: cria objeto mínimo
+      return {
+        roll: 0,
+        name: injury,
+        effect: "",
+        quickFix: "",
+        treatment: "",
+        bonusDamage: 5,
+        location: "body" as const,
+        modifiers: [],
+      };
+    }
+    return injury as CriticalInjury;
+  });
+
   return {
     ...character,
     // Fichas antigas podem conter `base`; Base agora é sempre calculada sob demanda.
@@ -69,8 +93,9 @@ function normalizeCharacter(character: Character): Character {
         current:
           !oldHitPoints || oldHitPoints.max === 0
             ? maximumHitPoints
-            : Math.min(oldHitPoints.current, maximumHitPoints),
+            : Math.min(oldHitPoints.current, maximumHumanity),
       },
+      criticalInjuries: normalizedCriticalInjuries,
     },
   };
 }

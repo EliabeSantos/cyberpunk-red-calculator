@@ -9,8 +9,8 @@ import {
   upgradeSkill,
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
-import { applyReceivedDamage, rollDamageForLastAttack } from "@/lib/damage";
-import { getSkillBase, calculateEmpFromHumanity } from "@/lib/calculations";
+import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, type DamageApplicationResult } from "@/lib/damage";
+import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold } from "@/lib/calculations";
 import { rollEvasion } from "@/lib/attacks";
 import { rollSkillCheck } from "@/lib/skills";
 import { removeCyberware } from "@/lib/cyberware";
@@ -78,6 +78,8 @@ export default function CharacterSheet({
   const [receivedDamage, setReceivedDamage] = useState("");
   const [hitLocation, setHitLocation] = useState<HitLocation>("body");
   const [combatError, setCombatError] = useState("");
+  const [lastDamageDealt, setLastDamageDealt] = useState<DamageApplicationResult | null>(null);
+  const [lastDamageReceived, setLastDamageReceived] = useState<DamageApplicationResult | null>(null);
   const [humanityAdjustOpen, setHumanityAdjustOpen] = useState(false);
   const [humanityAdjustValue, setHumanityAdjustValue] = useState("");
   const [humanityAdjustReason, setHumanityAdjustReason] = useState("");
@@ -114,8 +116,10 @@ export default function CharacterSheet({
   function rollDamage() {
     const resolution = rollDamageForLastAttack(character);
     if ("error" in resolution) return;
+    const damageRoll = resolution.result;
     onUpdate(resolution.character);
-    setLastDamage(resolution.result);
+    setLastDamage(damageRoll);
+    setLastDamageDealt(null); // Clear previous damage dealt result
   }
   function handleRollSkillCheck(character: Character, skillId: string) {
     const resolution = rollSkillCheck(character, skillId);
@@ -134,7 +138,7 @@ export default function CharacterSheet({
   function receiveDamage() {
     const resolution = applyReceivedDamage(character, Number(receivedDamage), hitLocation);
     if ("error" in resolution) { setCombatError(resolution.error); return; }
-    setCombatError(""); setReceivedDamage(""); onUpdate(resolution.character);
+    setCombatError(""); setReceivedDamage(""); setLastDamageReceived(resolution.result); onUpdate(resolution.character);
   }
   function sellItem(inventoryItemId: string) {
     const result = sellInventoryItem(character, inventoryItemId);
@@ -364,6 +368,51 @@ export default function CharacterSheet({
                         = <b>{lastDamage.total}</b>
                       </span>
                     )}
+                    {lastDamageDealt && lastDamageDealt.damage > 0 && (
+                      <div className="damage-application-result" role="status">
+                        <div>
+                          <small>Dano Causado</small>
+                          <strong>{lastDamageDealt.damage}</strong>
+                        </div>
+                        <div>
+                          <small>Localização</small>
+                          <strong>{hitLocationLabels[lastDamageDealt.location]}</strong>
+                        </div>
+                        {lastDamageDealt.crossedWoundThreshold && (
+                          <div className="seriously-wounded" role="alert">
+                            <span>⚠ Seriously Wounded</span>
+                          </div>
+                        )}
+                        {lastDamageDealt.criticalInjuryTriggered && (
+                          <div className="critical-injury-result" role="alert">
+                            <strong>Critical Injury</strong>
+                            {lastDamageDealt.criticalInjury && (
+                              <>
+                                <div>
+                                  <small>Rolagem</small>
+                                  <strong>2d6 = {lastDamageDealt.criticalInjury.roll}</strong>
+                                </div>
+                                <div>
+                                  <small>Localização</small>
+                                  <strong>{hitLocationLabels[lastDamageDealt.criticalInjury.location]}</strong>
+                                </div>
+                                <div>
+                                  <small>Ferimento</small>
+                                  <strong>{lastDamageDealt.criticalInjury.name}</strong>
+                                </div>
+                                <div>
+                                  <small>Efeito</small>
+                                  <span>{lastDamageDealt.criticalInjury.effect}</span>
+                                </div>
+                              </>
+                            )}
+                            {lastDamageDealt.criticalInjuryFromDice && !lastDamageDealt.criticalInjury && (
+                              <span>Critical Injury causada por dados de dano (dois ou mais 6).</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -392,13 +441,66 @@ export default function CharacterSheet({
               <Metric label="Corpo e membros" value={`${character.combat.armor.body} SP`} />
             </div>
             <h3>Lesões críticas</h3>
-            {character.combat.criticalInjuries.length ? (
-              <ul className="tag-list">
-                {character.combat.criticalInjuries.map((injury) => (
-                  <li key={injury}>{injury}</li>
-                ))}
-              </ul>
-            ) : (
+            {(() => {
+              // Use the most recent critical injury from recent damage, or fall back to the most recent persisted injury
+              const displayInjury = lastDamageReceived?.criticalInjuryTriggered
+                ? lastDamageReceived.criticalInjury
+                : character.combat.criticalInjuries[character.combat.criticalInjuries.length - 1];
+              const displayCrossedThreshold = lastDamageReceived?.crossedWoundThreshold ?? false;
+              const displayDiceInjury = lastDamageReceived?.criticalInjuryFromDice;
+
+              if (displayInjury) {
+                return (
+                  <div className="critical-injury-detail" role="status">
+                    <div className="critical-injury-header">
+                      <strong>Critical Injury</strong>
+                      {displayCrossedThreshold && (
+                        <span className="seriously-wounded-inline">⚠ Seriously Wounded</span>
+                      )}
+                    </div>
+                    <div className="injury-field">
+                      <small>Rolagem</small>
+                      <strong>2d6 = {displayInjury.roll}</strong>
+                    </div>
+                    <div className="injury-field">
+                      <small>Localização</small>
+                      <strong>{hitLocationLabels[displayInjury.location]}</strong>
+                    </div>
+                    <div className="injury-field">
+                      <small>Ferimento</small>
+                      <strong>{displayInjury.name}</strong>
+                    </div>
+                    <div className="injury-field">
+                      <small>Efeito</small>
+                      <span>{displayInjury.effect}</span>
+                    </div>
+                    <div className="injury-field">
+                      <small>Quick Fix</small>
+                      <span>{displayInjury.quickFix}</span>
+                    </div>
+                    <div className="injury-field">
+                      <small>Treatment</small>
+                      <span>{displayInjury.treatment}</span>
+                    </div>
+                    <div className="injury-field">
+                      <small>Bonus Damage</small>
+                      <strong>{displayInjury.bonusDamage}</strong>
+                    </div>
+                    {displayInjury.deathSavePenalty !== undefined && (
+                      <div className="injury-field">
+                        <small>Death Save Penalty</small>
+                        <strong>{displayInjury.deathSavePenalty}</strong>
+                      </div>
+                    )}
+                    {displayDiceInjury && !displayInjury && (
+                      <span>Critical Injury causada por dados de dano (dois ou mais 6).</span>
+                    )}
+                  </div>
+                );
+              }
+              return null;
+            })()}
+            {(!lastDamageReceived || !lastDamageReceived.criticalInjuryTriggered) && character.combat.criticalInjuries.length === 0 && (
               <EmptyState>Nenhuma lesão crítica.</EmptyState>
             )}
           </section>

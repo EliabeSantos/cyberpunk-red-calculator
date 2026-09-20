@@ -1,9 +1,10 @@
-import { getSkillBase } from "@/lib/calculations";
+import { getSkillBase, getCriticalInjuryModifiers } from "@/lib/calculations";
 import { rollDice } from "@/lib/dice";
 import type {
   AttackContext,
   AttackRollResult,
   AvailableAttack,
+  AttackModifier,
 } from "@/types/attack";
 import type { Character, RollHistoryEntry } from "@/types/character";
 
@@ -80,28 +81,69 @@ export function rollAttack(
   const skill = character.skills[skillId];
   if (!skill)
     return { error: `A perícia de ataque "${skillId}" não existe na ficha.` };
-  const roll = rollDice("1d10");
+
+  // Calcula modificadores de Critical Injuries
+  const injuryModifiers = getCriticalInjuryModifiers(character);
+  
+  // Determina se é ataque à distância ou corpo a corpo
+  const isRanged = ["archery", "autofire", "handgun", "heavy_weapons", "shoulder_arms", "rifle", "sniper", "shotgun", "thrown_weapon", "grenade"].includes(context.type as string);
+  const isMelee = ["melee", "martial_arts", "brawling", "unarmed"].includes(context.type as string);
+  
+  // Calcula modificadores de Critical Injury aplicáveis ao ataque
+  const attackModifiers: AttackModifier[] = [...context.modifiers ?? []];
+  
+  if (injuryModifiers.rangedModifier !== 0 && isRanged) {
+    attackModifiers.push({ source: "Distância (lesão)", value: injuryModifiers.rangedModifier });
+  }
+  if (injuryModifiers.meleeModifier !== 0 && isMelee) {
+    attackModifiers.push({ source: "Corpo a corpo (lesão)", value: injuryModifiers.meleeModifier });
+  }
+  if (injuryModifiers.allPhysicalModifier !== 0) {
+    attackModifiers.push({ source: "Físico (lesão)", value: injuryModifiers.allPhysicalModifier });
+  }
+  if (injuryModifiers.allActionsModifier !== 0) {
+    attackModifiers.push({ source: "Todas ações (lesão)", value: injuryModifiers.allActionsModifier });
+  }
+  if (injuryModifiers.twoHandedModifier !== 0) {
+    attackModifiers.push({ source: "Duas mãos (lesão)", value: injuryModifiers.twoHandedModifier });
+  }
+  if (injuryModifiers.statModifiers[skill.stat]) {
+    attackModifiers.push({ source: "STAT (lesão)", value: injuryModifiers.statModifiers[skill.stat] });
+  }
+  
+  const injuryModifierTotal = attackModifiers
+    .filter(m => m.source !== undefined)
+    .reduce((total, modifier) => total + (modifier.value || 0), 0);
+
+  const attackRoll = rollDice("1d10");
+  const naturalRoll = attackRoll.rolls[0];
+  
+  // Calcula o total do STAT com modificadores de lesão
+  const statValue = character.stats[skill.stat];
+  const statModifier = injuryModifiers.statModifiers[skill.stat] || 0;
+  const modifiedStatValue = statValue + statModifier;
+  
   const modifierTotal = modifiers.reduce(
     (total, modifier) => total + modifier.value,
     0,
   );
-  const naturalRoll = roll.rolls[0];
+
   const result: AttackRollResult = {
     attackId: crypto.randomUUID(),
     attackType,
     label,
-    roll,
-    stat: { id: skill.stat, value: character.stats[skill.stat] },
+    roll: rollDice("1d10"),
+    stat: { id: skill.stat, value: character.stats[skill.stat] + (injuryModifiers.statModifiers[skill.stat] || 0) },
     skill: { id: skillId, value: skill.level },
-    modifiers,
-    total: roll.total + getSkillBase(character, skillId) + modifierTotal,
+    modifiers: attackModifiers,
+    total: rollDice("1d10").total + getSkillBase(character, skillId) + modifierTotal + injuryModifiers.allPhysicalModifier + injuryModifiers.allActionsModifier + statModifier + (injuryModifiers.rangedModifier || 0) + (injuryModifiers.meleeModifier || 0) + injuryModifiers.twoHandedModifier,
     weaponId,
     damageDice,
-    naturalRoll,
+    naturalRoll: rollDice("1d10").rolls[0],
     critical:
-      naturalRoll === 10
+      rollDice("1d10").rolls[0] === 10
         ? "critical_success"
-        : naturalRoll === 1
+        : rollDice("1d10").rolls[0] === 1
           ? "critical_failure"
           : null,
   };
@@ -110,8 +152,8 @@ export function rollAttack(
     type: "attack",
     label,
     characterId: character.id,
-    expression: roll.expression,
-    rolls: roll.rolls,
+    expression: rollDice("1d10").expression,
+    rolls: rollDice("1d10").rolls,
     total: result.total,
     timestamp: new Date().toISOString(),
     attackId: result.attackId,
@@ -120,7 +162,7 @@ export function rollAttack(
     damageDice,
     stat: result.stat,
     skill: result.skill,
-    modifiers,
+    modifiers: attackModifiers,
   };
   return {
     character: {
@@ -137,7 +179,12 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
   const skill = character.skills.evasion;
   if (!skill) return { error: "A perícia Evasion não existe na ficha." };
   const roll = rollDice("1d10");
-  const total = roll.total + getSkillBase(character, "evasion") + modifiers.reduce((sum, item) => sum + item.value, 0);
+  
+  // Aplica modificadores de Critical Injury
+  const injuryModifiers = getCriticalInjuryModifiers(character);
+  const injuryModifierTotal = injuryModifiers.allPhysicalModifier + injuryModifiers.allActionsModifier + (injuryModifiers.statModifiers[skill.stat] || 0);
+  
+  const total = roll.total + getSkillBase(character, "evasion") + modifiers.reduce((sum, item) => sum + item.value, 0) + injuryModifierTotal;
   const result = { evasionId: crypto.randomUUID(), roll, stat: { id: skill.stat, value: character.stats[skill.stat] }, skill: { id: "evasion" as const, value: skill.level }, skillBase: getSkillBase(character, "evasion"), modifiers, total, naturalRoll: roll.rolls[0] };
   const entry: RollHistoryEntry = { id: crypto.randomUUID(), type: "evasion", label: "Evasion", characterId: character.id, expression: roll.expression, rolls: roll.rolls, total, timestamp: new Date().toISOString(), stat: { id: skill.stat, value: character.stats[skill.stat] }, skill: { id: "evasion", value: skill.level }, modifiers };
   return { character: { ...character, rollHistory: [entry, ...character.rollHistory] }, result };
