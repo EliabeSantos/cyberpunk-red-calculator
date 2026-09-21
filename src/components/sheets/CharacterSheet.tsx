@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 
 import {
   canUpgradeSkill,
@@ -262,6 +263,12 @@ export default function CharacterSheet({
       <nav className="sheet-nav">
         <span>CYBERPUNK RED TOOLKIT</span>
         <div>
+          <Link href="/gm">
+            🎭 Área do Mestre
+          </Link>
+          <Link href="/gm/encounters">
+            ⚔️ Encontros
+          </Link>
           <button onClick={onEdit}>Editar ficha</button>
           <button className="nav-accent" onClick={onNewCharacter}>
             Novo personagem
