@@ -528,8 +528,24 @@ export default function CharacterSheet({
             {combatError && <p className="form-error">{combatError}</p>}
             <h3>Armadura</h3>
             <div className="combat-grid">
-              <Metric label="Cabeça" value={`${character.combat.armor.head} SP`} />
-              <Metric label="Corpo e membros" value={`${character.combat.armor.body} SP`} />
+              <div>
+                <small>Cabeça</small>
+                <strong>{character.combat.armor.head} SP</strong>
+                {character.combat.armor.head > 0 && (
+                  <button type="button" className="equip-item" onClick={() => onUpdate({ ...character, combat: { ...character.combat, armor: { ...character.combat.armor, head: 0 } } })}>
+                    Remover
+                  </button>
+                )}
+              </div>
+              <div>
+                <small>Corpo e membros</small>
+                <strong>{character.combat.armor.body} SP</strong>
+                {character.combat.armor.body > 0 && (
+                  <button type="button" className="equip-item" onClick={() => onUpdate({ ...character, combat: { ...character.combat, armor: { ...character.combat.armor, body: 0 } } })}>
+                    Remover
+                  </button>
+                )}
+              </div>
             </div>
             <h3>Lesões críticas</h3>
             {character.combat.criticalInjuries.length > 0 ? (
@@ -820,19 +836,30 @@ export default function CharacterSheet({
             <div className="equipment-list">
               {character.weapons.map((weapon) => (
                 <article key={weapon.id}>
-                  <h3>{weapon.name}</h3>
-                  <p>
-                    {weapon.damage}{" "}
-                    {weapon.rateOfFire ? `• ROF ${weapon.rateOfFire}` : ""}
-                  </p>
-                  <small>
-                    {weapon.skill
-                      ? `Perícia: ${weapon.skill}`
-                      : "Sem perícia definida"}
-                    {weapon.magazine !== undefined
-                      ? ` • Munição ${weapon.ammo ?? 0}/${weapon.magazine}`
-                      : ""}
-                  </small>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div style={{ flex: 1 }}>
+                      <h3>{weapon.name}</h3>
+                      <p>
+                        {weapon.damage}{" "}
+                        {weapon.rateOfFire ? `• ROF ${weapon.rateOfFire}` : ""}
+                      </p>
+                      <small>
+                        {weapon.skill
+                          ? `Perícia: ${weapon.skill}`
+                          : "Sem perícia definida"}
+                        {weapon.magazine !== undefined
+                          ? ` • Munição ${weapon.ammo ?? 0}/${weapon.magazine}`
+                          : ""}
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onUpdate({ ...character, weapons: character.weapons.filter((w) => w.id !== weapon.id) })}
+                      style={{ border: "1px solid var(--accent)", background: "transparent", color: "var(--accent)", cursor: "pointer", padding: ".2rem .4rem", fontSize: ".67rem", marginTop: ".25rem", flexShrink: 0 }}
+                    >
+                      Remover
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>
@@ -890,6 +917,13 @@ export default function CharacterSheet({
                       {item.category === "cyberware" ? "Instalar" : "Equipar"}
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="equip-item"
+                    onClick={() => onUpdate({ ...character, inventory: character.inventory.filter((i) => i.id !== item.id) })}
+                  >
+                    Remover
+                  </button>
                   {item.notes && <small>{item.notes}</small>}
                 </li>
               ))}
