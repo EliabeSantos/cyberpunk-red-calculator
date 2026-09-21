@@ -335,6 +335,8 @@ export function reloadWeapon(
   if (!weapon.magazine || weapon.magazine <= 0) return { error: `${weapon.name} não possui magazine.` };
   if (weapon.ammo !== undefined && weapon.ammo >= weapon.magazine) return { error: `${weapon.name} já está cheia.` };
 
+  const ammoNeeded = weapon.magazine - (weapon.ammo ?? 0);
+
   const ammoCategory = weapon.skill ? ammoCategoryMap[weapon.skill] ?? "ammunition" : "ammunition";
   const ammoItem = character.inventory.find(
     (item) => item.category === "ammunition" && item.name.toLowerCase().includes(ammoCategory.replace("_", " "))
@@ -345,9 +347,10 @@ export function reloadWeapon(
       || item.name.toLowerCase().includes("shells")
   );
   if (!ammoItem) return { error: "Nenhuma munição encontrada no inventário." };
+  if (ammoItem.quantity < ammoNeeded) return { error: `Munição insuficiente. Necessário ${ammoNeeded}, disponível ${ammoItem.quantity}.` };
 
-  const updatedInventory = ammoItem.quantity > 1
-    ? character.inventory.map((i) => i.id === ammoItem.id ? { ...i, quantity: i.quantity - 1 } : i)
+  const updatedInventory = ammoItem.quantity > ammoNeeded
+    ? character.inventory.map((i) => i.id === ammoItem.id ? { ...i, quantity: i.quantity - ammoNeeded } : i)
     : character.inventory.filter((i) => i.id !== ammoItem.id);
 
   const updatedWeapons = character.weapons.map((w) =>

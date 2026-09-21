@@ -121,6 +121,8 @@ export default function CharacterSheet({
     .filter(([, skills]) => skills.length > 0);
   const availableQuickhacks = getQuickhacksForCharacter(character);
   const hasQuickhacks = availableQuickhacks.length > 0;
+  const isNetRunner = character.primaryRole === "netrunner" ||
+    character.roleAbilities.some((ra) => ra.abilityId === "interface" && ra.rank > 0);
   const availableIP = character.ip;
   function grantIP() {
     const updated = grantImprovementPoints(character, ipToGrant);
@@ -778,6 +780,7 @@ export default function CharacterSheet({
             ))}
           </div>
         </section>
+        {isNetRunner && (
         <section className="sheet-panel quickhacks-panel">
             <PanelTitle number="06">Quickhacks</PanelTitle>
             {quickhackError && <p className="form-error">{quickhackError}</p>}
@@ -837,6 +840,7 @@ export default function CharacterSheet({
             </div>
           )}
           </section>
+        )}
       <StorePanel character={character} onUpdate={onUpdate} />
       {character.rollHistory.some(
         (entry) => entry.type === "humanity_loss",
