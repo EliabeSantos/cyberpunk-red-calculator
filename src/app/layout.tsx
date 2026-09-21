@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import type { PropsWithChildren } from "react";
 
 import "./globals.css";
 
@@ -11,7 +12,7 @@ export const metadata: Metadata = {
   description: "Ficha e ferramentas para Cyberpunk RED.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: PropsWithChildren) {
   return (
     <html lang="pt-BR" className={`${geistSans.variable} ${geistMono.variable}`}>
       <body>{children}</body>
