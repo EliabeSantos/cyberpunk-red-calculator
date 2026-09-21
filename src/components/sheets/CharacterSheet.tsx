@@ -12,6 +12,7 @@ import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
 import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, type DamageApplicationResult } from "@/lib/damage";
 import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold } from "@/lib/calculations";
 import { rollEvasion } from "@/lib/attacks";
+import { rollDice } from "@/lib/dice";
 import { rollSkillCheck } from "@/lib/skills";
 import { rollQuickhack } from "@/lib/quickhacks";
 import { getQuickhacksForCharacter, quickhackDefinitions, quickhackCategoriesOrder } from "@/data/quickhacks";
@@ -26,6 +27,8 @@ import type { AttackRollResult, DamageRollResult, EvasionRollResult } from "@/ty
 import type { AttributeName, Character } from "@/types/character";
 import type { SkillCategory } from "@/data/skills";
 import { hitLocationLabels, hitLocations, type HitLocation } from "@/types/combat";
+import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjuries";
+import type { CriticalInjury } from "@/data/criticalInjuries";
 import { getSellPrice, sellInventoryItem } from "@/lib/store";
 import { getCatalogItem } from "@/data/items";
 import { getCombatAwarenessTotal, getMakerSpecialtyPoints, getMedicineSpecialtyPoints, getNetActionsPerTurn, getRoleAbilityIPCost, spendIPOnRoleAbility } from "@/lib/roles";
@@ -85,6 +88,9 @@ export default function CharacterSheet({
   const [lastDamageDealt, setLastDamageDealt] = useState<DamageApplicationResult | null>(null);
   const [lastDamageReceived, setLastDamageReceived] = useState<DamageApplicationResult | null>(null);
   const [lastQuickhack, setLastQuickhack] = useState<QuickhackRollResult | null>(null);
+  const [lastInitiative, setLastInitiative] = useState<{ diceRoll: number; refBonus: number; total: number } | null>(null);
+  const [manualInjuryLocation, setManualInjuryLocation] = useState<HitLocation>("body");
+  const [manualInjuryName, setManualInjuryName] = useState("");
   const [rollingQuickhack, setRollingQuickhack] = useState<{ id: string; roll: number } | null>(null);
   const [rollingSkill, setRollingSkill] = useState<{ id: string; roll: number } | null>(null);
   const [quickhackError, setQuickhackError] = useState("");
@@ -171,6 +177,35 @@ export default function CharacterSheet({
     const resolution = rollEvasion(character);
     if ("error" in resolution) { setCombatError(resolution.error); return; }
     setCombatError(""); setLastEvasion(resolution.result); onUpdate(resolution.character);
+  }
+  function rollInitiative() {
+    const dice = rollDice("1d10");
+    const refBonus = character.stats.REF;
+    setLastInitiative({ diceRoll: dice.rolls[0], refBonus, total: dice.rolls[0] + refBonus });
+  }
+  function addManualCriticalInjury() {
+    const name = manualInjuryName.trim();
+    if (!name) return;
+    const table = manualInjuryLocation === "head" ? headCriticalInjuries : bodyCriticalInjuries;
+    const template = table.find((inj) => inj.name === name);
+    const injury: CriticalInjury = template
+      ? { ...template }
+      : { roll: 0, name, effect: "", quickFix: "", treatment: "", bonusDamage: 0, location: manualInjuryLocation, modifiers: [] };
+    onUpdate({
+      ...character,
+      combat: {
+        ...character.combat,
+        criticalInjuries: [...character.combat.criticalInjuries, injury],
+      },
+    });
+    setManualInjuryName("");
+  }
+  function removeCriticalInjury(index: number) {
+    const updated = character.combat.criticalInjuries.filter((_, i) => i !== index);
+    onUpdate({
+      ...character,
+      combat: { ...character.combat, criticalInjuries: updated },
+    });
   }
   function receiveDamage() {
     const resolution = applyReceivedDamage(character, Number(receivedDamage), hitLocation);
@@ -362,6 +397,21 @@ export default function CharacterSheet({
                 value={`${character.luck.current} / ${character.luck.max}`}
               />
             </div>
+            <div className="combat-action">
+              <span>Iniciativa <small>REF ({character.stats.REF}) + 1d10</small></span>
+              <button type="button" className="upgrade-skill" onClick={rollInitiative}>Rolar Iniciativa</button>
+            </div>
+            {lastInitiative && (
+              <div className="evasion-result" role="status">
+                <span className="roll-formula">
+                  REF {lastInitiative.refBonus} + 1d10
+                </span>
+                <span className="roll-dice">
+                  <span className="die-normal">[{lastInitiative.diceRoll}]</span>
+                </span>
+                <span className="roll-total">= <b>{lastInitiative.total}</b></span>
+              </div>
+            )}
             <h3>Ataques</h3>
             <AttackActions
               character={character}
@@ -482,67 +532,102 @@ export default function CharacterSheet({
               <Metric label="Corpo e membros" value={`${character.combat.armor.body} SP`} />
             </div>
             <h3>Lesões críticas</h3>
-            {(() => {
-              const displayInjury = lastDamageReceived?.criticalInjuryTriggered
-                ? lastDamageReceived.criticalInjury
-                : character.combat.criticalInjuries[character.combat.criticalInjuries.length - 1];
-              const displayCrossedThreshold = lastDamageReceived?.crossedWoundThreshold ?? false;
-              const displayDiceInjury = lastDamageReceived?.criticalInjuryFromDice;
-
-              if (displayInjury) {
-                return (
-                  <div className="critical-injury-detail" role="status">
-                    <div className="critical-injury-header">
-                      <strong>Critical Injury</strong>
-                      {displayCrossedThreshold && (
-                        <span className="seriously-wounded-inline">⚠ Seriously Wounded</span>
-                      )}
-                    </div>
-                    <div className="injury-field">
-                      <small>Rolagem</small>
-                      <strong>2d6 = {displayInjury.roll}</strong>
-                    </div>
-                    <div className="injury-field">
-                      <small>Localização</small>
-                      <strong>{hitLocationLabels[displayInjury.location]}</strong>
-                    </div>
-                    <div className="injury-field">
-                      <small>Ferimento</small>
-                      <strong>{displayInjury.name}</strong>
-                    </div>
+            {character.combat.criticalInjuries.length > 0 ? (
+              character.combat.criticalInjuries.map((injury, idx) => (
+                <div className="critical-injury-detail" key={idx} role="status">
+                  <div className="critical-injury-header">
+                    <strong>Critical Injury</strong>
+                    <span className="injury-field"><small>Localização</small> <strong>{hitLocationLabels[injury.location]}</strong></span>
+                    <button type="button" className="upgrade-skill" style={{ marginLeft: "auto" }} onClick={() => removeCriticalInjury(idx)}>✕ Curar</button>
+                  </div>
+                  <div className="injury-field">
+                    <small>Ferimento</small>
+                    <strong>{injury.name}</strong>
+                  </div>
+                  {injury.effect && (
                     <div className="injury-field">
                       <small>Efeito</small>
-                      <span>{displayInjury.effect}</span>
+                      <span>{injury.effect}</span>
                     </div>
+                  )}
+                  {injury.quickFix && (
                     <div className="injury-field">
                       <small>Quick Fix</small>
-                      <span>{displayInjury.quickFix}</span>
+                      <span>{injury.quickFix}</span>
                     </div>
+                  )}
+                  {injury.treatment && (
                     <div className="injury-field">
                       <small>Treatment</small>
-                      <span>{displayInjury.treatment}</span>
+                      <span>{injury.treatment}</span>
                     </div>
-                    <div className="injury-field">
-                      <small>Bonus Damage</small>
-                      <strong>{displayInjury.bonusDamage}</strong>
-                    </div>
-                    {displayInjury.deathSavePenalty !== undefined && (
-                      <div className="injury-field">
-                        <small>Death Save Penalty</small>
-                        <strong>{displayInjury.deathSavePenalty}</strong>
-                      </div>
-                    )}
-                    {displayDiceInjury && !displayInjury && (
-                      <span>Critical Injury causada por dados de dano (dois ou mais 6).</span>
-                    )}
+                  )}
+                  <div className="injury-field">
+                    <small>Bonus Damage</small>
+                    <strong>{injury.bonusDamage}</strong>
                   </div>
-                );
-              }
-              return null;
-            })()}
-            {(!lastDamageReceived || !lastDamageReceived.criticalInjuryTriggered) && character.combat.criticalInjuries.length === 0 && (
+                  {injury.deathSavePenalty !== undefined && (
+                    <div className="injury-field">
+                      <small>Death Save Penalty</small>
+                      <strong>{injury.deathSavePenalty}</strong>
+                    </div>
+                  )}
+                </div>
+              ))
+            ) : (
               <EmptyState>Nenhuma lesão crítica.</EmptyState>
             )}
+            {lastDamageReceived?.criticalInjuryTriggered && lastDamageReceived.criticalInjury && (
+              <div className="critical-injury-detail" role="status">
+                <div className="critical-injury-header">
+                  <strong>⚠ Nova Critical Injury (Recently Triggered)</strong>
+                  {lastDamageReceived.crossedWoundThreshold && (
+                    <span className="seriously-wounded-inline">⚠ Seriously Wounded</span>
+                  )}
+                </div>
+                <div className="injury-field">
+                  <small>Ferimento</small>
+                  <strong>{lastDamageReceived.criticalInjury.name}</strong>
+                </div>
+                <div className="injury-field">
+                  <small>Efeito</small>
+                  <span>{lastDamageReceived.criticalInjury.effect}</span>
+                </div>
+              </div>
+            )}
+            <div className="combat-action" style={{ marginTop: "0.5rem" }}>
+              <span>Adicionar lesão manual</span>
+            </div>
+            <div className="received-damage">
+              <select
+                aria-label="Local da lesão"
+                value={manualInjuryLocation}
+                onChange={(event) => { setManualInjuryLocation(event.target.value as HitLocation); setManualInjuryName(""); }}
+              >
+                {hitLocations.map((location) => (
+                  <option key={location} value={location}>{hitLocationLabels[location]}</option>
+                ))}
+              </select>
+              <select
+                aria-label="Lesão crítica"
+                value={manualInjuryName}
+                onChange={(event) => setManualInjuryName(event.target.value)}
+              >
+                <option value="">— Selecionar —</option>
+                {(manualInjuryLocation === "head" ? headCriticalInjuries : bodyCriticalInjuries).map((inj) => (
+                  <option key={inj.name} value={inj.name}>{inj.name}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={manualInjuryName}
+                onChange={(event) => setManualInjuryName(event.target.value)}
+                placeholder="ou digite..."
+              />
+              <button type="button" className="upgrade-skill" onClick={addManualCriticalInjury} disabled={!manualInjuryName.trim()}>
+                Adicionar
+              </button>
+            </div>
           </section>
           <section className="sheet-panel ip-panel">
             <PanelTitle number="05">Progressão</PanelTitle>
