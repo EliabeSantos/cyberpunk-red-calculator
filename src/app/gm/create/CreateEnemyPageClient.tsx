@@ -136,6 +136,7 @@ export default function CreateEnemyPageClient() {
       damage: "1d6",
       attackType: "melee",
       skill: "brawling",
+      attackBase: 0,
     };
     setEnemy((prev) => ({
       ...prev,

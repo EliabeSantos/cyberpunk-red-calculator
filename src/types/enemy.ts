@@ -29,6 +29,7 @@ export interface EnemyWeapon {
   damage: string;
   attackType: "melee" | "ranged" | "thrown";
   skill: string; // skill ID used for this weapon
+  attackBase: number; // pre-calculated STAT + WeaponSkill
   rateOfFire?: number;
   magazine?: number;
   ammo?: number;

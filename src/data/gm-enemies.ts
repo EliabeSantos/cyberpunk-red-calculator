@@ -70,6 +70,7 @@ function mapJsonToEnemy(json: {
     damage: w.damage,
     attackType: (w.type === "ranged" ? "ranged" : "melee") as "ranged" | "melee",
     skill: w.skill,
+    attackBase: w.attackBase,
     rateOfFire: w.rof,
     ammo: w.ammo || undefined,
   }));

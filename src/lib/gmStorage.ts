@@ -160,6 +160,7 @@ export interface EncounterParticipant {
   weaponSkillName: string;
   refStat: number;
   skillValue: number;
+  attackBase: number;
   damageExpression: string;
   // Last roll results
   lastAttackRoll: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
@@ -257,6 +258,7 @@ export function createEncounterFromFaction(
     const skillValue = refStat + skillLevel;
     const weaponName = weapon?.name ?? "Desarmado";
     const damageExpression = weapon?.damage ?? "1d6";
+    const attackBase = weapon?.attackBase ?? skillValue;
     participants.push({
       enemyId: source.id,
       name: source.identity.name || `${source.identity.archetype} #${i + 1}`,
@@ -273,6 +275,7 @@ export function createEncounterFromFaction(
       weaponSkillName: skill?.name ?? skillId,
       refStat,
       skillValue,
+      attackBase,
       damageExpression,
       lastAttackRoll: null,
       lastDamageRoll: null,
