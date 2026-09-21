@@ -11,7 +11,7 @@ import {
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
 import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, type DamageApplicationResult } from "@/lib/damage";
 import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold } from "@/lib/calculations";
-import { rollEvasion } from "@/lib/attacks";
+import { rollEvasion, reloadWeapon } from "@/lib/attacks";
 import { rollDice } from "@/lib/dice";
 import { rollSkillCheck } from "@/lib/skills";
 import { rollQuickhack } from "@/lib/quickhacks";
@@ -23,7 +23,7 @@ import type { HumanityLossResult } from "@/lib/humanity";
 import type { QuickhackRollResult, QuickhackCategory } from "@/lib/quickhacks";
 import StorePanel from "@/components/sheets/StorePanel";
 import AttackActions from "@/components/combat/AttackActions";
-import type { AttackRollResult, DamageRollResult, EvasionRollResult } from "@/types/attack";
+import type { AttackRollResult, DamageRollResult, EvasionRollResult, AttackMode } from "@/types/attack";
 import type { AttributeName, Character } from "@/types/character";
 import type { SkillCategory } from "@/data/skills";
 import { hitLocationLabels, hitLocations, type HitLocation } from "@/types/combat";
@@ -91,6 +91,8 @@ export default function CharacterSheet({
   const [lastInitiative, setLastInitiative] = useState<{ diceRoll: number; refBonus: number; total: number } | null>(null);
   const [manualInjuryLocation, setManualInjuryLocation] = useState<HitLocation>("body");
   const [manualInjuryName, setManualInjuryName] = useState("");
+  const [weaponAttackModes, setWeaponAttackModes] = useState<Record<string, AttackMode>>({});
+  const [reloadError, setReloadError] = useState("");
   const [rollingQuickhack, setRollingQuickhack] = useState<{ id: string; roll: number } | null>(null);
   const [rollingSkill, setRollingSkill] = useState<{ id: string; roll: number } | null>(null);
   const [quickhackError, setQuickhackError] = useState("");
@@ -206,6 +208,15 @@ export default function CharacterSheet({
       ...character,
       combat: { ...character.combat, criticalInjuries: updated },
     });
+  }
+  function handleReload(weaponId: string) {
+    const resolution = reloadWeapon(character, weaponId);
+    if ("error" in resolution) { setReloadError(resolution.error); return; }
+    setReloadError("");
+    onUpdate(resolution.character);
+  }
+  function isRangedWeapon(weapon: { skill?: string }): boolean {
+    return ["handgun", "smg", "rifle", "shotgun", "heavy_weapons", "shoulder_arms", "sniper"].includes(weapon.skill ?? "");
   }
   function receiveDamage() {
     const resolution = applyReceivedDamage(character, Number(receivedDamage), hitLocation);
@@ -420,20 +431,31 @@ export default function CharacterSheet({
                 setLastAttack(result);
                 setLastDamage(null);
               }}
+              weaponAttackModes={weaponAttackModes}
+              onAttackModeChange={(weaponId, mode) => setWeaponAttackModes((prev) => ({ ...prev, [weaponId]: mode }))}
             />
             {(lastAttack ?? character.lastAttack) &&
               (() => {
                 const attack = lastAttack ?? character.lastAttack!;
                 return (
                   <div className="attack-result" role="status">
-                    <span className="roll-header">
+                    {/* Header with badges */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.2rem" }}>
+                      <strong style={{ color: "var(--foreground)", fontSize: "0.8rem" }}>{attack.label}</strong>
                       {attack.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
                       {attack.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
-                    </span>
+                      {!attack.critical && !attack.fumble && (
+                        <span style={{ marginLeft: "auto", color: "var(--accent)", fontWeight: 700, fontSize: "0.85rem" }}>
+                          {attack.total}
+                        </span>
+                      )}
+                    </div>
+                    {/* Formula */}
                     <span className="roll-formula">
                       {attack.stat.id} {attack.stat.value} + {attack.skill.id} {attack.skill.value} + 1d10
                     </span>
-                    <span className="roll-dice">
+                    {/* Dice */}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.2rem", margin: "0.15rem 0" }}>
                       {attack.diceRolls?.map((r: any, idx: number) => (
                         <React.Fragment key={idx}>
                           {r.type === "crit" && <strong className="die-crit">[{r.value}]</strong>}
@@ -441,50 +463,61 @@ export default function CharacterSheet({
                           {r.type === "fumble" && <strong className="die-fumble">[{r.value}]</strong>}
                           {r.type === "fumble_sub" && <strong className="die-fumble">−[{r.value}]</strong>}
                           {r.type === "normal" && <span className="die-normal">[{r.value}]</span>}
-                          {" "}
                         </React.Fragment>
                       ))}
-                    </span>
-                    <span className="roll-subtotal">= {attack.diceTotal}</span>
+                    </div>
+                    {/* Subtotal */}
+                    <span className="roll-subtotal">Dados = {attack.diceTotal}</span>
+                    {/* Modifiers */}
                     {attack.modifiers.length > 0 && (
-                      <span className="roll-mod">
-                        {attack.modifiers
-                          .map(
-                            (modifier) =>
-                              `${modifier.source} ${modifier.value >= 0 ? "+" : ""}${modifier.value}`,
-                          )
-                          .join(" · ")}
-                      </span>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", margin: "0.1rem 0" }}>
+                        {attack.modifiers.map((modifier, idx) => (
+                          <span key={idx} style={{ border: "1px solid #3a4a3d", borderRadius: "3px", padding: "0.1rem 0.3rem", fontSize: "0.6rem", color: "var(--muted)" }}>
+                            {modifier.source} {modifier.value >= 0 ? "+" : ""}{modifier.value}
+                          </span>
+                        ))}
+                      </div>
                     )}
-                    <span className="roll-total">= <b>{attack.total}</b></span>
+                    {/* Total */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "0.2rem", paddingTop: "0.3rem", borderTop: "1px solid #2a352c" }}>
+                      <span style={{ color: "var(--muted)", fontSize: "0.65rem" }}>Total</span>
+                      <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: "1.1rem", fontFamily: "var(--font-geist-mono), monospace" }}>{attack.total}</span>
+                    </div>
+                    {/* Damage roll button */}
                     {attack.damageDice && (
                       <button
                         type="button"
                         className="roll-damage"
                         onClick={rollDamage}
+                        style={{ marginTop: "0.3rem" }}
                       >
-                        Rolar dano ({attack.damageDice})
+                        🎲 Rolar dano ({attack.damageDice})
                       </button>
                     )}
+                    {/* Damage result */}
                     {lastDamage && lastDamage.attackId === attack.attackId && (
-                      <span className="damage-roll">
-                        Dano {lastDamage.damageDice}:{" "}
-                        {lastDamage.roll.rolls
-                          .map((roll) => `[${roll}]`)
-                          .join(" ")}{" "}
-                        = <b>{lastDamage.total}</b>
+                      <div style={{ marginTop: "0.3rem", padding: "0.4rem", border: "1px solid #3a4a3d", borderRadius: "3px", background: "#0f1512" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ color: "var(--muted)", fontSize: "0.65rem" }}>Dano ({lastDamage.damageDice})</span>
+                          <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: "0.9rem" }}>{lastDamage.total}</span>
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.15rem", marginTop: "0.2rem" }}>
+                          {lastDamage.roll.rolls.map((roll, idx) => (
+                            <span key={idx} style={{ color: roll === 6 ? "var(--accent)" : "var(--foreground)", fontSize: "0.65rem" }}>[{roll}]</span>
+                          ))}
+                        </div>
                         {(() => {
                           const sixCount = lastDamage.roll.rolls.filter((r) => r === 6).length;
                           if (sixCount >= 2) {
                             return (
-                              <span className="critical-injury-warning">
-                                ⚠ CRITICAL INJURY! O ataque rolou {sixCount} resultados 6.
-                              </span>
+                              <div style={{ marginTop: "0.3rem", padding: "0.3rem", border: "1px solid #ff6b6b", borderRadius: "3px", background: "#281815", color: "#ffcfbf", fontSize: "0.65rem", textAlign: "center" }}>
+                                ⚠ CRITICAL INJURY! {sixCount} resultados 6 no dano.
+                              </div>
                             );
                           }
                           return null;
                         })()}
-                      </span>
+                      </div>
                     )}
                   </div>
                 );
@@ -847,10 +880,23 @@ export default function CharacterSheet({
                         {weapon.skill
                           ? `Perícia: ${weapon.skill}`
                           : "Sem perícia definida"}
-                        {weapon.magazine !== undefined
-                          ? ` • Munição ${weapon.ammo ?? 0}/${weapon.magazine}`
-                          : ""}
                       </small>
+                      {weapon.magazine !== undefined && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginTop: "0.25rem" }}>
+                          <small style={{ color: (weapon.ammo ?? 0) <= 0 ? "#ff6b6b" : "var(--muted)" }}>
+                            Munição: {weapon.ammo ?? 0}/{weapon.magazine}
+                          </small>
+                          <button
+                            type="button"
+                            className="upgrade-skill"
+                            onClick={() => handleReload(weapon.id)}
+                            disabled={(weapon.ammo ?? 0) >= weapon.magazine}
+                            style={{ fontSize: "0.6rem", padding: "0.15rem 0.3rem" }}
+                          >
+                            ↻ Recarregar
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <button
                       type="button"
@@ -862,6 +908,7 @@ export default function CharacterSheet({
                   </div>
                 </article>
               ))}
+              {reloadError && <p className="form-error" style={{ marginTop: "0.5rem" }}>{reloadError}</p>}
             </div>
           ) : (
             <EmptyState>Nenhuma arma equipada.</EmptyState>

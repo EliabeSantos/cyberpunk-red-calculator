@@ -208,9 +208,23 @@ export function rollAttack(
     skill: result.skill,
     modifiers: attackModifiers,
   };
+
+  // Consome munição da arma com base no modo de ataque
+  let updatedWeapons = character.weapons;
+  if (weaponId) {
+    const mode = context.attackMode ?? "normal";
+    const ammoCost = mode === "autofire" || mode === "suppressive" ? 10 : 1;
+    updatedWeapons = character.weapons.map((w) => {
+      if (w.id !== weaponId) return w;
+      if (w.ammo === undefined) return w;
+      return { ...w, ammo: Math.max(0, w.ammo - ammoCost) };
+    });
+  }
+
   return {
     character: {
       ...character,
+      weapons: updatedWeapons,
       lastAttack: result,
       rollHistory: [entry, ...character.rollHistory],
     },
@@ -300,4 +314,45 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
   };
   
   return { character: { ...character, rollHistory: [entry, ...character.rollHistory] }, result };
+}
+
+/** Mapeia subtipo de arma para a categoria de munição correspondente no inventário. */
+const ammoCategoryMap: Record<string, string> = {
+  handgun: "pistol_ammo",
+  smg: "smg_ammo",
+  rifle: "rifle_ammo",
+  shotgun: "shotgun_shells",
+  heavy: "rifle_ammo",
+};
+
+/** Recarrega uma arma consumindo munição do inventário. Retorna erro se não houver munição. */
+export function reloadWeapon(
+  character: Character,
+  weaponId: string,
+): { character: Character } | { error: string } {
+  const weapon = character.weapons.find((w) => w.id === weaponId);
+  if (!weapon) return { error: "Arma não encontrada." };
+  if (!weapon.magazine || weapon.magazine <= 0) return { error: `${weapon.name} não possui magazine.` };
+  if (weapon.ammo !== undefined && weapon.ammo >= weapon.magazine) return { error: `${weapon.name} já está cheia.` };
+
+  const ammoCategory = weapon.skill ? ammoCategoryMap[weapon.skill] ?? "ammunition" : "ammunition";
+  const ammoItem = character.inventory.find(
+    (item) => item.category === "ammunition" && item.name.toLowerCase().includes(ammoCategory.replace("_", " "))
+      || item.catalogItemId === ammoCategory
+      || item.name.toLowerCase().includes("ammo")
+      || item.name.toLowerCase().includes("munição")
+      || item.name.toLowerCase().includes("municao")
+      || item.name.toLowerCase().includes("shells")
+  );
+  if (!ammoItem) return { error: "Nenhuma munição encontrada no inventário." };
+
+  const updatedInventory = ammoItem.quantity > 1
+    ? character.inventory.map((i) => i.id === ammoItem.id ? { ...i, quantity: i.quantity - 1 } : i)
+    : character.inventory.filter((i) => i.id !== ammoItem.id);
+
+  const updatedWeapons = character.weapons.map((w) =>
+    w.id === weaponId ? { ...w, ammo: w.magazine } : w,
+  );
+
+  return { character: { ...character, inventory: updatedInventory, weapons: updatedWeapons } };
 }
