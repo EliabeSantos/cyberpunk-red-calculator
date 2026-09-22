@@ -1361,8 +1361,8 @@
 
 /* --- Encounter Setup --- */
 .encounter-setup { display: grid; padding: 0 0 1.5rem; }
-.encounter-setup-panel { width: min(100%, 60rem); }
-.encounter-setup-saved { width: min(100%, 60rem); margin-top: 2rem; }
+.encounter-setup-panel { width: 100%; }
+.encounter-setup-saved { width: 100%; margin-top: 2rem; }
 .encounter-form-grid { display: grid; gap: 1rem; margin-bottom: 1.25rem; }
 .encounter-form-label { display: block; margin-bottom: .25rem; color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; font-family: var(--font-geist-mono), monospace; }
 .encounter-form-input, .encounter-form-select { width: 100%; padding: .4rem .5rem; background: #090c0b; border: 1px solid #3d4742; color: var(--foreground); font-family: var(--font-geist-mono), monospace; }
@@ -1463,7 +1463,7 @@
 .gm-form-input:placeholder-shown {
   border-color: #5a3a3a;
 }
-.encounter-actions { display: flex; gap: .6rem; }
+.encounter-actions { display: flex; gap: .6rem; justify-content: flex-end; }
 .encounter-start-button {
   display: inline-flex;
   align-items: center;
@@ -1909,8 +1909,8 @@
 
 /* --- Encounter Setup --- */
 .encounter-setup { display: grid; padding: 0 0 1.5rem; }
-.encounter-setup-panel { width: min(100%, 60rem); }
-.encounter-setup-saved { width: min(100%, 60rem); margin-top: 2rem; }
+.encounter-setup-panel { width: 100%; }
+.encounter-setup-saved { width: 100%; margin-top: 2rem; }
 .encounter-form-grid { display: grid; gap: 1rem; margin-bottom: 1.25rem; }
 .encounter-form-label { display: block; margin-bottom: .25rem; color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; font-family: var(--font-geist-mono), monospace; }
 .encounter-form-input, .encounter-form-select { width: 100%; padding: .4rem .5rem; background: #090c0b; border: 1px solid #3d4742; color: var(--foreground); font-family: var(--font-geist-mono), monospace; }
@@ -2011,7 +2011,7 @@
 .gm-form-input:placeholder-shown {
   border-color: #5a3a3a;
 }
-.encounter-actions { display: flex; gap: .6rem; }
+.encounter-actions { display: flex; gap: .6rem; justify-content: flex-end; }
 .encounter-start-button {
   display: inline-flex;
   align-items: center;
