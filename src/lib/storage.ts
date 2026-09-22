@@ -93,7 +93,7 @@ function normalizeCharacter(character: Character): Character {
         current:
           !oldHitPoints || oldHitPoints.max === 0
             ? maximumHitPoints
-            : Math.min(oldHitPoints.current, maximumHumanity),
+            : Math.min(oldHitPoints.current, maximumHitPoints),
       },
       criticalInjuries: normalizedCriticalInjuries,
     },

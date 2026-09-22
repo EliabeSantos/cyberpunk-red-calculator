@@ -1236,118 +1236,164 @@ export default function CharacterSheet({
         </section>
       )}
       <section className="equipment-layout">
-        <section className="sheet-panel">
+        <section className="sheet-panel weapons-panel">
           <PanelTitle number="05">Armas</PanelTitle>
           {character.weapons.length ? (
-            <div className="equipment-list">
+            <div className="weapons-grid">
               {character.weapons.map((weapon) => (
-                <article key={weapon.id}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div style={{ flex: 1 }}>
+                <div key={weapon.id} className="weapon-card">
+                  <div className="weapon-card-header">
+                    <div className="weapon-card-title">
                       <h3>{weapon.name}</h3>
-                      <p>
-                        {weapon.damage}{" "}
-                        {weapon.rateOfFire ? `• ROF ${weapon.rateOfFire}` : ""}
-                      </p>
-                      <small>
-                        {weapon.skill
-                          ? `Perícia: ${weapon.skill}`
-                          : "Sem perícia definida"}
-                      </small>
-                      {weapon.magazine !== undefined && (
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginTop: "0.25rem" }}>
-                          <small style={{ color: (weapon.ammo ?? 0) <= 0 ? "#ff6b6b" : "var(--muted)" }}>
-                            Munição: {weapon.ammo ?? 0}/{weapon.magazine}
-                          </small>
-                          <button
-                            type="button"
-                            className="upgrade-skill"
-                            onClick={() => handleReload(weapon.id)}
-                            disabled={(weapon.ammo ?? 0) >= weapon.magazine}
-                            style={{ fontSize: "0.6rem", padding: "0.15rem 0.3rem" }}
-                          >
-                            ↻ Recarregar
-                          </button>
-                        </div>
-                      )}
+                      <span className="weapon-skill-badge">
+                        {weapon.skill || "Sem perícia"}
+                      </span>
                     </div>
                     <button
                       type="button"
+                      className="weapon-remove-btn"
                       onClick={() => onUpdate({ ...character, weapons: character.weapons.filter((w) => w.id !== weapon.id) })}
-                      style={{ border: "1px solid var(--accent)", background: "transparent", color: "var(--accent)", cursor: "pointer", padding: ".2rem .4rem", fontSize: ".67rem", marginTop: ".25rem", flexShrink: 0 }}
+                      aria-label={`Remover ${weapon.name}`}
                     >
-                      Remover
+                      ×
                     </button>
                   </div>
-                </article>
+                  <div className="weapon-card-stats">
+                    <div className="weapon-stat">
+                      <span className="weapon-stat-label">Dano</span>
+                      <span className="weapon-stat-value">{weapon.damage}</span>
+                    </div>
+                    {weapon.rateOfFire && (
+                      <div className="weapon-stat">
+                        <span className="weapon-stat-label">ROF</span>
+                        <span className="weapon-stat-value">{weapon.rateOfFire}</span>
+                      </div>
+                    )}
+                    {weapon.magazine !== undefined && (
+                      <div className="weapon-stat">
+                        <span className="weapon-stat-label">Munição</span>
+                        <span className={`weapon-stat-value ${(weapon.ammo ?? 0) <= 0 ? 'empty' : ''}`}>
+                          {weapon.ammo ?? 0}/{weapon.magazine}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  {weapon.magazine !== undefined && (
+                    <div className="weapon-card-actions">
+                      <button
+                        type="button"
+                        className="weapon-reload-btn"
+                        onClick={() => handleReload(weapon.id)}
+                        disabled={(weapon.ammo ?? 0) >= weapon.magazine}
+                      >
+                        ↻ Recarregar
+                      </button>
+                    </div>
+                  )}
+                </div>
               ))}
-              {reloadError && <p className="form-error" style={{ marginTop: "0.5rem" }}>{reloadError}</p>}
+              {reloadError && <p className="form-error">{reloadError}</p>}
             </div>
           ) : (
             <EmptyState>Nenhuma arma equipada.</EmptyState>
           )}
         </section>
-        <section className="sheet-panel">
+
+        <section className="sheet-panel cyberware-panel">
           <PanelTitle number="06">Cyberware</PanelTitle>
           {character.cyberware.length ? (
-            <div className="equipment-list">
+            <div className="cyberware-grid">
               {character.cyberware.map((item) => (
-                <article key={item.id}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem" }}>
-                    <div>
+                <div key={item.id} className="cyberware-card">
+                  <div className="cyberware-card-header">
+                    <div className="cyberware-card-title">
                       <h3>{item.name}</h3>
-                      <small>
-                        {item.humanityLoss
-                          ? `Perda de Humanidade: ${item.humanityLoss}`
-                          : "Sem perda de Humanidade"}
-                        {item.isBorgware ? " · Borgware" : ""}
-                      </small>
+                      {item.isBorgware && (
+                        <span className="cyberware-borgware-badge">Borgware</span>
+                      )}
                     </div>
                     <button
                       type="button"
-                      className="equip-item"
+                      className="cyberware-remove-btn"
                       onClick={() => onUpdate(removeCyberware(character, item.id))}
-                      style={{ marginTop: "0.25rem" }}
+                      aria-label={`Remover ${item.name}`}
                     >
-                      Remover
+                      ×
                     </button>
                   </div>
-                </article>
+                  <div className="cyberware-card-details">
+                    <span className="cyberware-humanity-loss">
+                      {item.humanityLoss
+                        ? `Perda: ${item.humanityLoss}`
+                        : "Sem perda"}
+                    </span>
+                  </div>
+                </div>
               ))}
             </div>
           ) : (
             <EmptyState>Nenhum cyberware instalado.</EmptyState>
           )}
         </section>
-        <section className="sheet-panel">
+
+        <section className="sheet-panel inventory-panel">
           <PanelTitle number="07">Inventário</PanelTitle>
           {character.inventory.length ? (
-            <ul className="inventory-list">
-              {character.inventory.map((item) => (
-                <li key={item.id}>
-                  <strong>{item.quantity}×</strong>
-                  <span>{item.name}{item.catalogItemId && (() => { const catalogItem = getCatalogItem(item.catalogItemId); return catalogItem ? <small>Compra: €$ {catalogItem.price.toLocaleString("pt-BR")} · Venda: €$ {getSellPrice(catalogItem.price).toLocaleString("pt-BR")}/un.</small> : null; })()}</span>
-                  {item.catalogItemId && <button type="button" className="equip-item" onClick={() => sellItem(item.id)}>Vender 1</button>}
-                  {isEquippableItem(item) && (
-                    <button
-                      type="button"
-                      className="equip-item"
-                      onClick={() => equipItem(item.id)}
-                    >
-                      {item.category === "cyberware" ? "Instalar" : "Equipar"}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="equip-item"
-                    onClick={() => onUpdate({ ...character, inventory: character.inventory.filter((i) => i.id !== item.id) })}
-                  >
-                    Remover
-                  </button>
-                  {item.notes && <small>{item.notes}</small>}
-                </li>
-              ))}
-            </ul>
+            <div className="inventory-grid">
+              {character.inventory.map((item) => {
+                const catalogItem = item.catalogItemId ? getCatalogItem(item.catalogItemId) : null;
+                return (
+                  <div key={item.id} className="inventory-card">
+                    <div className="inventory-card-header">
+                      <div className="inventory-card-title">
+                        <span className="inventory-quantity">{item.quantity}×</span>
+                        <span className="inventory-name">{item.name}</span>
+                      </div>
+                      <div className="inventory-card-actions">
+                        {item.catalogItemId && (
+                          <button
+                            type="button"
+                            className="inventory-action-btn sell"
+                            onClick={() => sellItem(item.id)}
+                          >
+                            Vender
+                          </button>
+                        )}
+                        {isEquippableItem(item) && (
+                          <button
+                            type="button"
+                            className="inventory-action-btn equip"
+                            onClick={() => equipItem(item.id)}
+                          >
+                            {item.category === "cyberware" ? "Instalar" : "Equipar"}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="inventory-action-btn remove"
+                          onClick={() => onUpdate({ ...character, inventory: character.inventory.filter((i) => i.id !== item.id) })}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                    {catalogItem && (
+                      <div className="inventory-card-prices">
+                        <span className="inventory-price buy">
+                          Compra: €$ {catalogItem.price.toLocaleString("pt-BR")}
+                        </span>
+                        <span className="inventory-price sell">
+                          Venda: €$ {getSellPrice(catalogItem.price).toLocaleString("pt-BR")}/un.
+                        </span>
+                      </div>
+                    )}
+                    {item.notes && (
+                      <div className="inventory-card-notes">{item.notes}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ) : (
             <EmptyState>Inventário vazio.</EmptyState>
           )}

@@ -26,13 +26,29 @@ export function installCyberware(character: Character, inventoryItem: InventoryI
   return { character: applied.character, humanityLoss: { ...rolledLoss, humanityBefore: applied.humanityBefore, humanityAfter: applied.humanityAfter } };
 }
 
-/** Remove um cyberware instalado e recalcula a Maximum Humanity.
+/** Remove um cyberware instalado, envia para o inventário e recalcula a Maximum Humanity.
  * A Humanity atual NÃO é restaurada automaticamente.
  */
 export function removeCyberware(character: Character, cyberwareId: string): Character {
   const cyberwareIndex = character.cyberware.findIndex((cw) => cw.id === cyberwareId);
   if (cyberwareIndex === -1) return character;
+  const removedCyberware = character.cyberware[cyberwareIndex];
   const updatedCyberware = character.cyberware.filter((_, i) => i !== cyberwareIndex);
-  const updated: Character = { ...character, cyberware: updatedCyberware, humanity: { ...character.humanity, max: calculateMaximumHumanityFromCyberware({ cyberware: updatedCyberware, stats: character.stats }) } };
+  
+  // Adiciona o cyberware removido ao inventário
+  const inventoryItem: InventoryItem = {
+    id: crypto.randomUUID(),
+    name: removedCyberware.name,
+    quantity: 1,
+    category: "cyberware",
+    notes: removedCyberware.humanityLoss ? `Perda de Humanidade: ${removedCyberware.humanityLoss}` : undefined,
+  };
+  
+  const updated: Character = {
+    ...character,
+    cyberware: updatedCyberware,
+    inventory: [...character.inventory, inventoryItem],
+    humanity: { ...character.humanity, max: calculateMaximumHumanityFromCyberware({ cyberware: updatedCyberware, stats: character.stats }) },
+  };
   return updated;
 }
