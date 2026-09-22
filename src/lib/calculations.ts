@@ -139,6 +139,27 @@ export function calculateEmpFromHumanity(humanityCurrent: number): number {
   return Math.max(1, Math.floor(humanityCurrent / 10));
 }
 
+/** Tipo do status de HP do personagem. */
+export type HPStatus = "normal" | "seriously_wounded" | "mortally_wounded" | "dead";
+
+/** Calcula o status de HP do personagem baseado nas regras do Cyberpunk RED.
+ * - HP > Wound Threshold → Normal
+ * - HP <= Wound Threshold e HP > 0 → Seriously Wounded (-2 em todas ações)
+ * - HP <= 0 e não isDead → Mortally Wounded (sistema de Death Saves)
+ * - isDead === true → Dead
+ */
+export function calculateHPStatus(
+  hpCurrent: number,
+  hpMax: number,
+  isDead: boolean,
+): HPStatus {
+  if (isDead) return "dead";
+  if (hpCurrent <= 0) return "mortally_wounded";
+  const woundThreshold = calculateWoundThreshold(hpMax);
+  if (hpCurrent <= woundThreshold) return "seriously_wounded";
+  return "normal";
+}
+
 /** A única fórmula de Base: STAT associado + nível da Skill. */
 export function getSkillBase(
   character: Pick<import("@/types/character").Character, "stats" | "skills">,

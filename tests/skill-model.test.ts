@@ -139,12 +139,12 @@ test("Evasion uses Skill Base, records history, and does not alter HP", () => {
   } finally { Math.random = random; }
 });
 
-test("received damage clamps HP and records before/after without rolling", () => {
+test("received damage allows negative HP and records before/after without rolling", () => {
   const character = createEmptyCharacter("damage-test");
   character.combat.hp = { current: 10, max: 40 };
   const result = applyReceivedDamage(character, 12);
   assert.ok("character" in result);
-  if ("character" in result) { assert.equal(result.character.combat.hp.current, 0); assert.equal(result.character.combat.hp.max, 40); assert.deepEqual([result.character.rollHistory[0].amount, result.character.rollHistory[0].hpBefore, result.character.rollHistory[0].hpAfter], [12, 10, 0]); }
+  if ("character" in result) { assert.equal(result.character.combat.hp.current, -2); assert.equal(result.character.combat.hp.max, 40); assert.deepEqual([result.character.rollHistory[0].amount, result.character.rollHistory[0].hpBefore, result.character.rollHistory[0].hpAfter], [12, 10, -2]); }
   assert.ok("error" in applyReceivedDamage(character, 0));
   assert.ok("error" in applyReceivedDamage(character, -5));
   assert.ok("error" in applyReceivedDamage(character, Number.NaN));

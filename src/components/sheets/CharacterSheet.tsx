@@ -10,8 +10,8 @@ import {
   upgradeSkill,
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
-import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, type DamageApplicationResult } from "@/lib/damage";
-import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold } from "@/lib/calculations";
+import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, rollDeathSave, applyFirstAid, type DamageApplicationResult } from "@/lib/damage";
+import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold, calculateHPStatus } from "@/lib/calculations";
 import { rollEvasion, reloadWeapon } from "@/lib/attacks";
 import { rollDice } from "@/lib/dice";
 import { rollSkillCheck } from "@/lib/skills";
@@ -105,6 +105,9 @@ export default function CharacterSheet({
   const [humanityAdjustValue, setHumanityAdjustValue] = useState("");
   const [humanityAdjustReason, setHumanityAdjustReason] = useState("");
   const [expandedRoleAbility, setExpandedRoleAbility] = useState<RoleAbilityId | null>(null);
+  const [lastDeathSave, setLastDeathSave] = useState<import("@/lib/damage").DeathSaveResult | null>(null);
+  const [rollingDeathSave, setRollingDeathSave] = useState(false);
+  const [firstAidMessage, setFirstAidMessage] = useState("");
   const categoryOrder: SkillCategory[] = ["awareness", "body", "control", "education", "fighting", "performance", "ranged_weapon", "social", "technique"];
   const statNames: Record<AttributeName, string> = {
     INT: "Inteligência",
@@ -275,6 +278,23 @@ export default function CharacterSheet({
     if ("error" in resolution) { setCombatError(resolution.error); return; }
     setCombatError(""); setReceivedDamage(""); setLastDamageReceived(resolution.result); onUpdate(resolution.character);
   }
+  function handleDeathSave() {
+    setRollingDeathSave(true);
+    setLastDeathSave(null);
+    const resolution = rollDeathSave(character);
+    setLastDeathSave(resolution.result);
+    onUpdate(resolution.character);
+    setTimeout(() => setRollingDeathSave(false), 1500);
+  }
+  function handleFirstAid() {
+    const resolution = applyFirstAid(character);
+    if (resolution.restored) {
+      setFirstAidMessage("First Aid bem-sucedido! Personagem retornado para 1 HP.");
+      setLastDeathSave(null);
+      onUpdate(resolution.character);
+      setTimeout(() => setFirstAidMessage(""), 3000);
+    }
+  }
   function sellItem(inventoryItemId: string) {
     const result = sellInventoryItem(character, inventoryItemId);
     if ("error" in result) { setCombatError("Não foi possível vender este item."); return; }
@@ -353,6 +373,26 @@ export default function CharacterSheet({
             <strong>
               {character.combat.hp.current} <i>/</i> {character.combat.hp.max}
             </strong>
+            {(() => {
+              const hpStatus = calculateHPStatus(character.combat.hp.current, character.combat.hp.max, character.combat.isDead);
+              const statusLabels: Record<import("@/lib/calculations").HPStatus, string> = {
+                normal: "Normal",
+                seriously_wounded: "S. Wounded",
+                mortally_wounded: "M. Wounded",
+                dead: "Dead",
+              };
+              const statusClasses: Record<import("@/lib/calculations").HPStatus, string> = {
+                normal: "hp-status-normal",
+                seriously_wounded: "hp-status-seriously-wounded",
+                mortally_wounded: "hp-status-mortally-wounded",
+                dead: "hp-status-dead",
+              };
+              return (
+                <span className={`hp-status-badge hero-hp-status ${statusClasses[hpStatus]}`}>
+                  {statusLabels[hpStatus]}
+                </span>
+              );
+            })()}
           </div>
           <div>
             <small>Humanidade</small>
@@ -455,6 +495,85 @@ export default function CharacterSheet({
                 value={`${character.combat.stamina.current} / ${character.combat.stamina.max}`}
               />
             </div>
+            {(() => {
+              const hpStatus = calculateHPStatus(character.combat.hp.current, character.combat.hp.max, character.combat.isDead);
+              const woundThreshold = calculateWoundThreshold(character.combat.hp.max);
+              const statusLabels: Record<import("@/lib/calculations").HPStatus, string> = {
+                normal: "Normal",
+                seriously_wounded: "Seriously Wounded",
+                mortally_wounded: "Mortally Wounded",
+                dead: "Dead",
+              };
+              const statusClasses: Record<import("@/lib/calculations").HPStatus, string> = {
+                normal: "hp-status-normal",
+                seriously_wounded: "hp-status-seriously-wounded",
+                mortally_wounded: "hp-status-mortally-wounded",
+                dead: "hp-status-dead",
+              };
+              return (
+                <div className="hp-status-section">
+                  <div className="hp-status-row">
+                    <span className={`hp-status-badge ${statusClasses[hpStatus]}`}>
+                      {statusLabels[hpStatus]}
+                    </span>
+                    {hpStatus === "seriously_wounded" && (
+                      <span className="hp-status-penalty">−2 em todas as ações</span>
+                    )}
+                    {hpStatus === "seriously_wounded" && (
+                      <span className="hp-status-threshold">Threshold: {woundThreshold}</span>
+                    )}
+                  </div>
+                  {hpStatus === "mortally_wounded" && (
+                    <div className="death-save-section">
+                      <div className="death-save-info">
+                        <span className="death-save-dc">DC: {character.combat.deathSaveDC}</span>
+                        <span className="death-save-failures">Falhas: {character.combat.deathSaveFailures}</span>
+                      </div>
+                      <div className="death-save-actions">
+                        <button
+                          type="button"
+                          className="death-save-btn"
+                          onClick={handleDeathSave}
+                          disabled={rollingDeathSave || character.combat.isDead}
+                        >
+                          {rollingDeathSave ? "🎲 Rollando..." : "🎲 Death Save (1d10 vs DC)"}
+                        </button>
+                        <button
+                          type="button"
+                          className="first-aid-btn"
+                          onClick={handleFirstAid}
+                        >
+                          🩹 First Aid (→ 1 HP)
+                        </button>
+                      </div>
+                      {lastDeathSave && (
+                        <div className={`death-save-result ${lastDeathSave.success ? "death-save-success" : "death-save-fail"}`}>
+                          <span>
+                            {lastDeathSave.success ? "✓ Sucesso!" : "✗ Falha!"}{" "}
+                            1d10 [{lastDeathSave.diceRoll}] vs DC {lastDeathSave.dc}
+                          </span>
+                          {!lastDeathSave.success && (
+                            <span className="death-save-next-dc">
+                              Próximo DC: {Math.max(0, lastDeathSave.dc - 1)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {firstAidMessage && (
+                        <div className="first-aid-message">{firstAidMessage}</div>
+                      )}
+                    </div>
+                  )}
+                  {hpStatus === "dead" && (
+                    <div className="death-save-section">
+                      <div className="hp-status-dead-message">
+                        ☠️ Personagem morreu.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div className="combat-armor">
               <div className="combat-armor-slot">
                 <small>Cabeça</small>

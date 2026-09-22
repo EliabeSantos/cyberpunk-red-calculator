@@ -56,7 +56,7 @@ export function applyReceivedDamage(
   const armorSPAfter = damageToHP > 0 ? Math.max(0, armorSPBefore - 1) : armorSPBefore;
 
   const hpBefore = character.combat.hp.current;
-  const hpAfter = Math.max(0, hpBefore - damageToHP);
+  const hpAfter = hpBefore - damageToHP; // Permite valores negativos
 
   // Wound Threshold e detecção de Seriously Wounded
   const woundThreshold = calculateWoundThreshold(character.combat.hp.max);
@@ -77,6 +77,16 @@ export function applyReceivedDamage(
     const injury = rollCriticalInjury(hitLocation);
     criticalInjury = injury;
     criticalInjuryTriggered = true;
+  }
+
+  // Inicializa Death Save DC quando HP chega a 0 ou abaixo
+  let newDeathSaveDC = character.combat.deathSaveDC;
+  let newDeathSaveFailures = character.combat.deathSaveFailures;
+  let newIsDead = character.combat.isDead;
+  if (hpAfter <= 0 && hpBefore > 0 && !newIsDead) {
+    // Primeira vez que chega a 0 ou abaixo: DC = BODY
+    newDeathSaveDC = character.stats.BODY;
+    newDeathSaveFailures = 0;
   }
 
   const entry: RollHistoryEntry = {
@@ -107,6 +117,9 @@ export function applyReceivedDamage(
       criticalInjuries: criticalInjuryTriggered && criticalInjury
         ? [...character.combat.criticalInjuries, criticalInjury]
         : character.combat.criticalInjuries,
+      deathSaveDC: newDeathSaveDC,
+      deathSaveFailures: newDeathSaveFailures,
+      isDead: newIsDead,
     },
     rollHistory: [entry, ...character.rollHistory],
   };
@@ -144,7 +157,7 @@ export function applyAttackDamage(
   const armorSPAfter = damageToHP > 0 ? Math.max(0, armorSPBefore - 1) : armorSPBefore;
 
   const hpBefore = character.combat.hp.current;
-  const hpAfter = Math.max(0, hpBefore - damageToHP);
+  const hpAfter = hpBefore - damageToHP; // Permite valores negativos
 
   const woundThreshold = calculateWoundThreshold(character.combat.hp.max);
   const wasSeriouslyWounded = hpBefore <= woundThreshold;
@@ -182,6 +195,15 @@ export function applyAttackDamage(
     newInjuries.push(criticalInjuryFromDiceResult);
   }
 
+  // Inicializa Death Save DC quando HP chega a 0 ou abaixo
+  let newDeathSaveDC = character.combat.deathSaveDC;
+  let newDeathSaveFailures = character.combat.deathSaveFailures;
+  let newIsDead = character.combat.isDead;
+  if (hpAfter <= 0 && hpBefore > 0 && !newIsDead) {
+    newDeathSaveDC = character.stats.BODY;
+    newDeathSaveFailures = 0;
+  }
+
   const entry: RollHistoryEntry = {
     id: crypto.randomUUID(),
     type: "received_damage",
@@ -210,6 +232,9 @@ export function applyAttackDamage(
       criticalInjuries: newInjuries.length > 0
         ? [...character.combat.criticalInjuries, ...newInjuries]
         : character.combat.criticalInjuries,
+      deathSaveDC: newDeathSaveDC,
+      deathSaveFailures: newDeathSaveFailures,
+      isDead: newIsDead,
     },
     rollHistory: [entry, ...character.rollHistory],
   };
@@ -232,5 +257,93 @@ export function applyAttackDamage(
   };
 
   return { character: updatedCharacter, result };
+}
+
+/** Resultado de um Death Save roll. */
+export interface DeathSaveResult {
+  diceRoll: number;
+  dc: number;
+  success: boolean;
+  failuresAfter: number;
+  characterDied: boolean;
+}
+
+/** Rola um Death Save para um personagem Mortally Wounded.
+ * Regra: 1d10 vs DC (inicial = BODY). Cada falha reduz DC em 1.
+ * Se o resultado > DC, o personagem morre.
+ */
+export function rollDeathSave(character: Character): { character: Character; result: DeathSaveResult } {
+  const dc = character.combat.deathSaveDC;
+  const roll = rollDice("1d10");
+  const diceRoll = roll.rolls[0];
+  const success = diceRoll <= dc;
+  let newFailures = character.combat.deathSaveFailures;
+  let newDC = dc;
+  let characterDied = false;
+
+  if (!success) {
+    newFailures += 1;
+    newDC = Math.max(0, dc - 1); // Cada falha reduz DC em1
+    // Verifica se o resultado do d10 é maior que o DC atual
+    if (diceRoll > newDC) {
+      characterDied = true;
+    }
+  }
+
+  const entry: RollHistoryEntry = {
+    id: crypto.randomUUID(),
+    type: "free_roll",
+    label: success ? "Death Save (sucesso)" : "Death Save (falha)",
+    characterId: character.id,
+    expression: `1d10 [${diceRoll}] vs DC ${dc}`,
+    rolls: [diceRoll],
+    total: diceRoll,
+    timestamp: new Date().toISOString(),
+  };
+
+  const updatedCharacter: Character = {
+    ...character,
+    combat: {
+      ...character.combat,
+      deathSaveDC: newDC,
+      deathSaveFailures: newFailures,
+      isDead: characterDied,
+    },
+    rollHistory: [entry, ...character.rollHistory],
+  };
+
+  return {
+    character: updatedCharacter,
+    result: {
+      diceRoll,
+      dc,
+      success,
+      failuresAfter: newFailures,
+      characterDied,
+    },
+  };
+}
+
+/** Aplica First Aid em um personagem Mortally Wounded.
+ * Regra: First Aid bem-sucedido permite retornar para 1 HP.
+ * Reseta o estado de Death Save.
+ */
+export function applyFirstAid(character: Character): { character: Character; restored: boolean } {
+  if (character.combat.hp.current > 0 || character.combat.isDead) {
+    return { character, restored: false };
+  }
+
+  const updatedCharacter: Character = {
+    ...character,
+    combat: {
+      ...character.combat,
+      hp: { ...character.combat.hp, current:1 },
+      deathSaveDC: 0,
+      deathSaveFailures: 0,
+      isDead: false,
+    },
+  };
+
+  return { character: updatedCharacter, restored: true };
 }
 
