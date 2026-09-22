@@ -6,7 +6,6 @@ import { usePathname } from "next/navigation";
 const navItems: Array<{ href: string; label: string; icon: string; disabled?: boolean }> = [
   { href: "/gm", label: "Inimigos", icon: "👥" },
   { href: "/gm/create", label: "Criar Inimigo", icon: "➕" },
-  { href: "/gm/dice", label: "Rolagem de Dados", icon: "🎲" },
   { href: "/gm/encounters", label: "Combate", icon: "⚔️" },
 ];
 

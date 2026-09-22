@@ -1,6 +1,7 @@
 import "client-only";
 
 import type { Enemy } from "@/types/enemy";
+import type { PersonalityTrait } from "@/data/personalityTraits";
 import { rollDice } from "@/lib/dice";
 
 const STORAGE_PREFIX = "cyberpunk-red-toolkit";
@@ -166,6 +167,8 @@ export interface EncounterParticipant {
   lastAttackRoll: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
   lastDamageRoll: { rolls: number[]; total: number } | null;
   initiative: number | null;
+  // Personality traits for roleplay
+  personalityTraits: PersonalityTrait[];
 }
 
 export interface EncounterData {
@@ -245,6 +248,9 @@ export function createEncounterFromFaction(
     };
   }
 
+  // Lazy import to avoid circular dependency issues
+  const { getRandomTraits } = require("@/data/personalityTraits");
+
   const participants: EncounterParticipant[] = [];
 
   for (let i = 0; i < enemyCount; i++) {
@@ -280,6 +286,7 @@ export function createEncounterFromFaction(
       lastAttackRoll: null,
       lastDamageRoll: null,
       initiative: null,
+      personalityTraits: getRandomTraits(2),
     });
   }
 

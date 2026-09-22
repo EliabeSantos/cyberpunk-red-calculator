@@ -340,153 +340,216 @@ export default function EncountersPageClient() {
           </div>
 
           <div className="encounter-participants">
-            {encounter.participants.map((p, index) => (
-              <div
-                key={index}
-                className={`encounter-participant-card ${selectedParticipant === index ? "encounter-participant-selected" : ""} ${p.hp.current <= 0 ? "encounter-participant-down" : ""}`}
-                onClick={() => handleSelectParticipant(index)}
-              >
-                <div className="encounter-participant-header">
-                  <span className="encounter-participant-name">{p.name}</span>
-                  {p.initiative != null && (
-                    <span className="encounter-initiative">{p.initiative}</span>
-                  )}
-                  <span className="encounter-participant-archetype">{p.archetype}</span>
-                </div>
-                <div className="encounter-participant-stats">
-                  <div className="encounter-hp-bar">
-                    <div
-                      className="encounter-hp-fill"
-                      style={{
-                        width: `${(p.hp.current / p.hp.max) * 100}%`,
-                        backgroundColor: p.hp.current > p.hp.max * 0.5 ? "#2e7d32" : p.hp.current > p.hp.max * 0.25 ? "#f57f17" : "#c62828",
-                      }}
-                    />
-                    <span className="encounter-hp-text">{p.hp.current}/{p.hp.max}</span>
-                  </div>
-                  <div className="encounter-armor-info">
-                    🛡️ H:{p.armor.head} B:{p.armor.body}
-                    <span className="encounter-weapon-info">⚔️ {p.weaponName} · {p.weaponSkillName} ({p.skillValue}) + REF {p.refStat}</span>
-                  </div>
-                  <div className="encounter-roll-row">
-                    <button
-                      className="gm-button gm-button-small"
-                      onClick={(e) => { e.stopPropagation(); handleRollAttack(index); }}
-                    >
-                      🎲 Atacar
-                    </button>
-                    {p.lastAttackRoll != null && (
-                      <span className={`encounter-attack-roll ${p.lastAttackRoll.fumble ? "encounter-roll-fumble" : p.lastAttackRoll.critical ? "encounter-roll-crit" : ""}`}>
-                        {p.lastAttackRoll.fumble && "💀 Falha! "}
-                        {p.lastAttackRoll.critical && "⚡ Crítico! "}
-                        d10({p.lastAttackRoll.diceRolls.map((r) => r > 0 ? r : r).join(", ")}) + {p.attackBase} = <strong>{p.lastAttackRoll.total}</strong>
-                      </span>
-                    )}
-                  </div>
-                  <div className="encounter-roll-row">
-                    <button
-                      className="gm-button gm-button-small"
-                      onClick={(e) => { e.stopPropagation(); handleRollDamage(index); }}
-                    >
-                      🔥 Dano ({p.damageExpression})
-                    </button>
-                    {p.lastDamageRoll != null && (
-                      <span className="encounter-damage-roll">
-                        {p.lastDamageRoll.rolls.join(" + ")} = <strong>{p.lastDamageRoll.total}</strong> dmg
-                      </span>
-                    )}
-                  </div>
-                  {p.conditions.length > 0 && (
-                    <div className="encounter-conditions">
-                      {p.conditions.map((c, ci) => (
-                        <span key={ci} className="encounter-condition-tag">
-                          {c.name}
-                          <button
-                            className="encounter-condition-remove"
-                            onClick={(e) => { e.stopPropagation(); handleRemoveCondition(index, c.id); }}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
+            {encounter.participants.map((p, index) => {
+              const isSelected = selectedParticipant === index;
+              const isDown = p.hp.current <= 0;
+              const hpPercent = (p.hp.current / p.hp.max) * 100;
+              const hpColor = hpPercent > 50 ? "#2e7d32" : hpPercent > 25 ? "#f57f17" : "#c62828";
+              return (
+                <div
+                  key={index}
+                  className={`encounter-participant-card ${isSelected ? "encounter-participant-selected" : ""} ${isDown ? "encounter-participant-down" : ""}`}
+                  onClick={() => handleSelectParticipant(index)}
+                >
+                  {/* ── Header ── */}
+                  <div className="epc-header">
+                    <div className="epc-header-left">
+                      <span className="epc-name">{p.name || "Sem nome"}</span>
+                      {p.initiative != null && (
+                        <span className="epc-initiative">{p.initiative}</span>
+                      )}
                     </div>
-                  )}
-                </div>
-                {selectedParticipant === index && (
-                  <div className="encounter-participant-controls">
-                    <div className="encounter-control-row">
-                      <input
-                        className="gm-form-input gm-form-input-small"
-                        type="number"
-                        min={0}
-                        placeholder="Dano"
-                        value={damageValue}
-                        onChange={(e) => setDamageValue(e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
+                    <span className="epc-archetype">{p.archetype}</span>
+                  </div>
+
+                  {/* ── Status ── */}
+                  <div className="epc-section">
+                    <div className="epc-hp-row">
+                      <span className="epc-hp-label">HP</span>
+                      <span className="epc-hp-value">{p.hp.current}<small> / {p.hp.max}</small></span>
+                    </div>
+                    <div className="epc-hp-bar">
+                      <div
+                        className="epc-hp-fill"
+                        style={{ width: `${hpPercent}%`, backgroundColor: hpColor }}
                       />
-                      <button className="gm-button gm-button-small" onClick={(e) => { e.stopPropagation(); handleApplyDamage(index); }}>
-                        💥 Aplicar
-                      </button>
-                      <button className="gm-button gm-button-small" onClick={(e) => { e.stopPropagation(); handleHeal(index); }}>
-                        ❤️
-                      </button>
                     </div>
-                    <div className="encounter-control-row">
-                      <label className="encounter-armor-toggle" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={ignoreArmor}
-                          onChange={(e) => setIgnoreArmor(e.target.checked)}
-                        />
-                        Ignorar Armadura
-                      </label>
-                      <span className="encounter-hit-location">
-                        <button
-                          className={`gm-button gm-button-small ${hitLocation === "head" ? "gm-button-active" : ""}`}
-                          onClick={(e) => { e.stopPropagation(); setHitLocation("head"); }}
-                        >
-                          🧠 Cabeça (SP {p.armor.head})
-                        </button>
-                        <button
-                          className={`gm-button gm-button-small ${hitLocation === "body" ? "gm-button-active" : ""}`}
-                          onClick={(e) => { e.stopPropagation(); setHitLocation("body"); }}
-                        >
-                          🫁 Corpo (SP {p.armor.body})
-                        </button>
-                      </span>
+                  </div>
+
+                  {/* ── Combat Info ── */}
+                  <div className="epc-section epc-combat-info">
+                    <div className="epc-info-row">
+                      <span className="epc-info-label">🛡️ Armadura</span>
+                      <span className="epc-info-value">C {p.armor.body} · H {p.armor.head}</span>
                     </div>
-                    <div className="encounter-control-row encounter-condition-row">
-                      <select
-                        className="gm-form-select gm-form-select-small"
-                        value={conditionName}
-                        onChange={(e) => setConditionName(e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
+                    <div className="epc-info-row">
+                      <span className="epc-info-label">⚔️ Arma</span>
+                      <span className="epc-info-value">{p.weaponName}</span>
+                    </div>
+                    <div className="epc-info-row">
+                      <span className="epc-info-label">🎯 Base</span>
+                      <span className="epc-info-value">{p.weaponSkillName} ({p.skillValue}) + REF {p.refStat} = <strong>{p.attackBase}</strong></span>
+                    </div>
+                  </div>
+
+                  {/* ── Rolls ── */}
+                  <div className="epc-section epc-rolls">
+                    <div className="epc-roll-row">
+                      <button
+                        className="gm-button gm-button-small"
+                        onClick={(e) => { e.stopPropagation(); handleRollAttack(index); }}
                       >
-                        <option value="">— Ferimentos —</option>
-                        <optgroup label={hitLocation === "head" ? "🧠 Cabeça" : "🫁 Corpo"}>
-                          {(hitLocation === "head" ? headCriticalInjuries : bodyCriticalInjuries).map((inj) => (
-                            <option key={inj.name} value={inj.name}>
-                              {inj.name}
-                            </option>
-                          ))}
-                        </optgroup>
-                      </select>
-                      <input
-                        className="gm-form-input gm-form-input-small"
-                        type="text"
-                        placeholder="ou digite..."
-                        value={conditionName}
-                        onChange={(e) => setConditionName(e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                      <button className="gm-button gm-button-small" onClick={(e) => { e.stopPropagation(); handleAddCondition(index); }} disabled={!conditionName.trim()}>
-                        ➕
+                        🎲 Atacar
                       </button>
+                      {p.lastAttackRoll != null && (
+                        <span className={`epc-roll-result ${p.lastAttackRoll.fumble ? "epc-roll-fumble" : p.lastAttackRoll.critical ? "epc-roll-crit" : ""}`}>
+                          {p.lastAttackRoll.fumble && "💀 "}
+                          {p.lastAttackRoll.critical && "⚡ "}
+                          d10({p.lastAttackRoll.diceRolls.join(", ")}) + {p.attackBase} = <strong>{p.lastAttackRoll.total}</strong>
+                        </span>
+                      )}
+                    </div>
+                    <div className="epc-roll-row">
+                      <button
+                        className="gm-button gm-button-small"
+                        onClick={(e) => { e.stopPropagation(); handleRollDamage(index); }}
+                      >
+                        🔥 Dano ({p.damageExpression})
+                      </button>
+                      {p.lastDamageRoll != null && (
+                        <span className="epc-roll-result epc-damage-result">
+                          {p.lastDamageRoll.rolls.join(" + ")} = <strong>{p.lastDamageRoll.total}</strong> dmg
+                        </span>
+                      )}
                     </div>
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {/* ── Tags ── */}
+                  {(p.conditions.length > 0 || (p.personalityTraits && p.personalityTraits.length > 0)) && (
+                    <div className="epc-section epc-tags">
+                      {p.personalityTraits && p.personalityTraits.length > 0 && (
+                        <div className="epc-tag-group">
+                          {p.personalityTraits.map((trait) => (
+                            <span key={trait.id} className="epc-tag epc-tag-personality" title={trait.description}>
+                              🎭 {trait.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {p.conditions.length > 0 && (
+                        <div className="epc-tag-group">
+                          {p.conditions.map((c, ci) => (
+                            <span key={ci} className="epc-tag epc-tag-condition">
+                              {c.name}
+                              <button
+                                className="epc-tag-remove"
+                                onClick={(e) => { e.stopPropagation(); handleRemoveCondition(index, c.id); }}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Selected Controls ── */}
+                  {isSelected && (
+                    <div className="epc-controls">
+                      <div className="epc-controls-section">
+                        <span className="epc-controls-label">Dano</span>
+                        <div className="epc-controls-row">
+                          <input
+                            className="gm-form-input gm-form-input-small"
+                            type="number"
+                            min={0}
+                            placeholder="Valor"
+                            value={damageValue}
+                            onChange={(e) => setDamageValue(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <button className="gm-button gm-button-small" onClick={(e) => { e.stopPropagation(); handleApplyDamage(index); }}>
+                            💥 Aplicar
+                          </button>
+                          <button className="gm-button gm-button-small" onClick={(e) => { e.stopPropagation(); handleHeal(index); }}>
+                            ❤️ Curar
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="epc-controls-section">
+                        <div className="epc-controls-label-row">
+                          <span className="epc-controls-label">Local do Golpe</span>
+                          <label className="epc-armor-ignore" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={ignoreArmor}
+                              onChange={(e) => setIgnoreArmor(e.target.checked)}
+                            />
+                            <span className="epc-armor-ignore-text">Ignorar Armadura</span>
+                          </label>
+                        </div>
+                        <div className="epc-zone-picker">
+                          <button
+                            className={`epc-zone ${hitLocation === "head" ? "epc-zone-active" : ""}`}
+                            onClick={(e) => { e.stopPropagation(); setHitLocation("head"); }}
+                          >
+                            <span className="epc-zone-icon">🧠</span>
+                            <span className="epc-zone-info">
+                              <span className="epc-zone-name">Cabeça</span>
+                              <span className="epc-zone-sp">SP {p.armor.head}</span>
+                            </span>
+                          </button>
+                          <button
+                            className={`epc-zone ${hitLocation === "body" ? "epc-zone-active" : ""}`}
+                            onClick={(e) => { e.stopPropagation(); setHitLocation("body"); }}
+                          >
+                            <span className="epc-zone-icon">🫁</span>
+                            <span className="epc-zone-info">
+                              <span className="epc-zone-name">Corpo</span>
+                              <span className="epc-zone-sp">SP {p.armor.body}</span>
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="epc-controls-section">
+                        <span className="epc-controls-label">Condição / Ferimento</span>
+                        <div className="epc-controls-row epc-condition-inputs">
+                          <select
+                            className="gm-form-select gm-form-select-small"
+                            value={conditionName}
+                            onChange={(e) => setConditionName(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <option value="">— Ferimentos —</option>
+                            <optgroup label={hitLocation === "head" ? "🧠 Cabeça" : "🫁 Corpo"}>
+                              {(hitLocation === "head" ? headCriticalInjuries : bodyCriticalInjuries).map((inj) => (
+                                <option key={inj.name} value={inj.name}>
+                                  {inj.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          </select>
+                          <input
+                            className="gm-form-input gm-form-input-small"
+                            type="text"
+                            placeholder="ou digite..."
+                            value={conditionName}
+                            onChange={(e) => setConditionName(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <button className="gm-button gm-button-small" onClick={(e) => { e.stopPropagation(); handleAddCondition(index); }} disabled={!conditionName.trim()}>
+                            ➕
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <div className="encounter-summary">
