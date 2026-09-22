@@ -46,6 +46,8 @@ const TYPE_ICONS: Record<RollHistoryEntry["type"], string> = {
   free_roll: "🎲",
 };
 
+type HistoryTab = "all" | "humanity";
+
 export default function DiceDrawer({
   open,
   onClose,
@@ -54,6 +56,11 @@ export default function DiceDrawer({
 }: DiceDrawerProps) {
   const [expression, setExpression] = useState("1d6");
   const [error, setError] = useState("");
+  const [activeTab, setActiveTab] = useState<HistoryTab>("all");
+
+  const humanityHistory = rollHistory.filter((e) => e.type === "humanity_loss");
+  const otherHistory = rollHistory.filter((e) => e.type !== "humanity_loss");
+  const displayHistory = activeTab === "humanity" ? humanityHistory : rollHistory;
 
   function handleRoll(expr?: string) {
     const target = expr ?? expression;
@@ -89,6 +96,8 @@ export default function DiceDrawer({
     total: number;
     critical?: boolean;
     fumble?: boolean;
+    humanityBefore?: number;
+    humanityAfter?: number;
   } {
     const icon = TYPE_ICONS[entry.type] ?? "🎲";
     const typeLabel = TYPE_LABELS[entry.type] ?? entry.type;
@@ -113,8 +122,13 @@ export default function DiceDrawer({
       }
     }
 
+    let humanityBefore: number | undefined;
+    let humanityAfter: number | undefined;
+
     if (entry.type === "humanity_loss") {
       if (entry.humanityBefore !== undefined && entry.humanityAfter !== undefined) {
+        humanityBefore = entry.humanityBefore;
+        humanityAfter = entry.humanityAfter;
         detail = `${entry.humanityBefore} → ${entry.humanityAfter}`;
       }
     }
@@ -124,7 +138,7 @@ export default function DiceDrawer({
       detail = "";
     }
 
-    return { icon, typeLabel, mainLabel, detail, rollsStr, total: entry.total, critical, fumble };
+    return { icon, typeLabel, mainLabel, detail, rollsStr, total: entry.total, critical, fumble, humanityBefore, humanityAfter };
   }
 
   return (
@@ -187,18 +201,38 @@ export default function DiceDrawer({
             </div>
           </section>
 
-          <section className="dice-drawer-section">
-            <h3>Histórico ({rollHistory.length})</h3>
-            {rollHistory.length === 0 ? (
-              <p className="dice-empty">Nenhuma rolagem ainda.</p>
+          <section className="dice-drawer-section dice-history-section">
+            <div className="dice-history-tabs">
+              <button
+                type="button"
+                className={`dice-tab ${activeTab === "all" ? "active" : ""}`}
+                onClick={() => setActiveTab("all")}
+              >
+                Todos ({rollHistory.length})
+              </button>
+              <button
+                type="button"
+                className={`dice-tab ${activeTab === "humanity" ? "active" : ""}`}
+                onClick={() => setActiveTab("humanity")}
+              >
+                🧠 Humanidade ({humanityHistory.length})
+              </button>
+            </div>
+
+            {displayHistory.length === 0 ? (
+              <p className="dice-empty">
+                {activeTab === "humanity"
+                  ? "Nenhuma perda de humanidade registrada."
+                  : "Nenhuma rolagem ainda."}
+              </p>
             ) : (
               <div className="dice-history">
-                {rollHistory.map((entry) => {
+                {displayHistory.map((entry) => {
                   const info = formatEntry(entry);
                   return (
                     <div
                       key={entry.id}
-                      className="dice-history-entry"
+                      className={`dice-history-entry ${entry.type === "humanity_loss" ? "humanity-entry" : ""}`}
                     >
                       <div className="dice-history-left">
                         <span className="dice-history-icon">{info.icon}</span>
@@ -215,13 +249,28 @@ export default function DiceDrawer({
                           <span className="dice-history-meta">
                             <span className="dice-history-type">{info.typeLabel}</span>
                             {info.detail && <> · {info.detail}</>}
-                            {info.rollsStr && <> · {info.rollsStr}</>}
+                            {info.rollsStr && entry.type !== "humanity_loss" && <> · {info.rollsStr}</>}
                           </span>
+                          {entry.type === "humanity_loss" && info.rollsStr && (
+                            <span className="dice-history-rolls">
+                              {info.rollsStr} = {info.total}
+                            </span>
+                          )}
                         </div>
                       </div>
-                      <span className="dice-history-total">
-                        {info.total}
-                      </span>
+                      {entry.type === "humanity_loss" && info.humanityBefore !== undefined && info.humanityAfter !== undefined ? (
+                        <div className="humanity-change">
+                          <span className="humanity-before">{info.humanityBefore}</span>
+                          <span className="humanity-arrow">→</span>
+                          <span className={`humanity-after ${info.humanityAfter < info.humanityBefore ? "lost" : "gained"}`}>
+                            {info.humanityAfter}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="dice-history-total">
+                          {info.total}
+                        </span>
+                      )}
                     </div>
                   );
                 })}

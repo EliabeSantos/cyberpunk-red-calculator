@@ -787,85 +787,103 @@ export default function CharacterSheet({
               (() => {
                 const attack = lastAttack ?? character.lastAttack!;
                 return (
-                  <div className="attack-result" role="status">
-                    {/* Header with badges */}
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.2rem" }}>
-                      <strong style={{ color: "var(--foreground)", fontSize: "0.8rem" }}>{attack.label}</strong>
-                      {attack.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
-                      {attack.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
-                      {!attack.critical && !attack.fumble && (
-                        <span style={{ marginLeft: "auto", color: "var(--accent)", fontWeight: 700, fontSize: "0.85rem" }}>
-                          {attack.total}
-                        </span>
-                      )}
-                    </div>
-                    {/* Formula */}
-                    <span className="roll-formula">
-                      {attack.stat.id} {attack.stat.value} + {attack.skill.id} {attack.skill.value} + 1d10
-                    </span>
-                    {/* Dice */}
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.2rem", margin: "0.15rem 0" }}>
-                      {attack.diceRolls?.map((r: any, idx: number) => (
-                        <React.Fragment key={idx}>
-                          {r.type === "crit" && <strong className="die-crit">[{r.value}]</strong>}
-                          {r.type === "crit_add" && <strong className="die-crit">+[{r.value}]</strong>}
-                          {r.type === "fumble" && <strong className="die-fumble">[{r.value}]</strong>}
-                          {r.type === "fumble_sub" && <strong className="die-fumble">−[{r.value}]</strong>}
-                          {r.type === "normal" && <span className="die-normal">[{r.value}]</span>}
-                        </React.Fragment>
-                      ))}
-                    </div>
-                    {/* Subtotal */}
-                    <span className="roll-subtotal">Dados = {attack.diceTotal}</span>
-                    {/* Modifiers */}
-                    {attack.modifiers.length > 0 && (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", margin: "0.1rem 0" }}>
-                        {attack.modifiers.map((modifier, idx) => (
-                          <span key={idx} style={{ border: "1px solid #3a4a3d", borderRadius: "3px", padding: "0.1rem 0.3rem", fontSize: "0.6rem", color: "var(--muted)" }}>
-                            {modifier.source} {modifier.value >= 0 ? "+" : ""}{modifier.value}
+                  <div className="attack-result-card" role="status">
+                    {/* Attack Header */}
+                    <div className="attack-result-header">
+                      <div className="attack-weapon-info">
+                        <span className="attack-weapon-name">{attack.label}</span>
+                        {attack.attackType && (
+                          <span className={`attack-type-badge type-${attack.attackType}`}>
+                            {attack.attackType}
                           </span>
-                        ))}
+                        )}
+                      </div>
+                      <div className={`attack-total-display ${attack.critical ? 'critical' : ''} ${attack.fumble ? 'fumble' : ''}`}>
+                        {attack.total}
+                      </div>
+                    </div>
+
+                    {/* Badges */}
+                    {(attack.critical || attack.fumble) && (
+                      <div className="attack-badges">
+                        {attack.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
+                        {attack.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
                       </div>
                     )}
-                    {/* Total */}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "0.2rem", paddingTop: "0.3rem", borderTop: "1px solid #2a352c" }}>
-                      <span style={{ color: "var(--muted)", fontSize: "0.65rem" }}>Total</span>
-                      <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: "1.1rem", fontFamily: "var(--font-geist-mono), monospace" }}>{attack.total}</span>
-                    </div>
-                    {/* Damage roll button */}
-                    {attack.damageDice && (
-                      <button
-                        type="button"
-                        className="roll-damage"
-                        onClick={rollDamage}
-                        style={{ marginTop: "0.3rem" }}
-                      >
-                        🎲 Rolar dano ({attack.damageDice})
-                      </button>
-                    )}
-                    {/* Damage result */}
-                    {lastDamage && lastDamage.attackId === attack.attackId && (
-                      <div style={{ marginTop: "0.3rem", padding: "0.4rem", border: "1px solid #3a4a3d", borderRadius: "3px", background: "#0f1512" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <span style={{ color: "var(--muted)", fontSize: "0.65rem" }}>Dano ({lastDamage.damageDice})</span>
-                          <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: "0.9rem" }}>{lastDamage.total}</span>
-                        </div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.15rem", marginTop: "0.2rem" }}>
-                          {lastDamage.roll.rolls.map((roll, idx) => (
-                            <span key={idx} style={{ color: roll === 6 ? "var(--accent)" : "var(--foreground)", fontSize: "0.65rem" }}>[{roll}]</span>
+
+                    {/* Roll Breakdown */}
+                    <div className="attack-breakdown">
+                      <div className="attack-formula">
+                        <span className="formula-stat">{attack.stat.id} {attack.stat.value}</span>
+                        <span className="formula-plus">+</span>
+                        <span className="formula-skill">{attack.skill.id} {attack.skill.value}</span>
+                        <span className="formula-plus">+</span>
+                        <span className="formula-dice">1d10</span>
+                      </div>
+
+                      {/* Dice Results */}
+                      <div className="attack-dice-row">
+                        {attack.diceRolls?.map((r: any, idx: number) => (
+                          <span
+                            key={idx}
+                            className={`attack-die ${r.type === 'crit' || r.type === 'crit_add' ? 'crit' : ''} ${r.type === 'fumble' || r.type === 'fumble_sub' ? 'fumble' : ''}`}
+                          >
+                            {r.type === 'crit_add' && '+'}{r.type === 'fumble_sub' && '−'}[{r.value}]
+                          </span>
+                        ))}
+                        <span className="dice-subtotal">= {attack.diceTotal}</span>
+                      </div>
+
+                      {/* Modifiers */}
+                      {attack.modifiers.length > 0 && (
+                        <div className="attack-modifiers">
+                          {attack.modifiers.map((modifier, idx) => (
+                            <span key={idx} className="modifier-tag">
+                              {modifier.source} {modifier.value >= 0 ? '+' : ''}{modifier.value}
+                            </span>
                           ))}
                         </div>
-                        {(() => {
-                          const sixCount = lastDamage.roll.rolls.filter((r) => r === 6).length;
-                          if (sixCount >= 2) {
-                            return (
-                              <div style={{ marginTop: "0.3rem", padding: "0.3rem", border: "1px solid #ff6b6b", borderRadius: "3px", background: "#281815", color: "#ffcfbf", fontSize: "0.65rem", textAlign: "center" }}>
-                                ⚠ CRITICAL INJURY! {sixCount} resultados 6 no dano.
-                              </div>
-                            );
-                          }
-                          return null;
-                        })()}
+                      )}
+                    </div>
+
+                    {/* Damage Section */}
+                    {attack.damageDice && (
+                      <div className="attack-damage-section">
+                        <button
+                          type="button"
+                          className="roll-damage-btn"
+                          onClick={rollDamage}
+                        >
+                          🎲 Rolar Dano ({attack.damageDice})
+                        </button>
+
+                        {/* Damage Result */}
+                        {lastDamage && lastDamage.attackId === attack.attackId && (
+                          <div className="damage-result-card">
+                            <div className="damage-result-header">
+                              <span className="damage-label">Dano ({lastDamage.damageDice})</span>
+                              <span className="damage-total">{lastDamage.total}</span>
+                            </div>
+                            <div className="damage-dice-row">
+                              {lastDamage.roll.rolls.map((roll, idx) => (
+                                <span key={idx} className={`damage-die ${roll === 6 ? 'max' : ''}`}>
+                                  [{roll}]
+                                </span>
+                              ))}
+                            </div>
+                            {(() => {
+                              const sixCount = lastDamage.roll.rolls.filter((r) => r === 6).length;
+                              if (sixCount >= 2) {
+                                return (
+                                  <div className="critical-injury-warning">
+                                    ⚠ CRITICAL INJURY! {sixCount} resultados 6 no dano.
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1211,30 +1229,6 @@ export default function CharacterSheet({
           </section>
         )}
       <StorePanel character={character} onUpdate={onUpdate} />
-      {character.rollHistory.some(
-        (entry) => entry.type === "humanity_loss",
-      ) && (
-        <section className="sheet-panel roll-history">
-          <PanelTitle number="05">Histórico de Humanidade</PanelTitle>
-          {character.rollHistory
-            .filter((entry) => entry.type === "humanity_loss")
-            .slice(0, 5)
-            .map((entry) => (
-              <div key={entry.id}>
-                <strong>{entry.cyberwareName ?? entry.label}</strong>
-                <span>
-                  {entry.expression}{" "}
-                  {entry.rolls.length
-                    ? `→ ${entry.rolls.map((roll) => `[${roll}]`).join(" ")} = ${entry.total}`
-                    : `→ ${entry.total}`}
-                </span>
-                <small>
-                  {entry.humanityBefore} → {entry.humanityAfter} Humanidade
-                </small>
-              </div>
-            ))}
-        </section>
-      )}
       <section className="equipment-layout">
         <section className="sheet-panel weapons-panel">
           <PanelTitle number="05">Armas</PanelTitle>
