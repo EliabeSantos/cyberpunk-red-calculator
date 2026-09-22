@@ -98,6 +98,7 @@ export default function CharacterSheet({
   const [rollingInitiative, setRollingInitiative] = useState<number | null>(null);
   const [rollingEvasion, setRollingEvasion] = useState<number | null>(null);
   const [quickhackError, setQuickhackError] = useState("");
+  const [expandedQuickhack, setExpandedQuickhack] = useState<string | null>(null);
   const [diceDrawerOpen, setDiceDrawerOpen] = useState(false);
   const [humanityAdjustOpen, setHumanityAdjustOpen] = useState(false);
   const [humanityAdjustValue, setHumanityAdjustValue] = useState("");
@@ -1133,25 +1134,29 @@ export default function CharacterSheet({
                   : "Requer perícia Interface (nível 1+) para usar quickhacks."}
               </p>
             ) : (
-              <div className="quickhacks-groups">
-                {quickhackCategoriesOrder.map((category) => (
-                  <div className="quickhack-group" key={category}>
-                    <h3>{category}</h3>
-                    {availableQuickhacks
-                      .filter((qh) => qh.category === category)
-                      .map((quickhack) => (
-                    <div className="quickhack-row" key={quickhack.id}>
-                      <div>
-                        <strong>{quickhack.name}</strong>
-                        <small>
-                          DV: {quickhack.dv} · {quickhack.target} · {quickhack.duration}
-                        </small>
+              <div className="quickhacks-grid">
+                {availableQuickhacks.map((quickhack) => (
+                  <div
+                    key={quickhack.id}
+                    className={`quickhack-card ${expandedQuickhack === quickhack.id ? 'expanded' : ''}`}
+                    onClick={() => setExpandedQuickhack(expandedQuickhack === quickhack.id ? null : quickhack.id)}
+                  >
+                    <div className="quickhack-card-header">
+                      <div className="quickhack-card-title">
+                        <span className="quickhack-name">{quickhack.name}</span>
+                        <span className={`quickhack-category-badge badge-${quickhack.category.toLowerCase()}`}>
+                          {quickhack.category}
+                        </span>
                       </div>
-                      <div className="quickhack-actions">
+                      <div className="quickhack-card-meta">
+                        <span className="quickhack-dv">DV {quickhack.dv}</span>
                         <button
                           type="button"
-                          className="upgrade-skill"
-                          onClick={() => handleRollQuickhack(quickhack.id)}
+                          className="quickhack-roll-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRollQuickhack(quickhack.id);
+                          }}
                           aria-label={`Rolar ${quickhack.name}`}
                           disabled={rollingQuickhack?.id === quickhack.id}
                         >
@@ -1162,24 +1167,46 @@ export default function CharacterSheet({
                           )}
                         </button>
                       </div>
-                      <strong>DV {quickhack.dv}</strong>
-                      {lastQuickhack && lastQuickhack.quickhackId === quickhack.id && (
-                        <span className="quickhack-result">
-                          <span className="quickhack-roll-breakdown">
-                            {lastQuickhack.success ? "✓" : "✗"} Interface {lastQuickhack.skill.value} + {lastQuickhack.roll.expression}: {lastQuickhack.roll.rolls
-                              .map((roll) => `[${roll}]`)
-                              .join(" ")} = {lastQuickhack.roll.total}
-                          </span>
-                          <span className="quickhack-total">Total: <b>{lastQuickhack.total}</b> vs DV {quickhack.dv}</span>
-                          <small>{quickhack.effect}</small>
-                          <small>{quickhack.duration}</small>
-                        </span>
-                      )}
                     </div>
-                  ))}
-                </div>
-              ))}
-            </div>
+                    {expandedQuickhack === quickhack.id && (
+                      <div className="quickhack-card-details">
+                        <div className="quickhack-detail-row">
+                          <span className="quickhack-detail-label">Alvo:</span>
+                          <span className="quickhack-detail-value">{quickhack.target}</span>
+                        </div>
+                        <div className="quickhack-detail-row">
+                          <span className="quickhack-detail-label">Duração:</span>
+                          <span className="quickhack-detail-value">{quickhack.duration}</span>
+                        </div>
+                        <div className="quickhack-detail-row">
+                          <span className="quickhack-detail-label">Teste:</span>
+                          <span className="quickhack-detail-value">{quickhack.test}</span>
+                        </div>
+                        <div className="quickhack-detail-row">
+                          <span className="quickhack-detail-label">Efeito:</span>
+                          <span className="quickhack-detail-value effect">{quickhack.effect}</span>
+                        </div>
+                        {quickhack.notes && (
+                          <div className="quickhack-detail-row">
+                            <span className="quickhack-detail-label">Notas:</span>
+                            <span className="quickhack-detail-value notes">{quickhack.notes}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {lastQuickhack && lastQuickhack.quickhackId === quickhack.id && (
+                      <div className="quickhack-result-inline">
+                        <span className="quickhack-roll-breakdown">
+                          {lastQuickhack.success ? "✓" : "✗"} Interface {lastQuickhack.skill.value} + {lastQuickhack.roll.expression}: {lastQuickhack.roll.rolls
+                            .map((roll) => `[${roll}]`)
+                            .join(" ")} = {lastQuickhack.roll.total}
+                        </span>
+                        <span className="quickhack-total">Total: <b>{lastQuickhack.total}</b> vs DV {quickhack.dv}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
           )}
           </section>
         )}

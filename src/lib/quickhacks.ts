@@ -34,16 +34,21 @@ export function rollQuickhack(
     return { error: `Quickhack "${quickhackId}" não encontrado.`, character };
   }
 
-  const interfaceSkill = character.skills.interface;
-  if (!interfaceSkill || interfaceSkill.level <= 0) {
+  // Use the Interface rank from the Netrunner role ability (section 02),
+  // not the skill level, as they can get out of sync.
+  const interfaceRank = character.roleAbilities.find(
+    (ra) => ra.abilityId === "interface",
+  )?.rank ?? 0;
+
+  if (interfaceRank <= 0) {
     return {
-      error: "Personagem não possui a perícia Interface ou está no nível 0.",
+      error: "Personagem não possui a habilidade de Interface (rank 0).",
       character,
     };
   }
 
   const roll = rollDice("1d10");
-  const total = interfaceSkill.level + roll.total;
+  const total = interfaceRank + roll.total;
   const success = total >= quickhackDefinitions[quickhackId].dv;
 
   const result: QuickhackRollResult = {
@@ -52,7 +57,7 @@ export function rollQuickhack(
     category: quickhackDefinitions[quickhackId].category,
     dv: quickhackDefinitions[quickhackId].dv,
     stat: { id: "INT", value: 0 },
-    skill: { id: "interface", value: interfaceSkill.level },
+    skill: { id: "interface", value: interfaceRank },
     roll,
     total,
     success,
@@ -71,7 +76,7 @@ export function rollQuickhack(
     total,
     timestamp: new Date().toISOString(),
     stat: { id: "INT", value: 0 },
-    skill: { id: "interface", value: interfaceSkill.level },
+    skill: { id: "interface", value: interfaceRank },
     modifiers: [],
   };
 
