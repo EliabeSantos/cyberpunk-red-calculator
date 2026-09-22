@@ -379,7 +379,7 @@ export default function EncountersPageClient() {
                       <span className={`encounter-attack-roll ${p.lastAttackRoll.fumble ? "encounter-roll-fumble" : p.lastAttackRoll.critical ? "encounter-roll-crit" : ""}`}>
                         {p.lastAttackRoll.fumble && "💀 Falha! "}
                         {p.lastAttackRoll.critical && "⚡ Crítico! "}
-                        d10({p.lastAttackRoll.diceRolls.map((r) => r > 0 ? r : r).join(", ")}) + {p.refStat} + {p.skillValue} = <strong>{p.lastAttackRoll.total}</strong>
+                        d10({p.lastAttackRoll.diceRolls.map((r) => r > 0 ? r : r).join(", ")}) + {p.attackBase} = <strong>{p.lastAttackRoll.total}</strong>
                       </span>
                     )}
                   </div>
