@@ -1,12 +1,54 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { upsertEnemy, getEnemy } from "@/lib/gmStorage";
 import { createEmptyEnemy } from "@/types/enemy";
 import { archetypeOptions, threatLevels, threatLevelLabels } from "@/data/enemies";
 import { enemyStatNames } from "@/types/enemy";
 import type { Enemy, EnemyWeapon, EnemySkill, EnemyCondition } from "@/types/enemy";
+
+/** Common skill names used in the catalog, mapped to their primary stat. */
+const commonSkillOptions: Record<string, string> = {
+  "Evasion": "REF",
+  "Handgun": "REF",
+  "Shoulder Arms": "REF",
+  "Brawling": "REF",
+  "Melee Weapon": "REF",
+  "Autofire": "REF",
+  "Heavy Weapons": "REF",
+  "Stealth": "REF",
+  "Throwing Knife": "REF",
+  "Drive Land Vehicle": "REF",
+  "Perception": "INT",
+  "Tactics": "INT",
+  "Demolitions": "INT",
+  "Athletics": "BODY",
+  "Endurance": "BODY",
+  "First Aid": "TECH",
+  "Paramedic": "TECH",
+  "Electronics/Security Tech": "TECH",
+  "Basic Tech": "TECH",
+  "Cybertech": "TECH",
+};
+
+/** Common weapon names with default stats. */
+const commonWeaponOptions: Record<string, { damage: string; attackType: "melee" | "ranged" | "thrown"; skill: string; rateOfFire: number; ammo: number | null }> = {
+  "Light Melee Weapon": { damage: "1d6", attackType: "melee", skill: "Melee Weapon", rateOfFire: 2, ammo: null },
+  "Medium Melee Weapon": { damage: "2d6", attackType: "melee", skill: "Melee Weapon", rateOfFire: 2, ammo: null },
+  "Heavy Melee Weapon": { damage: "3d6", attackType: "melee", skill: "Melee Weapon", rateOfFire: 2, ammo: null },
+  "Very Heavy Melee Weapon": { damage: "4d6", attackType: "melee", skill: "Melee Weapon", rateOfFire: 1, ammo: null },
+  "Brawling": { damage: "2d6", attackType: "melee", skill: "Brawling", rateOfFire: 2, ammo: null },
+  "Medium Pistol": { damage: "2d6", attackType: "ranged", skill: "Handgun", rateOfFire: 2, ammo: 12 },
+  "Heavy Pistol": { damage: "3d6", attackType: "ranged", skill: "Handgun", rateOfFire: 2, ammo: 8 },
+  "Very Heavy Pistol": { damage: "4d6", attackType: "ranged", skill: "Handgun", rateOfFire: 1, ammo: 8 },
+  "SMG": { damage: "2d6", attackType: "ranged", skill: "Autofire", rateOfFire: 1, ammo: 40 },
+  "Shotgun": { damage: "5d6", attackType: "ranged", skill: "Shoulder Arms", rateOfFire: 1, ammo: 8 },
+  "Assault Shotgun": { damage: "5d6", attackType: "ranged", skill: "Shoulder Arms", rateOfFire: 2, ammo: 10 },
+  "Assault Rifle": { damage: "5d6", attackType: "ranged", skill: "Shoulder Arms", rateOfFire: 1, ammo: 25 },
+  "Heavy Machine Gun": { damage: "6d6", attackType: "ranged", skill: "Heavy Weapons", rateOfFire: 1, ammo: 50 },
+  "Grenade": { damage: "6d6", attackType: "thrown", skill: "Demolitions", rateOfFire: 1, ammo: 1 },
+};
 
 export default function CreateEnemyPageClient() {
   const router = useRouter();
@@ -23,7 +65,6 @@ export default function CreateEnemyPageClient() {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"identity" | "stats" | "skills" | "weapons" | "combat" | "conditions" | "notes">("identity");
 
   // Load enemy data when editing
   useEffect(() => {
@@ -73,6 +114,33 @@ export default function CreateEnemyPageClient() {
     }
   }, [enemy.stats.BODY, enemy.stats.WILL, enemy.combat.hp.max, updateCombat]);
 
+  /** Calculate attackBase for a weapon based on its skill and the enemy's stats. */
+  const calculateAttackBase = useCallback((skillName: string): number => {
+    const statName = commonSkillOptions[skillName];
+    if (!statName || !(statName in enemy.stats)) return 0;
+    const stat = enemy.stats[statName as keyof Enemy["stats"]];
+    // Find the enemy's skill entry to get the level
+    const skillEntry = Object.values(enemy.skills).find((s) => s.name === skillName);
+    const skillLevel = skillEntry?.level ?? 0;
+    return stat + skillLevel;
+  }, [enemy.stats, enemy.skills]);
+
+  // Recalculate attackBase for all weapons when stats or skills change
+  useEffect(() => {
+    let changed = false;
+    const updatedWeapons = enemy.weapons.map((w) => {
+      const correctBase = calculateAttackBase(w.skill);
+      if (w.attackBase !== correctBase) {
+        changed = true;
+        return { ...w, attackBase: correctBase };
+      }
+      return w;
+    });
+    if (changed) {
+      setEnemy((prev) => ({ ...prev, weapons: updatedWeapons, updatedAt: new Date().toISOString() }));
+    }
+  }, [enemy.stats, enemy.skills, enemy.weapons, calculateAttackBase]);
+
   const handleSave = async () => {
     if (!enemy.identity.name.trim()) {
       setError("Nome é obrigatório");
@@ -100,9 +168,11 @@ export default function CreateEnemyPageClient() {
   };
 
   // Skills management
-  const addSkill = () => {
-    const newSkill: EnemySkill = { name: "", stat: "REF", level: 1 };
-    const id = `skill_${Date.now()}`;
+  const addSkill = (predefined?: { name: string; stat: string }) => {
+    const name = predefined?.name ?? "";
+    const stat = (predefined?.stat ?? "REF") as EnemySkill["stat"];
+    const newSkill: EnemySkill = { name, stat, level: 1 };
+    const id = predefined?.name || `skill_${Date.now()}`;
     setEnemy((prev) => ({
       ...prev,
       skills: { ...prev.skills, [id]: newSkill },
@@ -111,14 +181,19 @@ export default function CreateEnemyPageClient() {
   };
 
   const updateSkill = (id: string, field: keyof EnemySkill, value: string | number) => {
-    setEnemy((prev) => ({
-      ...prev,
-      skills: {
+    setEnemy((prev) => {
+      const updatedSkills = {
         ...prev.skills,
         [id]: { ...prev.skills[id], [field]: value },
-      },
-      updatedAt: new Date().toISOString(),
-    }));
+      };
+      // If the name changed, also update the key
+      if (field === "name" && typeof value === "string" && value !== id) {
+        const { [id]: old, ...rest } = updatedSkills;
+        rest[value] = { ...old, name: value };
+        return { ...prev, skills: rest, updatedAt: new Date().toISOString() };
+      }
+      return { ...prev, skills: updatedSkills, updatedAt: new Date().toISOString() };
+    });
   };
 
   const removeSkill = (id: string) => {
@@ -129,15 +204,24 @@ export default function CreateEnemyPageClient() {
   };
 
   // Weapons management
-  const addWeapon = () => {
+  const addWeapon = (predefined?: string) => {
+    const preset = predefined ? commonWeaponOptions[predefined] : undefined;
+    const name = predefined ?? "";
     const newWeapon: EnemyWeapon = {
       id: `weapon_${Date.now()}`,
-      name: "",
-      damage: "1d6",
-      attackType: "melee",
-      skill: "brawling",
+      name,
+      damage: preset?.damage ?? "1d6",
+      attackType: preset?.attackType ?? "melee",
+      skill: preset?.skill ?? "brawling",
       attackBase: 0,
+      rateOfFire: preset?.rateOfFire ?? 2,
+      magazine: undefined,
+      ammo: preset?.ammo ?? undefined,
     };
+    // Auto-calculate attackBase if skill is known
+    if (preset?.skill) {
+      newWeapon.attackBase = calculateAttackBase(preset.skill);
+    }
     setEnemy((prev) => ({
       ...prev,
       weapons: [...prev.weapons, newWeapon],
@@ -145,10 +229,18 @@ export default function CreateEnemyPageClient() {
     }));
   };
 
-  const updateWeapon = (id: string, field: keyof EnemyWeapon, value: string | number) => {
+  const updateWeapon = (id: string, field: keyof EnemyWeapon, value: string | number | undefined) => {
     setEnemy((prev) => ({
       ...prev,
-      weapons: prev.weapons.map((w) => (w.id === id ? { ...w, [field]: value } : w)),
+      weapons: prev.weapons.map((w) => {
+        if (w.id !== id) return w;
+        const updated = { ...w, [field]: value };
+        // Auto-recalculate attackBase when skill changes
+        if (field === "skill" && typeof value === "string") {
+          updated.attackBase = calculateAttackBase(value);
+        }
+        return updated;
+      }),
       updatedAt: new Date().toISOString(),
     }));
   };
@@ -191,27 +283,24 @@ export default function CreateEnemyPageClient() {
     }));
   };
 
-  const tabs = [
-    { id: "identity", label: "Identidade", icon: "👤" },
-    { id: "stats", label: "Atributos", icon: "📊" },
-    { id: "skills", label: "Perícias", icon: "🎯" },
-    { id: "weapons", label: "Armas", icon: "⚔️" },
-    { id: "combat", label: "Combate", icon: "❤️" },
-    { id: "conditions", label: "Condições", icon: "🩹" },
-    { id: "notes", label: "Notas GM", icon: "📝" },
-  ] as const;
+  // Derived: list of skill names the enemy already has
+  const existingSkillNames = useMemo(
+    () => Object.values(enemy.skills).map((s) => s.name).filter(Boolean),
+    [enemy.skills]
+  );
+
+  // Predefined skills not yet added
+  const availablePredefinedSkills = useMemo(
+    () => Object.entries(commonSkillOptions).filter(([name]) => !enemy.skills[name]),
+    [enemy.skills]
+  );
 
   return (
     <div className="gm-page gm-create-page">
       <header className="gm-page-header">
-        <div className="gm-page-header-main">
-          <button className="gm-page-back" onClick={handleCancel} aria-label="Voltar">
-            ← Voltar
-          </button>
-          <div>
-            <h1 className="gm-page-title">{isEditing ? "Editar Inimigo" : "Criar Inimigo"}</h1>
-            <p className="gm-page-subtitle">{isEditing ? "Modifique os dados do inimigo" : "Preencha as informações do novo inimigo"}</p>
-          </div>
+        <div>
+          <h1 className="gm-page-title">{isEditing ? "Editar Inimigo" : "Criar Inimigo"}</h1>
+          <p className="gm-page-subtitle">{isEditing ? "Modifique os dados do inimigo" : "Preencha as informações do novo inimigo"}</p>
         </div>
         <div className="gm-page-header-actions">
           <button className="gm-button gm-button-secondary" onClick={handleCancel}>
@@ -225,25 +314,10 @@ export default function CreateEnemyPageClient() {
 
       {error && <div className="gm-error" role="alert">{error}</div>}
 
-      <nav className="gm-tabs" role="tablist" aria-label="Abas de criação de inimigo">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            aria-controls={`panel-${tab.id}`}
-            className={`gm-tab ${activeTab === tab.id ? "gm-tab-active" : ""}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            <span className="gm-tab-icon" aria-hidden="true">{tab.icon}</span>
-            <span className="gm-tab-label">{tab.label}</span>
-          </button>
-        ))}
-      </nav>
-
-      <div className="gm-tab-panels">
-        {/* Identity Tab */}
-        <section id="panel-identity" role="tabpanel" aria-labelledby="tab-identity" className={`gm-tab-panel ${activeTab === "identity" ? "gm-tab-panel-active" : ""}`}>
+      <div className="gm-create-sections">
+        {/* Identity */}
+        <section className="gm-create-section">
+          <h2 className="gm-create-section-title">👤 Identidade</h2>
           <div className="gm-form-grid">
             <div className="gm-form-field">
               <label htmlFor="enemy-name">Nome *</label>
@@ -285,6 +359,26 @@ export default function CreateEnemyPageClient() {
                 ))}
               </select>
             </div>
+            <div className="gm-form-field">
+              <label htmlFor="enemy-faction">Facção</label>
+              <input
+                id="enemy-faction"
+                type="text"
+                value={enemy.identity.faction || ""}
+                onChange={(e) => updateIdentity("faction", e.target.value)}
+                placeholder="Ex: Arasaka, Militech, 6th Street, Maelstrom"
+              />
+            </div>
+            <div className="gm-form-field">
+              <label htmlFor="enemy-role">Função</label>
+              <input
+                id="enemy-role"
+                type="text"
+                value={enemy.identity.role || ""}
+                onChange={(e) => updateIdentity("role", e.target.value)}
+                placeholder="Ex: Ranged Mook, Elite Assault, Combat Medic"
+              />
+            </div>
             <div className="gm-form-field gm-form-field-full">
               <label htmlFor="enemy-description">Descrição</label>
               <textarea
@@ -298,8 +392,9 @@ export default function CreateEnemyPageClient() {
           </div>
         </section>
 
-        {/* Stats Tab */}
-        <section id="panel-stats" role="tabpanel" aria-labelledby="tab-stats" className={`gm-tab-panel ${activeTab === "stats" ? "gm-tab-panel-active" : ""}`}>
+        {/* Stats */}
+        <section className="gm-create-section">
+          <h2 className="gm-create-section-title">📊 Atributos</h2>
           <div className="gm-form-grid gm-stats-grid">
             {enemyStatNames.map((stat) => (
               <div key={stat} className="gm-form-field gm-stat-field">
@@ -323,16 +418,35 @@ export default function CreateEnemyPageClient() {
           </div>
         </section>
 
-        {/* Skills Tab */}
-        <section id="panel-skills" role="tabpanel" aria-labelledby="tab-skills" className={`gm-tab-panel ${activeTab === "skills" ? "gm-tab-panel-active" : ""}`}>
+        {/* Skills */}
+        <section className="gm-create-section">
+          <h2 className="gm-create-section-title">🎯 Perícias</h2>
           <div className="gm-skills-header">
-            <h3>Perícias do Inimigo</h3>
-            <button className="gm-button gm-button-secondary gm-button-small" onClick={addSkill}>
-              + Adicionar Perícia
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <select
+                className="gm-form-select-small"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) {
+                    const [name, stat] = e.target.value.split("|");
+                    addSkill({ name, stat });
+                    e.target.value = "";
+                  }
+                }}
+                aria-label="Adicionar perícia comum"
+              >
+                <option value="">+ Perícia rápida</option>
+                {availablePredefinedSkills.map(([name, stat]) => (
+                  <option key={name} value={`${name}|${stat}`}>{name} ({stat})</option>
+                ))}
+              </select>
+              <button className="gm-button gm-button-secondary gm-button-small" onClick={() => addSkill()}>
+                + Personalizada
+              </button>
+            </div>
           </div>
           {Object.keys(enemy.skills).length === 0 ? (
-            <p className="gm-empty-state">Nenhuma perícia adicionada. Clique em "Adicionar Perícia" para começar.</p>
+            <p className="gm-empty-state">Nenhuma perícia adicionada. Use "Perícia rápida" para adicionar uma perícia comum ou "Personalizada" para criar uma nova.</p>
           ) : (
             <div className="gm-skills-list">
               {Object.entries(enemy.skills).map(([id, skill]) => (
@@ -394,13 +508,31 @@ export default function CreateEnemyPageClient() {
           )}
         </section>
 
-        {/* Weapons Tab */}
-        <section id="panel-weapons" role="tabpanel" aria-labelledby="tab-weapons" className={`gm-tab-panel ${activeTab === "weapons" ? "gm-tab-panel-active" : ""}`}>
+        {/* Weapons */}
+        <section className="gm-create-section">
+          <h2 className="gm-create-section-title">⚔️ Armas</h2>
           <div className="gm-skills-header">
-            <h3>Armas</h3>
-            <button className="gm-button gm-button-secondary gm-button-small" onClick={addWeapon}>
-              + Adicionar Arma
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <select
+                className="gm-form-select-small"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) {
+                    addWeapon(e.target.value);
+                    e.target.value = "";
+                  }
+                }}
+                aria-label="Adicionar arma comum"
+              >
+                <option value="">+ Arma rápida</option>
+                {Object.keys(commonWeaponOptions).map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+              <button className="gm-button gm-button-secondary gm-button-small" onClick={() => addWeapon()}>
+                + Personalizada
+              </button>
+            </div>
           </div>
           {enemy.weapons.length === 0 ? (
             <p className="gm-empty-state">Nenhuma arma adicionada. Inimigos sempre podem atacar desarmados (Brawling).</p>
@@ -440,12 +572,49 @@ export default function CreateEnemyPageClient() {
                     </div>
                     <div className="gm-form-field">
                       <label>Perícia</label>
+                      {existingSkillNames.length > 0 ? (
+                        <select
+                          value={weapon.skill}
+                          onChange={(e) => updateWeapon(weapon.id, "skill", e.target.value)}
+                        >
+                          <option value="">Selecione...</option>
+                          {existingSkillNames.map((name) => (
+                            <option key={name} value={name}>{name}</option>
+                          ))}
+                          <option value="__custom">Outra (digitar)...</option>
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={weapon.skill}
+                          onChange={(e) => updateWeapon(weapon.id, "skill", e.target.value)}
+                          placeholder="Ex: handgun, brawling, rifle"
+                        />
+                      )}
+                    </div>
+                    {weapon.skill === "__custom" && (
+                      <div className="gm-form-field">
+                        <label>Nome da Perícia</label>
+                        <input
+                          type="text"
+                          value=""
+                          onChange={(e) => updateWeapon(weapon.id, "skill", e.target.value)}
+                          placeholder="Digite o nome da perícia"
+                          autoFocus
+                        />
+                      </div>
+                    )}
+                    <div className="gm-form-field">
+                      <label>Base de Ataque</label>
                       <input
-                        type="text"
-                        value={weapon.skill}
-                        onChange={(e) => updateWeapon(weapon.id, "skill", e.target.value)}
-                        placeholder="Ex: handgun, brawling, rifle"
+                        type="number"
+                        min="0"
+                        value={weapon.attackBase}
+                        readOnly
+                        className="gm-stat-input"
+                        title="Calculado automaticamente (Atributo + Nível da Perícia)"
                       />
+                      <small className="gm-hint">Auto-calculado</small>
                     </div>
                     <div className="gm-form-field">
                       <label>ROF</label>
@@ -461,8 +630,9 @@ export default function CreateEnemyPageClient() {
                       <input
                         type="number"
                         min="0"
-                        value={weapon.magazine || 0}
-                        onChange={(e) => updateWeapon(weapon.id, "magazine", Number(e.target.value))}
+                        value={weapon.magazine || ""}
+                        onChange={(e) => updateWeapon(weapon.id, "magazine", e.target.value ? Number(e.target.value) : undefined)}
+                        placeholder="-"
                       />
                     </div>
                     <div className="gm-form-field">
@@ -470,8 +640,9 @@ export default function CreateEnemyPageClient() {
                       <input
                         type="number"
                         min="0"
-                        value={weapon.ammo || 0}
-                        onChange={(e) => updateWeapon(weapon.id, "ammo", Number(e.target.value))}
+                        value={weapon.ammo || ""}
+                        onChange={(e) => updateWeapon(weapon.id, "ammo", e.target.value ? Number(e.target.value) : undefined)}
+                        placeholder="-"
                       />
                     </div>
                   </div>
@@ -488,8 +659,9 @@ export default function CreateEnemyPageClient() {
           )}
         </section>
 
-        {/* Combat Tab */}
-        <section id="panel-combat" role="tabpanel" aria-labelledby="tab-combat" className={`gm-tab-panel ${activeTab === "combat" ? "gm-tab-panel-active" : ""}`}>
+        {/* Combat */}
+        <section className="gm-create-section">
+          <h2 className="gm-create-section-title">❤️ Combate</h2>
           <div className="gm-form-grid gm-combat-grid">
             <div className="gm-form-field">
               <label htmlFor="enemy-hp-current">HP Atual</label>
@@ -552,10 +724,10 @@ export default function CreateEnemyPageClient() {
           )}
         </section>
 
-        {/* Conditions Tab */}
-        <section id="panel-conditions" role="tabpanel" aria-labelledby="tab-conditions" className={`gm-tab-panel ${activeTab === "conditions" ? "gm-tab-panel-active" : ""}`}>
+        {/* Conditions */}
+        <section className="gm-create-section">
+          <h2 className="gm-create-section-title">🩹 Condições</h2>
           <div className="gm-skills-header">
-            <h3>Condições / Efeitos de Status</h3>
             <button className="gm-button gm-button-secondary gm-button-small" onClick={addCondition}>
               + Adicionar Condição
             </button>
@@ -621,8 +793,9 @@ export default function CreateEnemyPageClient() {
           )}
         </section>
 
-        {/* Notes Tab */}
-        <section id="panel-notes" role="tabpanel" aria-labelledby="tab-notes" className={`gm-tab-panel ${activeTab === "notes" ? "gm-tab-panel-active" : ""}`}>
+        {/* Notes */}
+        <section className="gm-create-section">
+          <h2 className="gm-create-section-title">📝 Notas GM</h2>
           <div className="gm-form-field gm-form-field-full">
             <label htmlFor="enemy-gm-notes">Notas do GM (apenas você vê)</label>
             <textarea

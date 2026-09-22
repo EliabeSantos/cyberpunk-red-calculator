@@ -23,6 +23,7 @@ import type { SkillCheckResult } from "@/lib/skills";
 import type { HumanityLossResult } from "@/lib/humanity";
 import type { QuickhackRollResult, QuickhackCategory } from "@/lib/quickhacks";
 import StorePanel from "@/components/sheets/StorePanel";
+import DiceDrawer from "@/components/dice/DiceDrawer";
 import AttackActions from "@/components/combat/AttackActions";
 import type { AttackRollResult, DamageRollResult, EvasionRollResult, AttackMode } from "@/types/attack";
 import type { AttributeName, Character } from "@/types/character";
@@ -89,14 +90,17 @@ export default function CharacterSheet({
   const [lastDamageDealt, setLastDamageDealt] = useState<DamageApplicationResult | null>(null);
   const [lastDamageReceived, setLastDamageReceived] = useState<DamageApplicationResult | null>(null);
   const [lastQuickhack, setLastQuickhack] = useState<QuickhackRollResult | null>(null);
-  const [lastInitiative, setLastInitiative] = useState<{ diceRoll: number; refBonus: number; total: number } | null>(null);
+  const [lastInitiative, setLastInitiative] = useState<{ diceRoll: number; refBonus: number; total: number; critical: boolean; fumble: boolean } | null>(null);
   const [manualInjuryLocation, setManualInjuryLocation] = useState<HitLocation>("body");
   const [manualInjuryName, setManualInjuryName] = useState("");
   const [weaponAttackModes, setWeaponAttackModes] = useState<Record<string, AttackMode>>({});
   const [reloadError, setReloadError] = useState("");
   const [rollingQuickhack, setRollingQuickhack] = useState<{ id: string; roll: number } | null>(null);
   const [rollingSkill, setRollingSkill] = useState<{ id: string; roll: number } | null>(null);
+  const [rollingInitiative, setRollingInitiative] = useState<number | null>(null);
+  const [rollingEvasion, setRollingEvasion] = useState<number | null>(null);
   const [quickhackError, setQuickhackError] = useState("");
+  const [diceDrawerOpen, setDiceDrawerOpen] = useState(false);
   const [humanityAdjustOpen, setHumanityAdjustOpen] = useState(false);
   const [humanityAdjustValue, setHumanityAdjustValue] = useState("");
   const [humanityAdjustReason, setHumanityAdjustReason] = useState("");
@@ -181,12 +185,57 @@ export default function CharacterSheet({
   function evade() {
     const resolution = rollEvasion(character);
     if ("error" in resolution) { setCombatError(resolution.error); return; }
-    setCombatError(""); setLastEvasion(resolution.result); onUpdate(resolution.character);
+    setCombatError("");
+    setRollingEvasion(resolution.result.naturalRoll);
+    setLastEvasion(resolution.result);
+    onUpdate(resolution.character);
+    setTimeout(() => setRollingEvasion(null), 2000);
   }
   function rollInitiative() {
     const dice = rollDice("1d10");
+    const rollValue = dice.rolls[0];
     const refBonus = character.stats.REF;
-    setLastInitiative({ diceRoll: dice.rolls[0], refBonus, total: dice.rolls[0] + refBonus });
+    const isCritical = rollValue === 10;
+    const isFumble = rollValue === 1;
+    let diceTotal = rollValue;
+
+    // Exploding dice: crit on 10 adds another d10, fumble on 1 subtracts another d10
+    let extraRoll = 0;
+    if (isCritical) {
+      const extra = rollDice("1d10");
+      extraRoll = extra.rolls[0];
+      diceTotal += extraRoll;
+    } else if (isFumble) {
+      const extra = rollDice("1d10");
+      extraRoll = extra.rolls[0];
+      diceTotal -= extraRoll;
+    }
+
+    const total = diceTotal + refBonus;
+    setRollingInitiative(rollValue);
+    setLastInitiative({ diceRoll: rollValue, refBonus, total, critical: isCritical, fumble: isFumble });
+    const allRolls = isCritical
+      ? [rollValue, extraRoll]
+      : isFumble
+        ? [rollValue, extraRoll]
+        : [rollValue];
+    const expression = isCritical
+      ? `REF ${refBonus} + 1d10 (crítico!)`
+      : isFumble
+        ? `REF ${refBonus} + 1d10 (falha crítica!)`
+        : `REF ${refBonus} + 1d10`;
+    const entry: import("@/types/character").RollHistoryEntry = {
+      id: crypto.randomUUID(),
+      type: "free_roll",
+      label: "Iniciativa",
+      characterId: character.id,
+      expression,
+      rolls: allRolls,
+      total,
+      timestamp: new Date().toISOString(),
+    };
+    onUpdate({ ...character, rollHistory: [entry, ...character.rollHistory] });
+    setTimeout(() => setRollingInitiative(null), 2000);
   }
   function addManualCriticalInjury() {
     const name = manualInjuryName.trim();
@@ -263,6 +312,7 @@ export default function CharacterSheet({
       <nav className="sheet-nav">
         <span>CYBERPUNK RED TOOLKIT</span>
         <div>
+          <button onClick={() => setDiceDrawerOpen(true)}>🎲 Dados</button>
           <Link href="/gm">
             🎭 Área do Mestre
           </Link>
@@ -404,34 +454,108 @@ export default function CharacterSheet({
                 label="Stamina"
                 value={`${character.combat.stamina.current} / ${character.combat.stamina.max}`}
               />
-              <Metric
-                label="Armadura cabeça"
-                value={character.combat.armor.head}
-              />
-              <Metric
-                label="Armadura corpo"
-                value={character.combat.armor.body}
-              />
-              <Metric
-                label="Sorte"
-                value={`${character.luck.current} / ${character.luck.max}`}
-              />
             </div>
-            <div className="combat-action">
-              <span>Iniciativa <small>REF ({character.stats.REF}) + 1d10</small></span>
-              <button type="button" className="upgrade-skill" onClick={rollInitiative}>Rolar Iniciativa</button>
-            </div>
-            {lastInitiative && (
-              <div className="evasion-result" role="status">
-                <span className="roll-formula">
-                  REF {lastInitiative.refBonus} + 1d10
-                </span>
-                <span className="roll-dice">
-                  <span className="die-normal">[{lastInitiative.diceRoll}]</span>
-                </span>
-                <span className="roll-total">= <b>{lastInitiative.total}</b></span>
+            <div className="combat-armor">
+              <div className="combat-armor-slot">
+                <small>Cabeça</small>
+                <strong>{character.combat.armor.head} SP</strong>
+                {character.combat.armor.head > 0 && (
+                  <button type="button" className="equip-item" onClick={() => onUpdate({ ...character, combat: { ...character.combat, armor: { ...character.combat.armor, head: 0 } } })}>
+                    Remover
+                  </button>
+                )}
               </div>
-            )}
+              <div className="combat-armor-slot">
+                <small>Corpo e membros</small>
+                <strong>{character.combat.armor.body} SP</strong>
+                {character.combat.armor.body > 0 && (
+                  <button type="button" className="equip-item" onClick={() => onUpdate({ ...character, combat: { ...character.combat, armor: { ...character.combat.armor, body: 0 } } })}>
+                    Remover
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="combat-rolls-group">
+              <div className="initiative-section">
+                <div className="initiative-header">
+                  <div className="initiative-info">
+                    <span className="initiative-label">Iniciativa</span>
+                    <span className="initiative-formula">REF {character.stats.REF} + 1d10</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="initiative-roll-btn"
+                    onClick={rollInitiative}
+                    disabled={rollingInitiative !== null}
+                  >
+                    {rollingInitiative !== null ? (
+                      <span className="rolling-indicator">🎲 {rollingInitiative}</span>
+                    ) : (
+                      "🎲 Rolar"
+                    )}
+                  </button>
+                </div>
+                {lastInitiative && (
+                  <div className="initiative-result" role="status">
+                    <div className="initiative-result-header">
+                      {lastInitiative.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
+                      {lastInitiative.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
+                    </div>
+                    <span className="initiative-result-formula">
+                      REF {lastInitiative.refBonus} + 1d10 [{lastInitiative.diceRoll}]
+                    </span>
+                    <span className="initiative-result-total">{lastInitiative.total}</span>
+                  </div>
+                )}
+              </div>
+              <div className="evasion-section">
+                <div className="evasion-header">
+                  <div className="evasion-info">
+                    <span className="evasion-label">Evasion</span>
+                    <span className="evasion-formula">DEX + Nível + 1d10</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="evasion-roll-btn"
+                    onClick={evade}
+                    disabled={rollingEvasion !== null}
+                  >
+                    {rollingEvasion !== null ? (
+                      <span className="rolling-indicator">🎲 {rollingEvasion}</span>
+                    ) : (
+                      "🎲 Rolar"
+                    )}
+                  </button>
+                </div>
+                {lastEvasion && (
+                  <div className="evasion-result" role="status">
+                    <div className="evasion-result-header">
+                      {lastEvasion.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
+                      {lastEvasion.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
+                    </div>
+                    <span className="evasion-result-formula">
+                      {lastEvasion.stat.id} {lastEvasion.stat.value} + Evasion {lastEvasion.skill.value} + 1d10
+                    </span>
+                    <div className="evasion-result-dice">
+                      {lastEvasion.diceRolls?.map((r: any, idx: number) => (
+                        <React.Fragment key={idx}>
+                          {r.type === "crit" && <strong className="die-crit">[{r.value}]</strong>}
+                          {r.type === "crit_add" && <strong className="die-crit">+[{r.value}]</strong>}
+                          {r.type === "fumble" && <strong className="die-fumble">[{r.value}]</strong>}
+                          {r.type === "fumble_sub" && <strong className="die-fumble">−[{r.value}]</strong>}
+                          {r.type === "normal" && <span className="die-normal">[{r.value}]</span>}
+                        </React.Fragment>
+                      ))}
+                      <span className="evasion-result-subtotal">= {lastEvasion.diceTotal}</span>
+                    </div>
+                    <div className="evasion-result-footer">
+                      <span className="evasion-result-total-label">Total</span>
+                      <span className="evasion-result-total">{lastEvasion.total}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
             <h3>Ataques</h3>
             <AttackActions
               character={character}
@@ -531,36 +655,6 @@ export default function CharacterSheet({
                   </div>
                 );
               })()}
-            <h3>Defesa</h3>
-            <div className="combat-action">
-              <span>Evasion <small>DEX + nível + 1d10</small></span>
-              <button type="button" className="upgrade-skill" onClick={evade}>Rolar Evasion</button>
-            </div>
-            {lastEvasion && (
-            <div className="evasion-result" role="status">
-              <span className="roll-header">
-                {lastEvasion.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
-                {lastEvasion.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
-              </span>
-              <span className="roll-formula">
-                {lastEvasion.stat.id} {lastEvasion.stat.value} + Evasion {lastEvasion.skill.value} + 1d10
-              </span>
-              <span className="roll-dice">
-                {lastEvasion.diceRolls?.map((r: any, idx: number) => (
-                  <React.Fragment key={idx}>
-                    {r.type === "crit" && <strong className="die-crit">[{r.value}]</strong>}
-                    {r.type === "crit_add" && <strong className="die-crit">+[{r.value}]</strong>}
-                    {r.type === "fumble" && <strong className="die-fumble">[{r.value}]</strong>}
-                    {r.type === "fumble_sub" && <strong className="die-fumble">−[{r.value}]</strong>}
-                    {r.type === "normal" && <span className="die-normal">[{r.value}]</span>}
-                    {" "}
-                  </React.Fragment>
-                ))}
-              </span>
-              <span className="roll-subtotal">= {lastEvasion.diceTotal}</span>
-              <span className="roll-total">= <b>{lastEvasion.total}</b></span>
-            </div>
-          )}
           <h3>Dano recebido</h3>
             <div className="damage-input-section">
               <div className="damage-input-row">
@@ -602,27 +696,6 @@ export default function CharacterSheet({
               </button>
             </div>
             {combatError && <p className="form-error">{combatError}</p>}
-            <h3>Armadura</h3>
-            <div className="combat-grid">
-              <div>
-                <small>Cabeça</small>
-                <strong>{character.combat.armor.head} SP</strong>
-                {character.combat.armor.head > 0 && (
-                  <button type="button" className="equip-item" onClick={() => onUpdate({ ...character, combat: { ...character.combat, armor: { ...character.combat.armor, head: 0 } } })}>
-                    Remover
-                  </button>
-                )}
-              </div>
-              <div>
-                <small>Corpo e membros</small>
-                <strong>{character.combat.armor.body} SP</strong>
-                {character.combat.armor.body > 0 && (
-                  <button type="button" className="equip-item" onClick={() => onUpdate({ ...character, combat: { ...character.combat, armor: { ...character.combat.armor, body: 0 } } })}>
-                    Remover
-                  </button>
-                )}
-              </div>
-            </div>
             <h3>Lesões críticas</h3>
             {character.combat.criticalInjuries.length > 0 ? (
               character.combat.criticalInjuries.map((injury, idx) => (
@@ -1093,6 +1166,12 @@ export default function CharacterSheet({
         </div>
       )}
     </section>
+    <DiceDrawer
+      open={diceDrawerOpen}
+      onClose={() => setDiceDrawerOpen(false)}
+      rollHistory={character.rollHistory}
+      onFreeRoll={(entry) => onUpdate({ ...character, rollHistory: [entry, ...character.rollHistory] })}
+    />
     </main>
   );
 }
