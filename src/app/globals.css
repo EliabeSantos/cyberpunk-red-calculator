@@ -878,6 +878,15 @@
 .first-aid-btn:hover {
   background: color-mix(in srgb, #4caf50 15%, transparent);
 }
+.first-aid-btn-secondary {
+  border-color: #68716c;
+  color: var(--muted);
+  font-size: 0.6rem;
+}
+.first-aid-btn-secondary:hover {
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
+  border-color: #68716c;
+}
 .death-save-result {
   margin-top: 0.4rem;
   padding: 0.35rem 0.5rem;
@@ -921,6 +930,134 @@
   margin-top: 0.25rem;
   font-size: 0.55rem;
   padding: 0.1rem 0.35rem;
+}
+
+/* Critical Injury Cards */
+.injury-actions-bar {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.full-heal-btn {
+  border: 1px solid #4caf50;
+  background: color-mix(in srgb, #4caf50 10%, transparent);
+  color: #4caf50;
+  cursor: pointer;
+  padding: 0.4rem 0.7rem;
+  font: 600 0.65rem var(--font-geist-mono), monospace;
+  border-radius: 3px;
+  transition: background 0.15s;
+  width: 100%;
+  text-align: center;
+}
+.full-heal-btn:hover {
+  background: color-mix(in srgb, #4caf50 20%, transparent);
+}
+.critical-injury-card {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  margin-bottom: 0.4rem;
+  border: 1px solid #5a3a3a;
+  border-left: 3px solid #ff6b6b;
+  background: color-mix(in srgb, #ff6b6b 4%, var(--panel));
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+.cic-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.cic-badge {
+  padding: 0.15rem 0.4rem;
+  background: color-mix(in srgb, #ff6b6b 15%, transparent);
+  border: 1px solid #ff6b6b;
+  color: #ff6b6b;
+  font: 600 0.55rem var(--font-geist-mono), monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.cic-name {
+  color: var(--foreground);
+  font: 700 0.8rem var(--font-geist-mono), monospace;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cic-curar-btn {
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0.2rem 0.45rem;
+  font: 600 0.6rem var(--font-geist-mono), monospace;
+  border-radius: 3px;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+.cic-curar-btn:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.cic-row {
+  display: grid;
+  gap: 0.1rem;
+}
+.cic-label {
+  color: var(--muted);
+  font: 0.55rem var(--font-geist-mono), monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.cic-value {
+  color: var(--foreground);
+  font: 0.7rem var(--font-geist-mono), monospace;
+  line-height: 1.4;
+}
+.cic-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: 0.3rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid #3a2a2a;
+}
+.cic-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.cic-detail-label {
+  color: var(--muted);
+  font: 0.5rem var(--font-geist-mono), monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.cic-detail-value {
+  color: var(--foreground);
+  font: 0.65rem var(--font-geist-mono), monospace;
+}
+.cic-detail-danger .cic-detail-value {
+  color: #ff6b6b;
+  font-weight: 700;
+}
+.cic-modifiers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid #3a2a2a;
+}
+.cic-modifier-tag {
+  padding: 0.1rem 0.35rem;
+  background: color-mix(in srgb, #ff9800 10%, transparent);
+  border: 1px solid #ff9800;
+  color: #ffb74d;
+  font: 0.55rem var(--font-geist-mono), monospace;
+  border-radius: 2px;
 }
 
 /* Initiative & Evasion Group */

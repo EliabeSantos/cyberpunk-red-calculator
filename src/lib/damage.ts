@@ -1,6 +1,6 @@
 import { armorSlotForLocation, type HitLocation } from "@/types/combat";
 import { rollDice } from "@/lib/dice";
-import { calculateWoundThreshold } from "@/lib/calculations";
+import { calculateWoundThreshold, calculateHPStatus, getSkillBase, getCriticalInjuryModifiers } from "@/lib/calculations";
 import { rollCriticalInjury, checkCriticalInjuryFromDamage } from "@/data/criticalInjuries";
 import type { AttackRollResult, DamageRollResult } from "@/types/attack";
 import type { Character, RollHistoryEntry, CriticalInjury } from "@/types/character";
@@ -345,5 +345,101 @@ export function applyFirstAid(character: Character): { character: Character; res
   };
 
   return { character: updatedCharacter, restored: true };
+}
+
+/** Resultado de um roll de First Aid. */
+export interface FirstAidRollResult {
+  diceRoll: number;
+  techValue: number;
+  firstAidLevel: number;
+  medkitBonus: number;
+  injuryModifier: number;
+  total: number;
+  dv: number;
+  success: boolean;
+}
+
+/** Rola First Aid (1d10 + TECH + First Aid + bônus de medkit) vs DV 15.
+ * Se sucesso, restaura o personagem para 1 HP e reseta Death Save.
+ */
+export function rollFirstAid(
+  character: Character,
+  medkitBonus: number = 0,
+): { character: Character; result: FirstAidRollResult } | { error: string } {
+  if (character.combat.hp.current > 0) {
+    return { error: "First Aid só pode ser usado em personagens com HP ≤ 0." };
+  }
+  if (character.combat.isDead) {
+    return { error: "Não é possível usar First Aid em um personagem morto." };
+  }
+
+  const techValue = character.stats.TECH;
+  const firstAidLevel = character.skills.first_aid?.level ?? 0;
+  const dv = 15;
+
+  // Modificadores de Critical Injuries
+  const injuryModifiers = getCriticalInjuryModifiers(character);
+  const criticalInjuryModifier = injuryModifiers.allActionsModifier + injuryModifiers.fineManipulationModifier;
+
+  // Seriously Wounded: -2 em todas as ações (baseado no HP, não na lista de injuries)
+  const hpStatus = calculateHPStatus(character.combat.hp.current, character.combat.hp.max, character.combat.isDead);
+  const seriouslyWoundedModifier = hpStatus === "seriously_wounded" || hpStatus === "mortally_wounded" ? -2 : 0;
+
+  const injuryModifier = criticalInjuryModifier + seriouslyWoundedModifier;
+
+  const roll = rollDice("1d10");
+  const diceRoll = roll.rolls[0];
+  const total = diceRoll + techValue + firstAidLevel + medkitBonus + injuryModifier;
+  const success = total >= dv;
+
+  let updatedCharacter = character;
+  if (success) {
+    updatedCharacter = {
+      ...character,
+      combat: {
+        ...character.combat,
+        hp: { ...character.combat.hp, current: 1 },
+        deathSaveDC: 0,
+        deathSaveFailures: 0,
+        isDead: false,
+      },
+    };
+  }
+
+  const entry: RollHistoryEntry = {
+    id: crypto.randomUUID(),
+    type: "skill_check",
+    label: success ? "First Aid (sucesso)" : "First Aid (falha)",
+    characterId: character.id,
+    expression: `1d10 [${diceRoll}] + TECH ${techValue} + First Aid ${firstAidLevel}${medkitBonus > 0 ? ` + Medkit ${medkitBonus}` : ""}${injuryModifier !== 0 ? ` + Lesão ${injuryModifier}` : ""} = ${total} vs DV ${dv}`,
+    rolls: [diceRoll],
+    total,
+    timestamp: new Date().toISOString(),
+    stat: { id: "TECH", value: techValue },
+    skill: { id: "first_aid", value: firstAidLevel },
+    modifiers: [
+      ...(medkitBonus > 0 ? [{ source: "Medkit", value: medkitBonus }] : []),
+      ...(injuryModifier !== 0 ? [{ source: "Lesão", value: injuryModifier }] : []),
+    ],
+  };
+
+  updatedCharacter = {
+    ...updatedCharacter,
+    rollHistory: [entry, ...updatedCharacter.rollHistory],
+  };
+
+  return {
+    character: updatedCharacter,
+    result: {
+      diceRoll,
+      techValue,
+      firstAidLevel,
+      medkitBonus,
+      injuryModifier,
+      total,
+      dv,
+      success,
+    },
+  };
 }
 

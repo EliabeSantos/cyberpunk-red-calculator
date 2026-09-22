@@ -10,7 +10,7 @@ import {
   upgradeSkill,
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
-import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, rollDeathSave, applyFirstAid } from "@/lib/damage";
+import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, rollDeathSave, applyFirstAid, rollFirstAid } from "@/lib/damage";
 import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold, calculateHPStatus } from "@/lib/calculations";
 import { rollEvasion, reloadWeapon } from "@/lib/attacks";
 import { rollDice } from "@/lib/dice";
@@ -106,6 +106,8 @@ export default function CharacterSheet({
   const [lastDeathSave, setLastDeathSave] = useState<import("@/lib/damage").DeathSaveResult | null>(null);
   const [rollingDeathSave, setRollingDeathSave] = useState(false);
   const [firstAidMessage, setFirstAidMessage] = useState("");
+  const [lastFirstAidRoll, setLastFirstAidRoll] = useState<import("@/lib/damage").FirstAidRollResult | null>(null);
+  const [rollingFirstAid, setRollingFirstAid] = useState(false);
   const categoryOrder: SkillCategory[] = ["awareness", "body", "control", "education", "fighting", "performance", "ranged_weapon", "social", "technique"];
   const statNames: Record<AttributeName, string> = {
     INT: "Inteligência",
@@ -270,6 +272,21 @@ export default function CharacterSheet({
       },
     });
   }
+  function handleFullHeal() {
+    onUpdate({
+      ...character,
+      combat: {
+        ...character.combat,
+        hp: { ...character.combat.hp, current: character.combat.hp.max },
+        criticalInjuries: [],
+        deathSaveDC: 0,
+        deathSaveFailures: 0,
+        isDead: false,
+      },
+    });
+    setLastDeathSave(null);
+    setLastFirstAidRoll(null);
+  }
   function handleReload(weaponId: string) {
     const resolution = reloadWeapon(character, weaponId);
     if ("error" in resolution) { setReloadError(resolution.error); return; }
@@ -297,9 +314,52 @@ export default function CharacterSheet({
     if (resolution.restored) {
       setFirstAidMessage("First Aid bem-sucedido! Personagem retornado para 1 HP.");
       setLastDeathSave(null);
+      setLastFirstAidRoll(null);
       onUpdate(resolution.character);
       setTimeout(() => setFirstAidMessage(""), 3000);
     }
+  }
+  function handleRollFirstAid() {
+    // Verifica se tem medkit no inventário
+    const hasAdvancedMedkit = character.inventory.some((item) => item.catalogItemId === "advanced_medkit" && item.quantity > 0);
+    const hasBasicMedkit = character.inventory.some((item) => item.catalogItemId === "basic_medkit" && item.quantity > 0);
+    const medkitBonus = hasAdvancedMedkit ? 2 : 0;
+    const medkitId = hasAdvancedMedkit ? "advanced_medkit" : "basic_medkit";
+
+    if (!hasBasicMedkit && !hasAdvancedMedkit) {
+      setCombatError("Nenhum medkit disponível no inventário.");
+      return;
+    }
+
+    setRollingFirstAid(true);
+    setLastFirstAidRoll(null);
+    setCombatError("");
+
+    const resolution = rollFirstAid(character, medkitBonus);
+    if ("error" in resolution) {
+      setCombatError(resolution.error);
+      setRollingFirstAid(false);
+      return;
+    }
+
+    // Consome 1 medkit do inventário
+    const updatedInventory = character.inventory.map((item) =>
+      item.catalogItemId === medkitId
+        ? { ...item, quantity: item.quantity - 1 }
+        : item
+    ).filter((item) => item.quantity > 0);
+
+    const characterWithMedkitUsed = {
+      ...resolution.character,
+      inventory: updatedInventory,
+    };
+
+    setLastFirstAidRoll(resolution.result);
+    if (resolution.result.success) {
+      setLastDeathSave(null);
+    }
+    onUpdate(characterWithMedkitUsed);
+    setTimeout(() => setRollingFirstAid(false), 1500);
   }
   function sellItem(inventoryItemId: string) {
     const result = sellInventoryItem(character, inventoryItemId);
@@ -544,13 +604,35 @@ export default function CharacterSheet({
                         >
                           {rollingDeathSave ? "🎲 Rollando..." : "🎲 Death Save (1d10 vs DC)"}
                         </button>
-                        <button
-                          type="button"
-                          className="first-aid-btn"
-                          onClick={handleFirstAid}
-                        >
-                          🩹 First Aid (→ 1 HP)
-                        </button>
+                        {(() => {
+                          const hasAdvancedMedkit = character.inventory.some((item) => item.catalogItemId === "advanced_medkit" && item.quantity > 0);
+                          const hasBasicMedkit = character.inventory.some((item) => item.catalogItemId === "basic_medkit" && item.quantity > 0);
+                          const hasMedkit = hasBasicMedkit || hasAdvancedMedkit;
+                          return (
+                            <>
+                              {hasMedkit && (
+                                <button
+                                  type="button"
+                                  className="first-aid-btn"
+                                  onClick={handleRollFirstAid}
+                                  disabled={rollingFirstAid || character.combat.isDead}
+                                >
+                                  {rollingFirstAid
+                                    ? "🎲 Rollando..."
+                                    : `🩹 First Aid (1d10 + TECH + First Aid${hasAdvancedMedkit ? " + 2" : ""} vs DV 15)`}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="first-aid-btn first-aid-btn-secondary"
+                                onClick={handleFirstAid}
+                                title="Aplicar sem rolagem (outro jogador usa medkit)"
+                              >
+                                🩹 First Aid (→ 1 HP)
+                              </button>
+                            </>
+                          );
+                        })()}
                       </div>
                       {lastDeathSave && (
                         <div className={`death-save-result ${lastDeathSave.success ? "death-save-success" : "death-save-fail"}`}>
@@ -563,6 +645,14 @@ export default function CharacterSheet({
                               Próximo DC: {Math.max(0, lastDeathSave.dc - 1)}
                             </span>
                           )}
+                        </div>
+                      )}
+                      {lastFirstAidRoll && (
+                        <div className={`death-save-result ${lastFirstAidRoll.success ? "death-save-success" : "death-save-fail"}`}>
+                          <span>
+                            {lastFirstAidRoll.success ? "✓ Sucesso!" : "✗ Falha!"}{" "}
+                            1d10 [{lastFirstAidRoll.diceRoll}] + TECH {lastFirstAidRoll.techValue} + First Aid {lastFirstAidRoll.firstAidLevel}{lastFirstAidRoll.medkitBonus > 0 ? ` + Medkit ${lastFirstAidRoll.medkitBonus}` : ""}{lastFirstAidRoll.injuryModifier !== 0 ? ` + Lesão ${lastFirstAidRoll.injuryModifier}` : ""} = {lastFirstAidRoll.total} vs DV {lastFirstAidRoll.dv}
+                          </span>
                         </div>
                       )}
                       {firstAidMessage && (
@@ -823,47 +913,61 @@ export default function CharacterSheet({
             {combatError && <p className="form-error">{combatError}</p>}
             <h3>Lesões críticas</h3>
             {character.combat.criticalInjuries.length > 0 ? (
-              character.combat.criticalInjuries.map((injury, idx) => (
-                <div className="critical-injury-detail" key={idx} role="status">
-                  <div className="critical-injury-header">
-                    <strong>Critical Injury</strong>
-                    <span className="injury-field"><small>Localização</small> <strong>{hitLocationLabels[injury.location]}</strong></span>
-                    <button type="button" className="upgrade-skill" style={{ marginLeft: "auto" }} onClick={() => removeCriticalInjury(idx)}>✕ Curar</button>
-                  </div>
-                  <div className="injury-field">
-                    <small>Ferimento</small>
-                    <strong>{injury.name}</strong>
-                  </div>
-                  {injury.effect && (
-                    <div className="injury-field">
-                      <small>Efeito</small>
-                      <span>{injury.effect}</span>
-                    </div>
-                  )}
-                  {injury.quickFix && (
-                    <div className="injury-field">
-                      <small>Quick Fix</small>
-                      <span>{injury.quickFix}</span>
-                    </div>
-                  )}
-                  {injury.treatment && (
-                    <div className="injury-field">
-                      <small>Treatment</small>
-                      <span>{injury.treatment}</span>
-                    </div>
-                  )}
-                  <div className="injury-field">
-                    <small>Bonus Damage</small>
-                    <strong>{injury.bonusDamage}</strong>
-                  </div>
-                  {injury.deathSavePenalty !== undefined && (
-                    <div className="injury-field">
-                      <small>Death Save Penalty</small>
-                      <strong>{injury.deathSavePenalty}</strong>
-                    </div>
-                  )}
+              <>
+                <div className="injury-actions-bar">
+                  <button type="button" className="full-heal-btn" onClick={handleFullHeal}>
+                    ✚ Full Heal (HP Máx + Limpar tudo)
+                  </button>
                 </div>
-              ))
+                {character.combat.criticalInjuries.map((injury, idx) => (
+                  <div className="critical-injury-card" key={idx} role="status">
+                    <div className="cic-top">
+                      <div className="cic-badge">{hitLocationLabels[injury.location]}</div>
+                      <span className="cic-name">{injury.name}</span>
+                      <button type="button" className="cic-curar-btn" onClick={() => removeCriticalInjury(idx)}>
+                        ✕ Curar
+                      </button>
+                    </div>
+                    {injury.effect && (
+                      <div className="cic-row">
+                        <span className="cic-label">Efeito</span>
+                        <span className="cic-value">{injury.effect}</span>
+                      </div>
+                    )}
+                    <div className="cic-details">
+                      {injury.quickFix && (
+                        <div className="cic-detail">
+                          <span className="cic-detail-label">Quick Fix</span>
+                          <span className="cic-detail-value">{injury.quickFix}</span>
+                        </div>
+                      )}
+                      {injury.treatment && (
+                        <div className="cic-detail">
+                          <span className="cic-detail-label">Treatment</span>
+                          <span className="cic-detail-value">{injury.treatment}</span>
+                        </div>
+                      )}
+                      <div className="cic-detail">
+                        <span className="cic-detail-label">Bonus Dano</span>
+                        <span className="cic-detail-value">{injury.bonusDamage}</span>
+                      </div>
+                      {injury.deathSavePenalty !== undefined && (
+                        <div className="cic-detail cic-detail-danger">
+                          <span className="cic-detail-label">Death Save</span>
+                          <span className="cic-detail-value">{injury.deathSavePenalty}</span>
+                        </div>
+                      )}
+                    </div>
+                    {injury.modifiers && injury.modifiers.length > 0 && (
+                      <div className="cic-modifiers">
+                        {injury.modifiers.map((mod, mi) => (
+                          <span key={mi} className="cic-modifier-tag">{mod.description}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </>
             ) : (
               <EmptyState>Nenhuma lesão crítica.</EmptyState>
             )}
