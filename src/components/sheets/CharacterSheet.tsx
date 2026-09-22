@@ -127,7 +127,23 @@ export default function CharacterSheet({
   };
   const skillsByCategory = categoryOrder
     .map((category) => [category, Object.entries(character.skills).filter(([, skill]) => skill.category === category)] as const)
-    .filter(([, skills]) => skills.length > 0);
+    .filter(([, skills]) => skills.length > 0)
+    .sort((a, b) => a[1].length - b[1].length);
+  
+  // Balance categories into 2 columns to minimize vertical waste
+  const col1: typeof skillsByCategory = [];
+  const col2: typeof skillsByCategory = [];
+  let col1Count = 0;
+  let col2Count = 0;
+  for (const item of skillsByCategory) {
+    if (col1Count <= col2Count) {
+      col1.push(item);
+      col1Count += item[1].length;
+    } else {
+      col2.push(item);
+      col2Count += item[1].length;
+    }
+  }
   const availableQuickhacks = getQuickhacksForCharacter(character);
   const hasQuickhacks = availableQuickhacks.length > 0;
   const isNetRunner = character.primaryRole === "netrunner" ||
@@ -1068,77 +1084,217 @@ export default function CharacterSheet({
           <PanelTitle number="05">
             Perícias <span>{Object.keys(character.skills).length}</span>
           </PanelTitle>
-          <div className="skills-groups">
-            {skillsByCategory.map(([category, skills]) => (
-              <div className="skill-group" key={category}>
-                <h3>{categoryNames[category]}</h3>
-                {skills.map(([id, skill]) => {
-                  const base = getSkillBase(character, id);
-                  const cost = getSkillUpgradeCost(skill.level, skill.costMultiplier);
-                  const canUpgrade = canUpgradeSkill(character, id);
-                  const rollResult = lastSkillRoll?.skillId === id ? lastSkillRoll.result : null;
-                  return (
-                    <div className="skill-row" key={id}>
-                      <span>
-                        {skill.name}
-                        <small>
-                          STAT: {skill.stat} · LEVEL: {skill.level} · BASE: {base}{skill.costMultiplier === 2 ? " · custo x2" : ""}
-                        </small>
-                      </span>
-                      <div className="skill-actions">
-                        <button type="button" className="upgrade-skill" disabled={!canUpgrade} onClick={() => improveSkill(id)}>
-                          ↑ {cost} IP
-                        </button>
-                        <button
-                          type="button"
-                          className="upgrade-skill"
-                          onClick={() => handleRollSkillCheck(character, id)}
-                          aria-label={`Rolar ${skill.name}`}
-                          disabled={rollingSkill?.id === id}
-                        >
-                          {rollingSkill?.id === id ? (
-                            <span className="rolling-indicator">🎲 {rollingSkill.roll}</span>
-                          ) : (
-                            "🎲"
-                          )}
-                        </button>
+          <div className="skills-balanced-grid">
+            <div className="skills-column">
+            {col1.map(([category, skills]) => (
+              <div className="skill-category-card" key={category}>
+                <div className="skill-category-header">
+                  <h3>{categoryNames[category]}</h3>
+                  <span className="skill-count">{skills.length}</span>
+                </div>
+                <div className="skill-list">
+                  {skills.map(([id, skill]) => {
+                    const base = getSkillBase(character, id);
+                    const cost = getSkillUpgradeCost(skill.level, skill.costMultiplier);
+                    const canUpgrade = canUpgradeSkill(character, id);
+                    const rollResult = lastSkillRoll?.skillId === id ? lastSkillRoll.result : null;
+                    const isMaxed = skill.level >= 10;
+                    return (
+                      <div className={`skill-card ${isMaxed ? 'maxed' : ''}`} key={id}>
+                        <div className="skill-card-main">
+                          <div className="skill-card-info">
+                            <span className="skill-name">{skill.name}</span>
+                            <div className="skill-meta">
+                              <span className="skill-stat">{skill.stat}</span>
+                              {skill.costMultiplier === 2 && <span className="skill-double-cost">×2</span>}
+                            </div>
+                          </div>
+                          <div className="skill-card-values">
+                            <div className="skill-level-display">
+                              <span className="skill-level-label">LV</span>
+                              <span className="skill-level-value">{skill.level}</span>
+                            </div>
+                            <div className="skill-base-display">
+                              <span className="skill-base-label">BASE</span>
+                              <span className="skill-base-value">{base}</span>
+                            </div>
+                          </div>
+                          <div className="skill-card-actions">
+                            {!isMaxed && (
+                              <button
+                                type="button"
+                                className="skill-upgrade-btn"
+                                disabled={!canUpgrade}
+                                onClick={() => improveSkill(id)}
+                                title={`Custo: ${cost} IP`}
+                              >
+                                ↑
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="skill-roll-btn"
+                              onClick={() => handleRollSkillCheck(character, id)}
+                              aria-label={`Rolar ${skill.name}`}
+                              disabled={rollingSkill?.id === id}
+                            >
+                              {rollingSkill?.id === id ? (
+                                <span className="rolling-indicator">🎲</span>
+                              ) : (
+                                "🎲"
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        {!isMaxed && (
+                          <div className="skill-upgrade-info">
+                            <span className="upgrade-cost">{cost} IP</span>
+                          </div>
+                        )}
+                        {rollResult && (
+                          <div className="skill-roll-result-card">
+                            <div className="roll-result-header">
+                              {rollResult.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
+                              {rollResult.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
+                              {!rollResult.critical && !rollResult.fumble && (
+                                <span className="roll-total-value">{rollResult.total}</span>
+                              )}
+                            </div>
+                            <div className="roll-result-breakdown">
+                              <span className="roll-formula">
+                                {rollResult.statId} {rollResult.statBase} + {rollResult.skillName} {rollResult.skillLevel} + 1d10
+                              </span>
+                              <div className="roll-dice-row">
+                                {rollResult.diceRolls.map((r, idx) => (
+                                  <span
+                                    key={idx}
+                                    className={`roll-die ${r.type === 'crit' || r.type === 'crit_add' ? 'crit' : ''} ${r.type === 'fumble' || r.type === 'fumble_sub' ? 'fumble' : ''}`}
+                                  >
+                                    {r.type === 'crit_add' && '+'}{r.type === 'fumble_sub' && '−'}[{r.value}]
+                                  </span>
+                                ))}
+                                <span className="dice-subtotal">= {rollResult.diceRoll}</span>
+                              </div>
+                              {rollResult.totalModifier !== 0 && (
+                                <span className="roll-modifier">
+                                  Mod: {rollResult.totalModifier >= 0 ? '+' : ''}{rollResult.totalModifier}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <strong>{base}</strong>
-                      {rollResult && (
-                        <span className="skill-roll-result">
-                          <span className="roll-header">
-                            {rollResult.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
-                            {rollResult.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
-                          </span>
-                          <span className="roll-formula">
-                            {rollResult.statId} {rollResult.statBase} + {rollResult.skillName} {rollResult.skillLevel} + 1d10
-                          </span>
-                          <span className="roll-dice">
-                            {rollResult.diceRolls.map((r, idx) => (
-                              <React.Fragment key={idx}>
-                                {r.type === "crit" && <strong className="die-crit">[{r.value}]</strong>}
-                                {r.type === "crit_add" && <strong className="die-crit">+[{r.value}]</strong>}
-                                {r.type === "fumble" && <strong className="die-fumble">[{r.value}]</strong>}
-                                {r.type === "fumble_sub" && <strong className="die-fumble">−[{r.value}]</strong>}
-                                {r.type === "normal" && <span className="die-normal">[{r.value}]</span>}
-                                {" "}
-                              </React.Fragment>
-                            ))}
-                          </span>
-                          <span className="roll-subtotal">= {rollResult.diceRoll}</span>
-                          {rollResult.totalModifier !== 0 && (
-                            <span className="roll-mod">
-                              {rollResult.totalModifier >= 0 ? "+" : ""}{rollResult.totalModifier}
-                            </span>
-                          )}
-                          <span className="roll-total">= <b>{rollResult.total}</b></span>
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             ))}
+            </div>
+            <div className="skills-column">
+            {col2.map(([category, skills]) => (
+              <div className="skill-category-card" key={category}>
+                <div className="skill-category-header">
+                  <h3>{categoryNames[category]}</h3>
+                  <span className="skill-count">{skills.length}</span>
+                </div>
+                <div className="skill-list">
+                  {skills.map(([id, skill]) => {
+                    const base = getSkillBase(character, id);
+                    const cost = getSkillUpgradeCost(skill.level, skill.costMultiplier);
+                    const canUpgrade = canUpgradeSkill(character, id);
+                    const rollResult = lastSkillRoll?.skillId === id ? lastSkillRoll.result : null;
+                    const isMaxed = skill.level >= 10;
+                    return (
+                      <div className={`skill-card ${isMaxed ? 'maxed' : ''}`} key={id}>
+                        <div className="skill-card-main">
+                          <div className="skill-card-info">
+                            <span className="skill-name">{skill.name}</span>
+                            <div className="skill-meta">
+                              <span className="skill-stat">{skill.stat}</span>
+                              {skill.costMultiplier === 2 && <span className="skill-double-cost">×2</span>}
+                            </div>
+                          </div>
+                          <div className="skill-card-values">
+                            <div className="skill-level-display">
+                              <span className="skill-level-label">LV</span>
+                              <span className="skill-level-value">{skill.level}</span>
+                            </div>
+                            <div className="skill-base-display">
+                              <span className="skill-base-label">BASE</span>
+                              <span className="skill-base-value">{base}</span>
+                            </div>
+                          </div>
+                          <div className="skill-card-actions">
+                            {!isMaxed && (
+                              <button
+                                type="button"
+                                className="skill-upgrade-btn"
+                                disabled={!canUpgrade}
+                                onClick={() => improveSkill(id)}
+                                title={`Custo: ${cost} IP`}
+                              >
+                                ↑
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="skill-roll-btn"
+                              onClick={() => handleRollSkillCheck(character, id)}
+                              aria-label={`Rolar ${skill.name}`}
+                              disabled={rollingSkill?.id === id}
+                            >
+                              {rollingSkill?.id === id ? (
+                                <span className="rolling-indicator">🎲</span>
+                              ) : (
+                                "🎲"
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        {!isMaxed && (
+                          <div className="skill-upgrade-info">
+                            <span className="upgrade-cost">{cost} IP</span>
+                          </div>
+                        )}
+                        {rollResult && (
+                          <div className="skill-roll-result-card">
+                            <div className="roll-result-header">
+                              {rollResult.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
+                              {rollResult.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
+                              {!rollResult.critical && !rollResult.fumble && (
+                                <span className="roll-total-value">{rollResult.total}</span>
+                              )}
+                            </div>
+                            <div className="roll-result-breakdown">
+                              <span className="roll-formula">
+                                {rollResult.statId} {rollResult.statBase} + {rollResult.skillName} {rollResult.skillLevel} + 1d10
+                              </span>
+                              <div className="roll-dice-row">
+                                {rollResult.diceRolls.map((r, idx) => (
+                                  <span
+                                    key={idx}
+                                    className={`roll-die ${r.type === 'crit' || r.type === 'crit_add' ? 'crit' : ''} ${r.type === 'fumble' || r.type === 'fumble_sub' ? 'fumble' : ''}`}
+                                  >
+                                    {r.type === 'crit_add' && '+'}{r.type === 'fumble_sub' && '−'}[{r.value}]
+                                  </span>
+                                ))}
+                                <span className="dice-subtotal">= {rollResult.diceRoll}</span>
+                              </div>
+                              {rollResult.totalModifier !== 0 && (
+                                <span className="roll-modifier">
+                                  Mod: {rollResult.totalModifier >= 0 ? '+' : ''}{rollResult.totalModifier}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            </div>
           </div>
         </section>
         {isNetRunner && (

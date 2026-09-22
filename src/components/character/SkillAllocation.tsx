@@ -14,36 +14,70 @@ type Props = { character: Character; onChange: (skillId: string, delta: 1 | -1) 
 export default function SkillAllocation({ character, onChange }: Props) {
   const skillsByStat = statNames
     .map((stat) => [stat, Object.entries(skillDefinitions).filter(([, definition]) => definition.stat === stat)] as const)
-    .filter(([, skills]) => skills.length > 0);
+    .filter(([, skills]) => skills.length > 0)
+    .sort((a, b) => a[1].length - b[1].length);
 
-  return (
-    <div className="skill-allocation-list">
-      {skillsByStat.map(([stat, skills]) => (
-        <section className="skill-allocation-group" key={stat}>
-          <h3>{stat} <small>{statLabels[stat]}</small></h3>
+  // Balance stats into 2 columns to minimize vertical waste
+  const col1: typeof skillsByStat = [];
+  const col2: typeof skillsByStat = [];
+  let col1Count = 0;
+  let col2Count = 0;
+  for (const item of skillsByStat) {
+    if (col1Count <= col2Count) {
+      col1.push(item);
+      col1Count += item[1].length;
+    } else {
+      col2.push(item);
+      col2Count += item[1].length;
+    }
+  }
+
+  function renderStatGroup([stat, skills]: readonly [AttributeName, readonly [string, typeof skillDefinitions[string]][]]) {
+    return (
+      <section className="skill-allocation-group" key={stat}>
+        <div className="skill-group-header">
+          <span className="skill-group-stat">{stat}</span>
+          <span className="skill-group-name">{statLabels[stat]}</span>
+          <span className="skill-group-count">{skills.length}</span>
+        </div>
+        <div className="skill-group-list">
           {skills.map(([id, definition]) => {
             const skill = character.skills[id];
             const minimum = definition.creation.minimumLevel;
+            const isRequired = minimum > 0;
+            const isDoubleCost = definition.costMultiplier === 2;
+            const isMaxed = skill.level >= CHARACTER_CREATION_RULES.skillMaximum;
+            const isMin = skill.level <= minimum;
             return (
-              <div className="skill-allocation-row" key={id}>
-                <div>
-                  <strong>{definition.name}</strong>
-                  <small>
-                    máximo {CHARACTER_CREATION_RULES.skillMaximum}
-                    {definition.costMultiplier === 2 ? " · custo x2" : ""}
-                    {minimum > 0 ? ` · mínimo obrigatório ${minimum}` : ""}
-                  </small>
+              <div className={`skill-alloc-card ${isRequired ? 'required' : ''} ${isMaxed ? 'maxed' : ''}`} key={id}>
+                <div className="skill-alloc-info">
+                  <span className="skill-alloc-name">{definition.name}</span>
+                  <div className="skill-alloc-tags">
+                    {isRequired && <span className="skill-tag required">mín. {minimum}</span>}
+                    {isDoubleCost && <span className="skill-tag double">×2</span>}
+                  </div>
                 </div>
-                <div className="stepper">
-                  <button type="button" onClick={() => onChange(id, -1)} disabled={!canDecreaseSkill(character, id)} aria-label={`Diminuir ${definition.name}`}>−</button>
-                  <output>{skill.level}</output>
-                  <button type="button" onClick={() => onChange(id, 1)} disabled={!canIncreaseSkill(character, id)} aria-label={`Aumentar ${definition.name}`}>+</button>
+                <div className="skill-alloc-controls">
+                  <button type="button" className="skill-alloc-btn decrease" onClick={() => onChange(id, -1)} disabled={!canDecreaseSkill(character, id)} aria-label={`Diminuir ${definition.name}`}>−</button>
+                  <span className="skill-alloc-value">{skill.level}</span>
+                  <button type="button" className="skill-alloc-btn increase" onClick={() => onChange(id, 1)} disabled={!canIncreaseSkill(character, id)} aria-label={`Aumentar ${definition.name}`}>+</button>
                 </div>
               </div>
             );
           })}
-        </section>
-      ))}
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <div className="skill-allocation-balanced">
+      <div className="skill-allocation-column">
+        {col1.map(renderStatGroup)}
+      </div>
+      <div className="skill-allocation-column">
+        {col2.map(renderStatGroup)}
+      </div>
     </div>
   );
 }
