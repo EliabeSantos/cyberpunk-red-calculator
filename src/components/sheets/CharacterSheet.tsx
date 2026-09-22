@@ -562,10 +562,44 @@ export default function CharacterSheet({
             </div>
           )}
           <h3>Dano recebido</h3>
-            <div className="received-damage">
-              <select aria-label="Local do dano" value={hitLocation} onChange={(event) => setHitLocation(event.target.value as HitLocation)}>{hitLocations.map((location) => <option key={location} value={location}>{hitLocationLabels[location]}</option>)}</select>
-              <input type="number" min="1" step="1" value={receivedDamage} onChange={(event) => setReceivedDamage(event.target.value)} placeholder="Dano" />
-              <button type="button" className="upgrade-skill" onClick={receiveDamage}>Receber dano</button>
+            <div className="damage-input-section">
+              <div className="damage-input-row">
+                <label className="damage-label">
+                  <span className="label-text">Local</span>
+                  <select
+                    aria-label="Local do dano"
+                    value={hitLocation}
+                    onChange={(event) => setHitLocation(event.target.value as HitLocation)}
+                    className="damage-select"
+                  >
+                    {hitLocations.map((location) => (
+                      <option key={location} value={location}>
+                        {hitLocationLabels[location]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="damage-label">
+                  <span className="label-text">Valor</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={receivedDamage}
+                    onChange={(event) => setReceivedDamage(event.target.value)}
+                    placeholder="0"
+                    className="damage-input"
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                className="apply-damage-button"
+                onClick={receiveDamage}
+                disabled={!receivedDamage || Number(receivedDamage) <= 0}
+              >
+                ⚔ Aplicar Dano
+              </button>
             </div>
             {combatError && <p className="form-error">{combatError}</p>}
             <h3>Armadura</h3>
@@ -653,37 +687,54 @@ export default function CharacterSheet({
                 </div>
               </div>
             )}
-            <div className="combat-action" style={{ marginTop: "0.5rem" }}>
-              <span>Adicionar lesão manual</span>
-            </div>
-            <div className="received-damage">
-              <select
-                aria-label="Local da lesão"
-                value={manualInjuryLocation}
-                onChange={(event) => { setManualInjuryLocation(event.target.value as HitLocation); setManualInjuryName(""); }}
+            <h3>Adicionar lesão manual</h3>
+            <div className="damage-input-section injury-input-section">
+              <div className="damage-input-row">
+                <label className="damage-label">
+                  <span className="label-text">Local</span>
+                  <select
+                    aria-label="Local da lesão"
+                    value={manualInjuryLocation}
+                    onChange={(event) => { setManualInjuryLocation(event.target.value as HitLocation); setManualInjuryName(""); }}
+                    className="damage-select"
+                  >
+                    {hitLocations.map((location) => (
+                      <option key={location} value={location}>{hitLocationLabels[location]}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="damage-label">
+                  <span className="label-text">Lesão</span>
+                  <select
+                    aria-label="Lesão crítica"
+                    value={manualInjuryName}
+                    onChange={(event) => setManualInjuryName(event.target.value)}
+                    className="damage-select"
+                  >
+                    <option value="">— Selecionar —</option>
+                    {(manualInjuryLocation === "head" ? headCriticalInjuries : bodyCriticalInjuries).map((inj) => (
+                      <option key={inj.name} value={inj.name}>{inj.name}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label className="damage-label">
+                <span className="label-text">Ou digite um nome</span>
+                <input
+                  type="text"
+                  value={manualInjuryName}
+                  onChange={(event) => setManualInjuryName(event.target.value)}
+                  placeholder="Nome da lesão..."
+                  className="damage-input injury-text-input"
+                />
+              </label>
+              <button
+                type="button"
+                className="apply-injury-button"
+                onClick={addManualCriticalInjury}
+                disabled={!manualInjuryName.trim()}
               >
-                {hitLocations.map((location) => (
-                  <option key={location} value={location}>{hitLocationLabels[location]}</option>
-                ))}
-              </select>
-              <select
-                aria-label="Lesão crítica"
-                value={manualInjuryName}
-                onChange={(event) => setManualInjuryName(event.target.value)}
-              >
-                <option value="">— Selecionar —</option>
-                {(manualInjuryLocation === "head" ? headCriticalInjuries : bodyCriticalInjuries).map((inj) => (
-                  <option key={inj.name} value={inj.name}>{inj.name}</option>
-                ))}
-              </select>
-              <input
-                type="text"
-                value={manualInjuryName}
-                onChange={(event) => setManualInjuryName(event.target.value)}
-                placeholder="ou digite..."
-              />
-              <button type="button" className="upgrade-skill" onClick={addManualCriticalInjury} disabled={!manualInjuryName.trim()}>
-                Adicionar
+                ➕ Adicionar Lesão
               </button>
             </div>
           </section>
