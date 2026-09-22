@@ -10,7 +10,7 @@ import {
   upgradeSkill,
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
-import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, rollDeathSave, applyFirstAid, type DamageApplicationResult } from "@/lib/damage";
+import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, rollDeathSave, applyFirstAid } from "@/lib/damage";
 import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold, calculateHPStatus } from "@/lib/calculations";
 import { rollEvasion, reloadWeapon } from "@/lib/attacks";
 import { rollDice } from "@/lib/dice";
@@ -87,8 +87,6 @@ export default function CharacterSheet({
   const [receivedDamage, setReceivedDamage] = useState("");
   const [hitLocation, setHitLocation] = useState<HitLocation>("body");
   const [combatError, setCombatError] = useState("");
-  const [lastDamageDealt, setLastDamageDealt] = useState<DamageApplicationResult | null>(null);
-  const [lastDamageReceived, setLastDamageReceived] = useState<DamageApplicationResult | null>(null);
   const [lastQuickhack, setLastQuickhack] = useState<QuickhackRollResult | null>(null);
   const [lastInitiative, setLastInitiative] = useState<{ diceRoll: number; refBonus: number; total: number; critical: boolean; fumble: boolean } | null>(null);
   const [manualInjuryLocation, setManualInjuryLocation] = useState<HitLocation>("body");
@@ -159,7 +157,6 @@ export default function CharacterSheet({
     const damageRoll = resolution.result;
     onUpdate(resolution.character);
     setLastDamage(damageRoll);
-    setLastDamageDealt(null);
   }
   function handleRollSkillCheck(character: Character, skillId: string) {
     const resolution = rollSkillCheck(character, skillId);
@@ -259,9 +256,18 @@ export default function CharacterSheet({
   }
   function removeCriticalInjury(index: number) {
     const updated = character.combat.criticalInjuries.filter((_, i) => i !== index);
+    const woundThreshold = calculateWoundThreshold(character.combat.hp.max);
+    // Se o personagem está Seriously Wounded ou pior, restaura HP para acima do threshold
+    const newHP = character.combat.hp.current <= woundThreshold
+      ? Math.min(character.combat.hp.max, woundThreshold + 1)
+      : character.combat.hp.current;
     onUpdate({
       ...character,
-      combat: { ...character.combat, criticalInjuries: updated },
+      combat: {
+        ...character.combat,
+        criticalInjuries: updated,
+        hp: { ...character.combat.hp, current: newHP },
+      },
     });
   }
   function handleReload(weaponId: string) {
@@ -276,7 +282,7 @@ export default function CharacterSheet({
   function receiveDamage() {
     const resolution = applyReceivedDamage(character, Number(receivedDamage), hitLocation);
     if ("error" in resolution) { setCombatError(resolution.error); return; }
-    setCombatError(""); setReceivedDamage(""); setLastDamageReceived(resolution.result); onUpdate(resolution.character);
+    setCombatError(""); setReceivedDamage(""); onUpdate(resolution.character);
   }
   function handleDeathSave() {
     setRollingDeathSave(true);
@@ -860,24 +866,6 @@ export default function CharacterSheet({
               ))
             ) : (
               <EmptyState>Nenhuma lesão crítica.</EmptyState>
-            )}
-            {lastDamageReceived?.criticalInjuryTriggered && lastDamageReceived.criticalInjury && (
-              <div className="critical-injury-detail" role="status">
-                <div className="critical-injury-header">
-                  <strong>⚠ Nova Critical Injury (Recently Triggered)</strong>
-                  {lastDamageReceived.crossedWoundThreshold && (
-                    <span className="seriously-wounded-inline">⚠ Seriously Wounded</span>
-                  )}
-                </div>
-                <div className="injury-field">
-                  <small>Ferimento</small>
-                  <strong>{lastDamageReceived.criticalInjury.name}</strong>
-                </div>
-                <div className="injury-field">
-                  <small>Efeito</small>
-                  <span>{lastDamageReceived.criticalInjury.effect}</span>
-                </div>
-              </div>
             )}
             <h3>Adicionar lesão manual</h3>
             <div className="damage-input-section injury-input-section">
