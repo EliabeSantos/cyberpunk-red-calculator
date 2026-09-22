@@ -34,6 +34,39 @@ export default function EncountersPageClient() {
   const [hitLocation, setHitLocation] = useState<"head" | "body">("body");
   const [conditionName, setConditionName] = useState("");
   const [showConfirmDelete, setShowConfirmDelete] = useState<string | null>(null);
+  const [minLevel, setMinLevel] = useState(1);
+  const [maxLevel, setMaxLevel] = useState(4);
+  const [previewSeed, setPreviewSeed] = useState(0);
+
+  // Simple seeded random for stable preview picks
+  const seededRandom = (seed: number) => {
+    let s = seed;
+    return () => {
+      s = (s * 16807 + 0) % 2147483647;
+      return (s - 1) / 2147483646;
+    };
+  };
+
+  const getPreviewEnemies = (count: number) => {
+    if (!faction) return [];
+    const threatLevels = ["low", "medium", "high", "extreme"];
+    const minThreat = threatLevels[minLevel - 1] || "low";
+    const maxThreat = threatLevels[maxLevel - 1] || "extreme";
+    const minIndex = threatLevels.indexOf(minThreat);
+    const maxIndex = threatLevels.indexOf(maxThreat);
+    const eligible = gmEnemyCatalog.filter(
+      (e) => e.identity.faction === faction && e.identity.archetype && threatLevels.indexOf(e.identity.threatLevel) >= minIndex && threatLevels.indexOf(e.identity.threatLevel) <= maxIndex
+    );
+    if (eligible.length === 0) return [];
+    const rng = seededRandom(previewSeed + count);
+    const shuffled = [...eligible].sort(() => rng() - 0.5);
+    // Wrap around if there are fewer eligible enemies than requested
+    const result = [];
+    for (let i = 0; i < count; i++) {
+      result.push(shuffled[i % shuffled.length]);
+    }
+    return result;
+  };
 
   // Load saved encounters
   useEffect(() => {
@@ -48,7 +81,15 @@ export default function EncountersPageClient() {
 
   const handleStartEncounter = () => {
     if (!faction || !encounterName.trim()) return;
-    const newEncounter = createEncounterFromFaction(encounterName.trim(), faction, enemyCount, gmEnemyCatalog);
+    const threatLevels = ["low", "medium", "high", "extreme"];
+    const minThreat = threatLevels[minLevel - 1] || "low";
+    const maxThreat = threatLevels[maxLevel - 1] || "extreme";
+    const minIndex = threatLevels.indexOf(minThreat);
+    const maxIndex = threatLevels.indexOf(maxThreat);
+    const filteredCatalog = gmEnemyCatalog.filter(
+      (e) => e.identity.faction === faction && threatLevels.indexOf(e.identity.threatLevel) >= minIndex && threatLevels.indexOf(e.identity.threatLevel) <= maxIndex
+    );
+    const newEncounter = createEncounterFromFaction(encounterName.trim(), faction, enemyCount, filteredCatalog.length > 0 ? filteredCatalog : gmEnemyCatalog);
     if (newEncounter.participants.length === 0) return;
     setEncounter(newEncounter);
     setPhase("combat");
@@ -149,11 +190,6 @@ export default function EncountersPageClient() {
     setEncounter({ ...encounter, participants: withInitiative });
   };
 
-  const handleImportAllEnemies = () => {
-    const { importCatalogEnemies } = require("@/lib/gmStorage");
-    importCatalogEnemies();
-  };
-
   return (
     <div className="gm-page">
       <header className="gm-page-header">
@@ -182,67 +218,125 @@ export default function EncountersPageClient() {
 
       {phase === "setup" && (
         <>
-        <div className="encounter-setup">
-          <div className="encounter-setup-panel">
-            <h2 className="section-heading">
-              <span>⚔️</span> Novo Encontro
-            </h2>
-
-            <div className="encounter-form-grid">
-              <div className="gm-form-field">
-                <label className="gm-form-label" htmlFor="encounter-name">Nome do Encontro</label>
-                <input
-                  id="encounter-name"
-                  className="gm-form-input"
-                  type="text"
-                  placeholder="Ex: Ataque à Corp Zone"
-                  value={encounterName}
-                  onChange={(e) => setEncounterName(e.target.value)}
-                />
+          <div className="encounter-setup">
+            <div className="encounter-setup-panel">
+              <div className="encounter-hero">
+                <div className="encounter-hero-content">
+                  <div className="encounter-hero-icon">⚔️</div>
+                  <div className="encounter-hero-text">
+                    <h2 className="encounter-hero-title">Novo Encontro</h2>
+                    <p className="encounter-hero-desc">Configure o combate, selecione a facção inimiga e inicie a sessão de combate.</p>
+                  </div>
+                </div>
               </div>
+              <div className="encounter-form-grid">
+                <div className="encounter-form-section">
+                  <div className="encounter-form-section-header">
+                    <span className="encounter-form-section-icon">📝</span>
+                    <span className="encounter-form-section-title">Identificação</span>
+                  </div>
+                  <div className="encounter-form-fields">
+                    <div className="gm-form-field">
+                      <label className="gm-form-label" htmlFor="encounter-name">
+                        Nome do Encontro <span className="encounter-required">*</span>
+                      </label>
+                      <input
+                        id="encounter-name"
+                        className="gm-form-input"
+                        type="text"
+                        placeholder="Ex: Ataque à Corp Zone"
+                        value={encounterName}
+                        onChange={(e) => setEncounterName(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
 
-              <div className="gm-form-field">
-                <label className="gm-form-label" htmlFor="encounter-faction">Facção</label>
-                <select
-                  id="encounter-faction"
-                  className="gm-form-select"
-                  value={faction}
-                  onChange={(e) => handleFactionChange(e.target.value)}
-                >
-                  <option value="">— Selecione uma facção —</option>
-                  {availableFactions.map((f) => (
-                    <option key={f} value={f}>{f}</option>
-                  ))}
-                </select>
-              </div>
+                <div className="encounter-form-section">
+                  <div className="encounter-form-section-header">
+                    <span className="encounter-form-section-icon">🛡️</span>
+                    <span className="encounter-form-section-title">Forças Inimigas</span>
+                  </div>
+                  <div className="encounter-form-fields">
+                    <div className="gm-form-field">
+                      <label className="gm-form-label" htmlFor="encounter-faction">
+                        Facção <span className="encounter-required">*</span>
+                      </label>
+                      <select
+                        id="encounter-faction"
+                        className="gm-form-select"
+                        value={faction}
+                        onChange={(e) => handleFactionChange(e.target.value)}
+                      >
+                        <option value="">— Selecione uma facção —</option>
+                        {availableFactions.map((f) => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="gm-form-field">
+                      <label className="gm-form-label" htmlFor="encounter-count">Quantidade de Inimigos</label>
+                      <input
+                        id="encounter-count"
+                        className="gm-form-input"
+                        type="number"
+                        min={1}
+                        max={12}
+                        value={enemyCount}
+                        onChange={(e) => setEnemyCount(parseInt(e.target.value, 10) || 1)}
+                      />
+                      <small className="gm-form-hint">
+                        Inimigos serão selecionados da facção escolhida (máximo 12)
+                      </small>
+                    </div>
+                  </div>
+                </div>
 
-              <div className="gm-form-field">
-                <label className="gm-form-label" htmlFor="encounter-count">Quantidade de Inimigos</label>
-                <input
-                  id="encounter-count"
-                  className="gm-form-input"
-                  type="number"
-                  min={1}
-                  max={12}
-                  value={enemyCount}
-                  onChange={(e) => setEnemyCount(parseInt(e.target.value, 10) || 1)}
-                />
-                <small className="gm-form-hint">
-                  Inimigos serão selecionados da facção escolhida (máximo 12)
-                </small>
-              </div>
-
-              <div className="encounter-preview">
-                <h3 className="section-heading">
-                  <span>👥</span> Preview dos Participantes
-                </h3>
-                {faction ? (
-                  <div className="encounter-participant-list">
-                    {Array.from({ length: enemyCount }, (_, i) => {
-                      const factionEnemies = gmEnemyCatalog.filter((e) => e.identity.faction === faction && e.identity.archetype);
-                      const source = factionEnemies.length > 0 ? factionEnemies[i % factionEnemies.length] : null;
-                      return source ? (
-                        <div key={i} className="encounter-preview-item">
+                <div className="encounter-preview">
+                  <div className="encounter-preview-header">
+                    <h3 className="section-heading">
+                      <span>👥</span> Preview dos Participantes
+                    </h3>
+                    <div className="encounter-preview-controls">
+                      <label className="encounter-minlevel-label">
+                        Min Level
+                        <select
+                          className="encounter-minlevel-select"
+                          value={minLevel}
+                          onChange={(e) => { setMinLevel(Number(e.target.value)); setPreviewSeed((s) => s + 1); }}
+                        >
+                          <option value={1}>1</option>
+                          <option value={2}>2</option>
+                          <option value={3}>3</option>
+                          <option value={4}>4</option>
+                        </select>
+                      </label>
+                      <label className="encounter-minlevel-label">
+                        Max Level
+                        <select
+                          className="encounter-minlevel-select"
+                          value={maxLevel}
+                          onChange={(e) => { setMaxLevel(Number(e.target.value)); setPreviewSeed((s) => s + 1); }}
+                        >
+                          <option value={1}>1</option>
+                          <option value={2}>2</option>
+                          <option value={3}>3</option>
+                          <option value={4}>4</option>
+                        </select>
+                      </label>
+                      <button
+                        className="gm-button gm-button-small encounter-repick-button"
+                        onClick={() => setPreviewSeed((s) => s + 1)}
+                        disabled={!faction}
+                      >
+                        🔄 Repick
+                      </button>
+                    </div>
+                  </div>
+                  {faction ? (
+                    <div className="encounter-participant-list">
+                      {getPreviewEnemies(enemyCount).map((source, i) => (
+                        <div key={`${previewSeed}-${i}`} className="encounter-preview-item">
                           <span className="encounter-preview-name">
                             {source.identity.name || `${source.identity.archetype} #${i + 1}`}
                           </span>
@@ -250,78 +344,77 @@ export default function EncountersPageClient() {
                             {source.identity.archetype} · Level {source.identity.threatLevel === "extreme" ? 4 : source.identity.threatLevel === "high" ? 3 : source.identity.threatLevel === "medium" ? 2 : 1} · HP {source.combat.hp.max}
                           </span>
                         </div>
-                      ) : (
-                        <div key={i} className="encounter-preview-item">
-                          <span className="encounter-preview-name">{faction} #${i + 1}</span>
-                          <span className="encounter-preview-meta">Inimigo genérico</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="encounter-empty">Selecione uma facção para ver o preview</p>
-                )}
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="encounter-empty">Selecione uma facção para ver o preview</p>
+                  )}
+                </div>
               </div>
-            </div>
 
-            <div className="encounter-actions">
-              <button
-                className="gm-button gm-button-primary"
-                onClick={handleStartEncounter}
-                disabled={!faction || !encounterName.trim()}
-              >
-                ⚔️ Iniciar Encontro
-              </button>
-              <button className="gm-button gm-button-secondary" onClick={handleImportAllEnemies}>
-                📦 Importar Catálogo Completo
-              </button>
-            </div>
-          </div>
-        </div>
+              <div className="encounter-actions">
+                <button
+                  className="gm-button gm-button-primary encounter-start-button"
+                  onClick={handleStartEncounter}
+                  disabled={!faction || !encounterName.trim()}
+                >
+                  <span className="encounter-start-icon">⚔️</span>
+                  <span className="encounter-start-text">Iniciar Encontro</span>
+                </button>
+              </div>
 
-        {savedEncounters.length > 0 && (
-          <div className="encounter-setup-saved">
-            <h2 className="section-heading">
-              <span>📋</span> Encontros Salvos
-            </h2>
-            <div className="encounter-saved-list">
-              {savedEncounters.map((e) => (
-                <div key={e.id} className="encounter-saved-card">
-                  <div className="encounter-saved-info">
-                    <span className="encounter-saved-name">{e.name}</span>
-                    <span className="encounter-saved-meta">
-                      {e.faction} · {e.participants.length} inimigos · {new Date(e.createdAt).toLocaleDateString("pt-BR")}
-                    </span>
-                  </div>
-                  <div className="encounter-saved-actions">
-                    <button className="gm-button gm-button-small" onClick={() => handleLoadEncounter(e.id)}>
-                      ▶️ Carregar
+              {savedEncounters.length > 0 && (
+                <div className="encounter-setup-saved">
+                  <div className="encounter-saved-header">
+                    <div className="encounter-saved-header-left">
+                      <span className="encounter-saved-header-icon">📋</span>
+                      <div>
+                        <h2 className="encounter-saved-header-title">Encontros Salvos</h2>
+                        <span className="encounter-saved-header-count">{savedEncounters.length} encontro{savedEncounters.length !== 1 ? "s" : ""}</span>
+                      </div>
+                    </div>
+                    <button className="gm-button gm-button-small gm-button-danger" onClick={handleClearAll}>
+                      🗑️ Limpar Todos
                     </button>
-                    {showConfirmDelete === e.id ? (
-                      <>
-                        <button className="gm-button gm-button-small gm-button-danger" onClick={() => handleDeleteEncounter(e.id)}>
-                          Confirmar
-                        </button>
-                        <button className="gm-button gm-button-small" onClick={() => setShowConfirmDelete(null)}>
-                          Cancelar
-                        </button>
-                      </>
-                    ) : (
-                      <button className="gm-button gm-button-small" onClick={() => setShowConfirmDelete(e.id)}>
-                        🗑️
-                      </button>
-                    )}
+                  </div>
+                  <div className="encounter-saved-list">
+                    {savedEncounters.map((e) => (
+                      <div key={e.id} className="encounter-saved-card">
+                        <div className="encounter-saved-card-main">
+                          <span className="encounter-saved-name">{e.name}</span>
+                          <div className="encounter-saved-details">
+                            <span className="encounter-saved-detail-badge">{e.faction}</span>
+                            <span className="encounter-saved-detail-text">{e.participants.length} inimigos</span>
+                            <span className="encounter-saved-detail-sep">·</span>
+                            <span className="encounter-saved-detail-text">{new Date(e.createdAt).toLocaleDateString("pt-BR")}</span>
+                          </div>
+                        </div>
+                        <div className="encounter-saved-actions">
+                          <button className="gm-button gm-button-small" onClick={() => handleLoadEncounter(e.id)}>
+                            ▶️ Carregar
+                          </button>
+                          {showConfirmDelete === e.id ? (
+                            <>
+                              <button className="gm-button gm-button-small gm-button-danger" onClick={() => handleDeleteEncounter(e.id)}>
+                                Confirmar
+                              </button>
+                              <button className="gm-button gm-button-small" onClick={() => setShowConfirmDelete(null)}>
+                                Cancelar
+                              </button>
+                            </>
+                          ) : (
+                            <button className="gm-button gm-button-small" onClick={() => setShowConfirmDelete(e.id)}>
+                              🗑️
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ))}
-            </div>
-            <div className="encounter-saved-back">
-              <button className="gm-button gm-button-secondary" onClick={handleClearAll}>
-                🗑️ Limpar Todos
-              </button>
+              )}
             </div>
           </div>
-        )}
         </>
       )}
 
