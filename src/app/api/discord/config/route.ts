@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { DiscordNotConfiguredError, getBotDirectory } from "@/lib/discord/bot";
 import { normalizeSessionCode } from "@/lib/discord/sessionCode";
 import { getSessionConfig, saveSessionConfig } from "@/lib/discord/sessionStore";
-import { isDiscordConfigRequest, type DiscordConfigView } from "@/lib/discord/types";
+import { isDiscordConfigRequest, type DiscordBotDirectory, type DiscordConfigView } from "@/lib/discord/types";
 
 export const runtime = "nodejs";
 
@@ -70,39 +70,57 @@ export async function POST(request: Request) {
     );
   }
 
+  // Fase 1: conectar ao bot (gateway Discord). Falhas aqui são de rede/token.
+  let directory: DiscordBotDirectory;
   try {
-    const directory = await getBotDirectory();
-
-    const guild = directory.guilds.find((item) => item.id === body.guildId);
-    if (!guild) {
-      return Response.json(
-        {
-          ok: false,
-          error:
-            "O bot não está instalado neste servidor Discord. Use o link de instalação e tente novamente.",
-        },
-        { status: 400 },
-      );
+    directory = await getBotDirectory();
+  } catch (error) {
+    if (error instanceof DiscordNotConfiguredError) {
+      return Response.json({ ok: false, error: error.message }, { status: 503 });
     }
+    console.error("[discord] Falha ao consultar o bot ao salvar:", error);
+    return Response.json(
+      {
+        ok: false,
+        error:
+          "Não foi possível conectar ao bot do Discord. Confira a conexão e tente novamente.",
+      },
+      { status: 502 },
+    );
+  }
 
-    const channel = guild.channels.find((item) => item.id === body.channelId);
-    if (!channel) {
-      return Response.json(
-        { ok: false, error: "O canal escolhido não existe mais neste servidor." },
-        { status: 400 },
-      );
-    }
-    if (!channel.canSend) {
-      return Response.json(
-        {
-          ok: false,
-          error:
-            "O bot não pode enviar mensagens neste canal (necessário: Ver canal e Enviar mensagens).",
-        },
-        { status: 400 },
-      );
-    }
+  const guild = directory.guilds.find((item) => item.id === body.guildId);
+  if (!guild) {
+    return Response.json(
+      {
+        ok: false,
+        error:
+          "O bot não está instalado neste servidor Discord. Use o link de instalação e tente novamente.",
+      },
+      { status: 400 },
+    );
+  }
 
+  const channel = guild.channels.find((item) => item.id === body.channelId);
+  if (!channel) {
+    return Response.json(
+      { ok: false, error: "O canal escolhido não existe mais neste servidor." },
+      { status: 400 },
+    );
+  }
+  if (!channel.canSend) {
+    return Response.json(
+      {
+        ok: false,
+        error:
+          "O bot não pode enviar mensagens neste canal (necessário: Ver canal e Enviar mensagens).",
+      },
+      { status: 400 },
+    );
+  }
+
+  // Fase 2: gravar a vinculação mesa → guild → canal em disco.
+  try {
     const saved = saveSessionConfig(sessionCode, {
       guildId: body.guildId,
       channelId: body.channelId,
@@ -117,6 +135,13 @@ export async function POST(request: Request) {
       current: { guildId: saved.guildId, channelId: saved.channelId },
     });
   } catch (error) {
-    return errorResponse(error, "Falha ao salvar a configuração do Discord.");
+    console.error("[discord] Falha ao gravar configuração da mesa:", error);
+    return Response.json(
+      {
+        ok: false,
+        error: "Falha ao gravar a configuração em ./data (verifique permissões de escrita).",
+      },
+      { status: 502 },
+    );
   }
 }
