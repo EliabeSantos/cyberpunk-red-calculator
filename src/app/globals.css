@@ -3416,4 +3416,43 @@
   .enemy-list-create-link { min-height: 44px; padding: 0.35rem 0; }
   .gm-page-create-button { min-height: 44px; padding: 0.65rem 0.85rem; }
   .enemy-list-empty { padding: 1.5rem 1rem; }
+
+  /* ---- Redesign do miolo do cartão (mobile) ---- */
+
+  /* Stats: label em cima, valor embaixo ocupando a largura toda
+     (small vira inline → "35 / 35" e "C 11 H 11" em1 linha) */
+  .enemy-stat { grid-template-columns: 1fr; gap: 0.1rem; }
+  .enemy-stat-value small { display: inline; }
+
+  /* Descrição: no máximo3 linhas — texto completo fica no modal "Ver" */
+  .enemy-card-description {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+  }
+
+  /* Atributos: chips quebráveis em vez de muro de texto;
+     os " · " viram os pontos entre os chips e os espaços
+     continuam sendo os pontos de quebra de linha */
+  .enemy-attr-token {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    border: 1px solid #29312c;
+    padding: 0.1rem 0.4rem;
+    margin: 0.1rem 0;
+  }
+  .enemy-attr-label { color: var(--muted); font-size: 0.6875rem; letter-spacing: 0.04em; }
+  .enemy-attr-value { color: var(--accent); font-size: 0.82rem; font-weight: 700; }
+
+  /* Perícias/Armas/Condições: células lado a lado (grade auto-fit);
+     Atributos e Condições ocupam a faixa inteira */
+  .enemy-card-preview { grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr)); gap: 0.6rem; }
+  .enemy-card-preview > .enemy-preview-item:first-child { grid-column: 1 / -1; }
+  .enemy-preview-conditions { grid-column: 1 / -1; }
+
+  /* Respiro maior entre as filas de botões */
+  .enemy-card-actions { gap: 0.5rem; }
 }

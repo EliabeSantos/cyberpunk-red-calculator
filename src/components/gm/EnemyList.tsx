@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 import type { Enemy } from "@/types/enemy";
 import { loadEnemies, removeEnemy, importCatalogEnemies, upsertEnemy } from "@/lib/gmStorage";
 import { threatLevelLabels, threatLevelColors } from "@/data/enemies";
@@ -11,6 +11,10 @@ interface EnemyListProps {
   onView?: (enemy: Enemy) => void;
   onRollDice?: (enemy: Enemy) => void;
 }
+
+// Atributos exibidos no cartão (mesma ordem do texto original; LUCK fica de fora,
+// como sempre esteve — igual ao formato antigo).
+const CARD_STAT_ORDER = ["INT", "REF", "DEX", "TECH", "COOL", "WILL", "MOVE", "BODY", "EMP"] as const;
 
 export default function EnemyList({ onEdit, onView, onRollDice }: EnemyListProps) {
   const [enemies, setEnemies] = useState<Enemy[]>([]);
@@ -107,11 +111,11 @@ export default function EnemyList({ onEdit, onView, onRollDice }: EnemyListProps
               <div className="enemy-card-stats">
                 <div className="enemy-stat">
                   <span className="enemy-stat-label">HP</span>
-                  <span className="enemy-stat-value">{enemy.combat.hp.current}<small>/ {enemy.combat.hp.max}</small></span>
+                  <span className="enemy-stat-value">{enemy.combat.hp.current}{" "}<small>/ {enemy.combat.hp.max}</small></span>
                 </div>
                 <div className="enemy-stat">
                   <span className="enemy-stat-label">Armadura</span>
-                  <span className="enemy-stat-value">C {enemy.combat.armor.body}<small>H {enemy.combat.armor.head}</small></span>
+                  <span className="enemy-stat-value">C {enemy.combat.armor.body}{" "}<small>H {enemy.combat.armor.head}</small></span>
                 </div>
               </div>
             </div>
@@ -124,9 +128,17 @@ export default function EnemyList({ onEdit, onView, onRollDice }: EnemyListProps
               <div className="enemy-preview-item">
                 <span className="enemy-preview-label">Atributos</span>
                 <span className="enemy-preview-value">
-                  INT {enemy.stats.INT} · REF {enemy.stats.REF} · DEX {enemy.stats.DEX} · 
-                  TECH {enemy.stats.TECH} · COOL {enemy.stats.COOL} · WILL {enemy.stats.WILL} · 
-                  MOVE {enemy.stats.MOVE} · BODY {enemy.stats.BODY} · EMP {enemy.stats.EMP}
+                  {CARD_STAT_ORDER.map((stat, idx) => (
+                    <Fragment key={stat}>
+                      <span className="enemy-attr-token">
+                        <span className="enemy-attr-label">{stat}</span>{" "}
+                        <span className="enemy-attr-value">{enemy.stats[stat]}</span>
+                      </span>
+                      {idx < CARD_STAT_ORDER.length - 1 && (
+                        <span className="enemy-attr-sep">{" · "}</span>
+                      )}
+                    </Fragment>
+                  ))}
                 </span>
               </div>
               <div className="enemy-preview-item">
