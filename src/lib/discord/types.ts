@@ -58,6 +58,71 @@ export function isDiscordRollPayload(value: unknown): value is DiscordRollPayloa
   );
 }
 
+// ─── Iniciativa de encontro (mensagem-resumo única) ───
+
+/** Uma linha da tabela de iniciativa — rolagem, bônus e total já calculados pelo site. */
+export interface DiscordInitiativeRow {
+  /** Nome do participante exibido na tela do GM (inimigo). */
+  name: string;
+  /** Dado único rolado (d10). */
+  roll: number;
+  /** Bônus de REF somado pelo site. */
+  ref: number;
+  /** Total final (roll + ref), igual ao exibido na tela. */
+  total: number;
+}
+
+/**
+ * Payload de UMA mensagem com a ordem de iniciativa completa do encontro.
+ * O site rola, soma e ordena; o Discord apenas reproduz a tabela.
+ * Uma mensagem por inimigo encheria o canal e esbarraria no rate limit (5/5s).
+ */
+export interface DiscordInitiativePayload {
+  sessionCode: string;
+  kind: "initiative";
+  /** Nome do encontro — contexto da mensagem. */
+  encounterName: string;
+  rows: DiscordInitiativeRow[];
+}
+
+/** Mensagens aceitas pelo endpoint de espelho: rolagem única ou resumo de iniciativa. */
+export type DiscordMessagePayload = DiscordRollPayload | DiscordInitiativePayload;
+
+export function isDiscordInitiativeRow(value: unknown): value is DiscordInitiativeRow {
+  if (typeof value !== "object" || value === null) return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.name === "string" &&
+    row.name.length > 0 &&
+    Number.isInteger(row.roll) &&
+    Number.isInteger(row.ref) &&
+    Number.isInteger(row.total)
+  );
+}
+
+export function isDiscordInitiativePayload(value: unknown): value is DiscordInitiativePayload {
+  if (typeof value !== "object" || value === null) return false;
+  const payload = value as Record<string, unknown>;
+  return (
+    typeof payload.sessionCode === "string" &&
+    payload.sessionCode.length > 0 &&
+    payload.kind === "initiative" &&
+    typeof payload.encounterName === "string" &&
+    payload.encounterName.length > 0 &&
+    Array.isArray(payload.rows) &&
+    payload.rows.length > 0 &&
+    payload.rows.every(isDiscordInitiativeRow)
+  );
+}
+
+/** Aceita qualquer uma das duas mensagens; uma falha de forma nunca publica. */
+export function isDiscordMessagePayload(value: unknown): value is DiscordMessagePayload {
+  if (typeof value !== "object" || value === null) return false;
+  return (value as Record<string, unknown>).kind === "initiative"
+    ? isDiscordInitiativePayload(value)
+    : isDiscordRollPayload(value);
+}
+
 // ─── Diretório do bot e configuração de mesa (painel) ───
 
 export interface DiscordDirectoryChannel {

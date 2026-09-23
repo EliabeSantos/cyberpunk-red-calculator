@@ -1,6 +1,6 @@
 import "server-only";
 
-import { formatRollMessage } from "@/lib/discord/format";
+import { formatMessage } from "@/lib/discord/format";
 import {
   canBotSend,
   type BotGuildMember,
@@ -11,7 +11,7 @@ import type {
   DiscordBotDirectory,
   DiscordDirectoryChannel,
   DiscordDirectoryGuild,
-  DiscordRollPayload,
+  DiscordMessagePayload,
 } from "@/lib/discord/types";
 
 /**
@@ -115,11 +115,11 @@ async function discordFetch(path: string, init?: RequestInit): Promise<Response>
 export interface SendRollOptions {
   guildId: string;
   channelId: string;
-  payload: DiscordRollPayload;
+  payload: DiscordMessagePayload;
 }
 
 /**
- * Publica uma rolagem já calculada pelo site no canal do servidor indicado.
+ * Publica uma mensagem de rolagem já calculada pelo site no canal indicado.
  * A resolução guildId → channelId chega pronta da camada de configuração.
  */
 export async function sendRollToDiscord({
@@ -192,7 +192,7 @@ export async function sendRollToDiscord({
   const sendResponse = await discordFetch(`/channels/${channelId}/messages`, {
     method: "POST",
     body: JSON.stringify({
-      content: formatRollMessage(payload),
+      content: formatMessage(payload),
       // Nenhuma menção (@everyone, usuários) é interpretada na mensagem.
       allowed_mentions: { parse: [] },
     }),

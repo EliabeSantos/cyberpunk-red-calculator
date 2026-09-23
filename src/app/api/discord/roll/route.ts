@@ -9,7 +9,7 @@ import {
   DatabaseQueryError,
   getSessionConfig,
 } from "@/lib/discord/sessionStore";
-import { isDiscordRollPayload } from "@/lib/discord/types";
+import { isDiscordMessagePayload } from "@/lib/discord/types";
 
 export const runtime = "nodejs";
 
@@ -27,9 +27,9 @@ export async function POST(request: Request) {
     return Response.json({ ok: false, error: "Corpo JSON inválido." }, { status: 400 });
   }
 
-  if (!isDiscordRollPayload(body)) {
+  if (!isDiscordMessagePayload(body)) {
     return Response.json(
-      { ok: false, error: "Payload de rolagem inválido." },
+      { ok: false, error: "Payload de mensagem inválido." },
       { status: 400 },
     );
   }

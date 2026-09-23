@@ -1,6 +1,12 @@
 import { getDiscordConsent } from "@/lib/discord/consent";
 import { getSessionCode } from "@/lib/discord/session";
-import { isDiceRollKind, type DiscordRollPayload } from "@/lib/discord/types";
+import {
+  isDiceRollKind,
+  type DiscordInitiativePayload,
+  type DiscordInitiativeRow,
+  type DiscordMessagePayload,
+  type DiscordRollPayload,
+} from "@/lib/discord/types";
 import type { Character, RollHistoryEntry } from "@/types/character";
 
 /**
@@ -54,15 +60,123 @@ export function notifyDiscordRoll(entry: RollHistoryEntry, character: Character)
   // Sem mesa definida não há servidor de destino — não envia nada.
   if (!payload.sessionCode) return;
 
+  postToDiscord(payload);
+}
+
+/**
+ * Fire-and-forget compartilhado entre jogador e GM: uma falha nunca afeta
+ * o site. O Discord é apenas um espelho do que já foi calculado aqui.
+ */
+function postToDiscord(body: DiscordMessagePayload): void {
   try {
     void fetch("/api/discord/roll", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(body),
     }).catch(() => {
-      // Silencioso: o Discord é apenas um espelho da rolagem.
+      // Silencioso por design.
     });
   } catch {
     // Silencioso por design.
   }
+}
+
+// ─── Encontros do GM: mesmos portões e o mesmo espelho ───
+
+/**
+ * Recorte de um participante de encontro necessário para montar o payload.
+ * Estrutural de propósito: este módulo não depende do gmStorage.
+ */
+export interface EnemyRollSource {
+  name: string;
+  archetype: string;
+  weaponName: string;
+  attackBase: number;
+  damageExpression: string;
+  lastAttackRoll: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
+  lastDamageRoll: { rolls: number[]; total: number } | null;
+}
+
+function enemyLabel(participant: EnemyRollSource): string {
+  return participant.name.trim() || participant.archetype.trim() || "Inimigo";
+}
+
+/**
+ * Payload do ataque do inimigo a partir do último resultado já calculado.
+ * Mesma decomposição do lado do jogador: modificador = total - soma(dados),
+ * que aqui equivale exatamente ao ataqueBase.
+ */
+export function buildEnemyAttackPayload(participant: EnemyRollSource): DiscordRollPayload | null {
+  const roll = participant.lastAttackRoll;
+  if (!roll || roll.diceRolls.length === 0) return null;
+
+  const diceTotal = roll.diceRolls.reduce((sum, value) => sum + value, 0);
+  const weapon = participant.weaponName.trim();
+
+  return {
+    sessionCode: getSessionCode() ?? "",
+    kind: "attack",
+    playerName: enemyLabel(participant),
+    rollType: weapon || "Ataque",
+    expression: "1d10",
+    rolls: roll.diceRolls,
+    modifier: roll.total - diceTotal,
+    total: roll.total,
+  };
+}
+
+/** Payload do dano do inimigo; modificador absorve bônus da expressão (ex.: 1d6+3 → +3). */
+export function buildEnemyDamagePayload(participant: EnemyRollSource): DiscordRollPayload | null {
+  const roll = participant.lastDamageRoll;
+  if (!roll || roll.rolls.length === 0) return null;
+
+  const diceTotal = roll.rolls.reduce((sum, value) => sum + value, 0);
+  const weapon = participant.weaponName.trim();
+
+  return {
+    sessionCode: getSessionCode() ?? "",
+    kind: "damage",
+    playerName: enemyLabel(participant),
+    rollType: weapon ? `Dano de ${weapon}` : "Dano",
+    expression: participant.damageExpression,
+    rolls: roll.rolls,
+    modifier: roll.total - diceTotal,
+    total: roll.total,
+  };
+}
+
+/** Envia o ataque do inimigo — mesmos portões: consentimento + código de mesa. */
+export function notifyEnemyAttack(participant: EnemyRollSource): void {
+  if (getDiscordConsent() !== "granted") return;
+  const payload = buildEnemyAttackPayload(participant);
+  if (!payload || !payload.sessionCode) return;
+  postToDiscord(payload);
+}
+
+/** Envia o dano do inimigo — mesmos portões: consentimento + código de mesa. */
+export function notifyEnemyDamage(participant: EnemyRollSource): void {
+  if (getDiscordConsent() !== "granted") return;
+  const payload = buildEnemyDamagePayload(participant);
+  if (!payload || !payload.sessionCode) return;
+  postToDiscord(payload);
+}
+
+/**
+ * Envia a iniciativa de TODO o encontro em UMA única mensagem-resumo.
+ * `rows` vem na ordem (decrescente) que o site exibe — o Discord só reproduz.
+ */
+export function notifyEnemyInitiative(encounterName: string, rows: DiscordInitiativeRow[]): void {
+  if (getDiscordConsent() !== "granted") return;
+  if (rows.length === 0) return;
+
+  const sessionCode = getSessionCode() ?? "";
+  if (!sessionCode) return;
+
+  const payload: DiscordInitiativePayload = {
+    sessionCode,
+    kind: "initiative",
+    encounterName: encounterName.trim() || "Encontro",
+    rows,
+  };
+  postToDiscord(payload);
 }

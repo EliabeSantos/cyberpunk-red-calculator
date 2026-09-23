@@ -19,6 +19,7 @@ import {
 import { gmEnemyCatalog, availableFactions } from "@/data/gm-enemies";
 import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjuries";
 import { rollDice } from "@/lib/dice";
+import { notifyEnemyAttack, notifyEnemyDamage, notifyEnemyInitiative } from "@/lib/discord/rollNotify";
 
 export default function EncountersPageClient() {
   const [phase, setPhase] = useState<"setup" | "combat" | "saved">("setup");
@@ -140,12 +141,17 @@ export default function EncountersPageClient() {
 
   const handleRollAttack = (participantIndex: number) => {
     if (!encounter) return;
-    setEncounter(rollAttack(encounter, participantIndex));
+    const next = rollAttack(encounter, participantIndex);
+    setEncounter(next);
+    // Espelho no Discord (mesmos portões do jogador): consentimento + mesa.
+    notifyEnemyAttack(next.participants[participantIndex]);
   };
 
   const handleRollDamage = (participantIndex: number) => {
     if (!encounter) return;
-    setEncounter(rollDamage(encounter, participantIndex));
+    const next = rollDamage(encounter, participantIndex);
+    setEncounter(next);
+    notifyEnemyDamage(next.participants[participantIndex]);
   };
 
   const handleApplyDamage = (participantIndex: number) => {
@@ -182,12 +188,26 @@ export default function EncountersPageClient() {
 
   const handleRollInitiative = () => {
     if (!encounter) return;
-    const withInitiative = encounter.participants.map((p) => {
+    const rolled = encounter.participants.map((p) => {
       const roll = rollDice("1d10").rolls[0];
-      return { ...p, initiative: roll + p.refStat };
+      return { participant: p, roll, ref: p.refStat, total: roll + p.refStat };
     });
-    withInitiative.sort((a, b) => (b.initiative ?? 0) - (a.initiative ?? 0));
-    setEncounter({ ...encounter, participants: withInitiative });
+    rolled.sort((a, b) => b.total - a.total);
+    setEncounter({
+      ...encounter,
+      participants: rolled.map((r) => ({ ...r.participant, initiative: r.total })),
+    });
+    // UMA única mensagem-resumo com a tabela completa (uma por inimigo
+    // encheria o canal e esbarraria no rate limit do Discord).
+    notifyEnemyInitiative(
+      encounter.name,
+      rolled.map((r) => ({
+        name: r.participant.name.trim() || r.participant.archetype.trim() || "Inimigo",
+        roll: r.roll,
+        ref: r.ref,
+        total: r.total,
+      })),
+    );
   };
 
   return (
