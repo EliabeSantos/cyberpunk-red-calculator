@@ -3,6 +3,7 @@ import { after, test } from "node:test";
 
 import { getDiscordConsent, setDiscordConsent } from "../src/lib/discord/consent.ts";
 import { notifyDiscordRoll } from "../src/lib/discord/rollNotify.ts";
+import { setSessionCode } from "../src/lib/discord/session.ts";
 import { createEmptyCharacter, type RollHistoryEntry } from "../src/types/character.ts";
 
 type FakeStorage = { data: Map<string, string> };
@@ -81,9 +82,18 @@ test("com consentimento NEGADO NENHUMA informação é enviada", () => {
   assert.equal(calls.length, 0, "nada deve ser enviado quando o usuário recusa");
 });
 
+test("sem código de mesa NENHUMA informação é enviada", () => {
+  installFakeWindow();
+  setDiscordConsent("granted");
+  const calls = installFetchSpy();
+  notifyDiscordRoll(attackEntry(), createEmptyCharacter("char"));
+  assert.equal(calls.length, 0, "sem mesa não há servidor de destino — não envia");
+});
+
 test("com consentimento CONCEDIDO o payload é enviado com o resultado do site", async () => {
   installFakeWindow();
   setDiscordConsent("granted");
+  assert.equal(setSessionCode("mesa-teste"), true, "código da mesa deve ser válido");
   const calls = installFetchSpy();
 
   const character = createEmptyCharacter("char");
@@ -92,6 +102,7 @@ test("com consentimento CONCEDIDO o payload é enviado com o resultado do site",
 
   assert.equal(calls.length, 1, "deve enviar exatamente uma requisição");
   const payload = JSON.parse(calls[0]);
+  assert.equal(payload.sessionCode, "mesa-teste", "a rolagem leva o código da mesa");
   assert.equal(payload.playerName, "Eliabe");
   assert.equal(payload.rollType, "Ataque com Pistola");
   assert.deepEqual(payload.rolls, [7]);

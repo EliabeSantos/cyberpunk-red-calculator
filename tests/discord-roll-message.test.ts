@@ -8,6 +8,7 @@ import { createEmptyCharacter, type RollHistoryEntry } from "../src/types/charac
 
 function payload(overrides: Partial<DiscordRollPayload>): DiscordRollPayload {
   return {
+    sessionCode: "mesa-teste",
     kind: "attack",
     playerName: "Eliabe",
     rollType: "Ataque com Pistola",
@@ -75,6 +76,7 @@ test("buildRollPayload deriva o modificador do total do site", () => {
 
   const built = buildRollPayload(entry, character);
   assert.ok(built);
+  assert.equal(built.sessionCode, "", "sem mesa definida o payload fica sem destino (não enviado)");
   assert.equal(built.playerName, "Eliabe");
   assert.equal(built.total, 21);
   assert.equal(built.rolls[0], 7);
