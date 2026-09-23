@@ -34,9 +34,6 @@ yarn-error.log*
 .env*
 !.env.example
 
-# dados locais do servidor (configuração Discord das mesas)
-/data/
-
 # vercel
 .vercel
 

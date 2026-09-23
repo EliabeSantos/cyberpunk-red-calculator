@@ -1,11 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import DiscordIntegrationPanel from "@/components/discord/DiscordIntegrationPanel";
 import { rollDice } from "@/lib/dice";
 import type { DiscordConsent } from "@/lib/discord/consent";
-import { clearSessionCode, getSessionCode, setSessionCode } from "@/lib/discord/session";
-import { generateSessionCode, normalizeSessionCode } from "@/lib/discord/sessionCode";
 import type { RollHistoryEntry } from "@/types/character";
 
 type DiceDrawerProps = {
@@ -66,26 +63,7 @@ export default function DiceDrawer({
   const [expression, setExpression] = useState("1d6");
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<HistoryTab>("all");
-  const [sessionCodeInput, setSessionCodeInput] = useState(() => getSessionCode() ?? "");
-  const [panelOpen, setPanelOpen] = useState(false);
   const discordEnabled = discordConsent === "granted";
-  const sessionCode = normalizeSessionCode(sessionCodeInput);
-
-  function handleSessionCodeChange(value: string) {
-    setSessionCodeInput(value);
-    if (!value.trim()) {
-      clearSessionCode();
-      return;
-    }
-    // Persiste apenas quando o valor é um código válido.
-    setSessionCode(value);
-  }
-
-  function handleGenerateSessionCode() {
-    const code = generateSessionCode();
-    setSessionCodeInput(code);
-    setSessionCode(code);
-  }
 
   const humanityHistory = rollHistory.filter((e) => e.type === "humanity_loss");
   const otherHistory = rollHistory.filter((e) => e.type !== "humanity_loss");
@@ -250,51 +228,10 @@ export default function DiceDrawer({
                 <span className="consent-switch-thumb" />
               </button>
             </div>
-
-            <div className="discord-session-field">
-              <label className="consent-toggle-label" htmlFor="session-code-input">
-                Código da mesa
-              </label>
-              <div className="dice-roll-input">
-                <input
-                  id="session-code-input"
-                  type="text"
-                  className="dice-expression-input"
-                  value={sessionCodeInput}
-                  onChange={(event) => handleSessionCodeChange(event.target.value)}
-                  placeholder="ex.: night-city"
-                  spellCheck={false}
-                  autoComplete="off"
-                />
-                <button type="button" className="dice-preset" onClick={handleGenerateSessionCode}>
-                  Gerar
-                </button>
-              </div>
-              {sessionCodeInput.trim() && !sessionCode && (
-                <p className="dice-error">Use 3–48 caracteres: letras, números e hífen.</p>
-              )}
-            </div>
-
-            <button
-              type="button"
-              className="dice-roll-button"
-              onClick={() => setPanelOpen(true)}
-              disabled={!sessionCode}
-              style={{ marginTop: "0.6rem", width: "100%" }}
-            >
-              ⚙ Configurar servidor
-            </button>
-
             <p className="consent-drawer-hint">
-              Compartilhe o código da mesa com os jogadores: as rolagens vão apenas para o
-              servidor Discord vinculado. O Discord não rola dados.
+              Publica o resultado das rolagens neste site em um canal do Discord.
+              O Discord não rola dados.
             </p>
-
-            <DiscordIntegrationPanel
-              open={panelOpen}
-              onClose={() => setPanelOpen(false)}
-              sessionCode={sessionCode ?? ""}
-            />
           </section>
 
           <section className="dice-drawer-section dice-history-section">

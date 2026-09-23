@@ -2,25 +2,20 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Discord (espelho de rolagens)
 
-O site pode publicar as rolagens já calculadas em um canal do Discord. O bot **não rola dados** — ele apenas reproduz o resultado produzido pelo site. Um **único bot** pode atender vários servidores: cada mesa escolhe o servidor e o canal de destino.
+O site pode publicar as rolagens já calculadas em um canal do Discord. O bot **não rola dados** — ele apenas reproduz o resultado produzido pelo site.
 
-1. Crie o bot em <https://discord.com/developers/applications>, copie o token e convide-o para os servidores (permissões apenas **Ver canal** e **Enviar mensagens** — não use *Administrator*).
+1. Crie um bot em <https://discord.com/developers/applications>, copie o token e convide o bot para o servidor (permissão *Enviar mensagens* no canal de destino).
 2. Copie `.env.example` para `.env.local` e preencha:
 
 ```env
 DISCORD_BOT_TOKEN=
+DISCORD_CHANNEL_ID=
 ```
 
 3. Inicie o projeto (`npm run dev`). Na primeira visita o site pergunta se você quer enviar as rolagens ao Discord; a escolha pode ser alterada depois em 🎲 Dados.
-4. Em **🎲 Dados → Discord**: gere/defina o **código da mesa** (ex.: `night-city`) e clique em **⚙ Configurar servidor** para escolher o servidor e o canal. Os jogadores usam o mesmo código da mesa.
-5. Ao rolar na ficha com o envio ativado, a mensagem aparece **somente** no canal do servidor vinculado àquela mesa.
+4. Ao rolar na ficha com o envio ativado, a mensagem aparece no canal configurado. Sem consentimento, **nenhuma informação sai do navegador**.
 
-Detalhes:
-
-- A vinculação mesa → guild → canal fica em `./data/discord-sessions.json` (só IDs; nenhum dado de rolagem, ficha ou personagem; pasta ignorada pelo git).
-- Sem consentimento ou sem código de mesa, **nenhuma informação sai do navegador**.
-- O token fica apenas no servidor (`src/lib/discord/bot.ts`, módulo `server-only`) e nunca chega ao navegador.
-- Se o Discord falhar, a rolagem do site continua funcionando normalmente.
+O token fica apenas no servidor (`src/lib/discord/bot.ts`, módulo `server-only`) e nunca chega ao navegador.
 
 ## Getting Started
 
