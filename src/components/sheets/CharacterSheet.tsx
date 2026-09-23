@@ -25,6 +25,7 @@ import type { QuickhackRollResult, QuickhackCategory } from "@/lib/quickhacks";
 import StorePanel from "@/components/sheets/StorePanel";
 import DiceDrawer from "@/components/dice/DiceDrawer";
 import AttackActions from "@/components/combat/AttackActions";
+import type { DiscordConsent } from "@/lib/discord/consent";
 import type { AttackRollResult, DamageRollResult, EvasionRollResult, AttackMode } from "@/types/attack";
 import type { AttributeName, Character } from "@/types/character";
 import type { SkillCategory } from "@/data/skills";
@@ -42,6 +43,9 @@ type CharacterSheetProps = {
   onUpdate: (character: Character) => void;
   onEdit: () => void;
   onNewCharacter: () => void;
+  /** Consentimento do usuário para enviar rolagens ao Discord ("null" = ainda não respondeu). */
+  discordConsent: DiscordConsent | null;
+  onDiscordConsentChange: (consent: DiscordConsent) => void;
 };
 const statOrder: AttributeName[] = [
   "INT",
@@ -76,6 +80,8 @@ export default function CharacterSheet({
   onUpdate,
   onEdit,
   onNewCharacter,
+  discordConsent,
+  onDiscordConsentChange,
 }: CharacterSheetProps) {
   const [ipToGrant, setIpToGrant] = useState(0);
   const [lastHumanityLoss, setLastHumanityLoss] =
@@ -1605,6 +1611,8 @@ export default function CharacterSheet({
       onClose={() => setDiceDrawerOpen(false)}
       rollHistory={character.rollHistory}
       onFreeRoll={(entry) => onUpdate({ ...character, rollHistory: [entry, ...character.rollHistory] })}
+      discordConsent={discordConsent}
+      onDiscordConsentChange={onDiscordConsentChange}
     />
     </main>
   );

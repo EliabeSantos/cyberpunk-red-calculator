@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { rollDice } from "@/lib/dice";
+import type { DiscordConsent } from "@/lib/discord/consent";
 import type { RollHistoryEntry } from "@/types/character";
 
 type DiceDrawerProps = {
@@ -9,6 +10,9 @@ type DiceDrawerProps = {
   onClose: () => void;
   rollHistory: RollHistoryEntry[];
   onFreeRoll: (entry: RollHistoryEntry) => void;
+  /** Consentimento atual; "null" = o usuário ainda não respondeu ao pedido. */
+  discordConsent: DiscordConsent | null;
+  onDiscordConsentChange: (consent: DiscordConsent) => void;
 };
 
 const PRESETS = [
@@ -53,10 +57,13 @@ export default function DiceDrawer({
   onClose,
   rollHistory,
   onFreeRoll,
+  discordConsent,
+  onDiscordConsentChange,
 }: DiceDrawerProps) {
   const [expression, setExpression] = useState("1d6");
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<HistoryTab>("all");
+  const discordEnabled = discordConsent === "granted";
 
   const humanityHistory = rollHistory.filter((e) => e.type === "humanity_loss");
   const otherHistory = rollHistory.filter((e) => e.type !== "humanity_loss");
@@ -199,6 +206,32 @@ export default function DiceDrawer({
                 </button>
               ))}
             </div>
+          </section>
+
+          <section className="dice-drawer-section">
+            <h3>Discord</h3>
+            <div className="consent-toggle-row">
+              <div>
+                <span className="consent-toggle-label">Enviar rolagens ao Discord</span>
+                <span className={`consent-toggle-state${discordEnabled ? " consent-toggle-state--on" : ""}`}>
+                  {discordEnabled ? "Ativado" : "Desativado"}
+                </span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={discordEnabled}
+                aria-label="Enviar rolagens ao Discord"
+                className={`consent-switch${discordEnabled ? " consent-switch--on" : ""}`}
+                onClick={() => onDiscordConsentChange(discordEnabled ? "denied" : "granted")}
+              >
+                <span className="consent-switch-thumb" />
+              </button>
+            </div>
+            <p className="consent-drawer-hint">
+              Publica o resultado das rolagens neste site em um canal do Discord.
+              O Discord não rola dados.
+            </p>
           </section>
 
           <section className="dice-drawer-section dice-history-section">

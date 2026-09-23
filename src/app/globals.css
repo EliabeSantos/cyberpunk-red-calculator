@@ -3014,3 +3014,65 @@
     width: 100%;
   }
 }
+
+/* --- Discord Consent --- */
+.consent-modal {
+  position: relative;
+  width: min(100%, 28rem);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: linear-gradient(180deg, #111614 0%, #0d110f 100%);
+  padding: 1.5rem;
+  box-shadow: 0 2rem 6rem rgb(0 0 0 / 60%), 0 0 40px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.consent-modal h2 { margin: 0.35rem 0 0.75rem; font-size: 1.05rem; }
+.consent-text { margin: 0 0 0.5rem; color: var(--muted); font-size: 0.8rem; line-height: 1.5; }
+.consent-hint { margin: 0 0 1.1rem; color: var(--muted); font-size: 0.68rem; opacity: 0.8; }
+.consent-actions { display: flex; gap: 0.6rem; justify-content: flex-end; }
+.consent-accept,
+.consent-decline {
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.5rem 0.9rem;
+  font: 700 0.7rem var(--font-geist-mono), monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.consent-accept { background: var(--accent); color: #111700; }
+.consent-accept:hover { filter: brightness(1.1); }
+.consent-decline { background: transparent; color: var(--muted); border-color: #3a4a3d; }
+.consent-decline:hover { color: var(--foreground); border-color: var(--muted); }
+
+/* Interruptor de envio ao Discord (gaveta de Dados) */
+.consent-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.consent-toggle-label { display: block; font-size: 0.75rem; }
+.consent-toggle-state { color: var(--muted); font: 700 0.62rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.06em; }
+.consent-toggle-state--on { color: var(--accent); }
+.consent-switch {
+  position: relative;
+  width: 2.6rem;
+  height: 1.35rem;
+  border: 1px solid #3a4a3d;
+  border-radius: 999px;
+  background: #0f1512;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+.consent-switch--on { background: color-mix(in srgb, var(--accent) 30%, transparent); border-color: var(--accent); }
+.consent-switch-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0.18rem;
+  transform: translateY(-50%);
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: left 0.2s ease, background 0.2s ease;
+}
+.consent-switch--on .consent-switch-thumb { left: calc(100% - 1.1rem); background: var(--accent); }
+.consent-drawer-hint { margin: 0.45rem 0 0; color: var(--muted); font-size: 0.62rem; line-height: 1.45; }

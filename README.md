@@ -1,5 +1,22 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Discord (espelho de rolagens)
+
+O site pode publicar as rolagens já calculadas em um canal do Discord. O bot **não rola dados** — ele apenas reproduz o resultado produzido pelo site.
+
+1. Crie um bot em <https://discord.com/developers/applications>, copie o token e convide o bot para o servidor (permissão *Enviar mensagens* no canal de destino).
+2. Copie `.env.example` para `.env.local` e preencha:
+
+```env
+DISCORD_BOT_TOKEN=
+DISCORD_CHANNEL_ID=
+```
+
+3. Inicie o projeto (`npm run dev`). Na primeira visita o site pergunta se você quer enviar as rolagens ao Discord; a escolha pode ser alterada depois em 🎲 Dados.
+4. Ao rolar na ficha com o envio ativado, a mensagem aparece no canal configurado. Sem consentimento, **nenhuma informação sai do navegador**.
+
+O token fica apenas no servidor (`src/lib/discord/bot.ts`, módulo `server-only`) e nunca chega ao navegador.
+
 ## Getting Started
 
 First, run the development server:
