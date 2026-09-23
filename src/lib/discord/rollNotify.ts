@@ -1,4 +1,5 @@
 import { getDiscordConsent } from "@/lib/discord/consent";
+import { getSessionCode } from "@/lib/discord/session";
 import { isDiceRollKind, type DiscordRollPayload } from "@/lib/discord/types";
 import type { Character, RollHistoryEntry } from "@/types/character";
 
@@ -6,6 +7,7 @@ import type { Character, RollHistoryEntry } from "@/types/character";
  * Converte a entrada de rolagem produzida pelo site no payload enviado ao backend.
  * O modificador é apenas a decomposição do total já calculado:
  * modifier = total - soma(dados). Nada é recalculado.
+ * `sessionCode` identifica a mesa (vazio = mesa ainda não configurada).
  */
 export function buildRollPayload(
   entry: RollHistoryEntry,
@@ -19,6 +21,7 @@ export function buildRollPayload(
     character.identity.player.trim() || character.identity.name.trim() || "Jogador";
 
   return {
+    sessionCode: getSessionCode() ?? "",
     kind: entry.type,
     playerName,
     rollType: entry.label,
@@ -41,13 +44,15 @@ export function findNewRollEntry(
 /**
  * Envia a rolagem já calculada para o backend publicar no Discord.
  * Fire-and-forget: uma falha nunca afeta a rolagem no site.
- * Sem consentimento explícito ("granted"), nada sai do navegador.
+ * Nada é enviado sem consentimento explícito ("granted") nem sem código de mesa.
  */
 export function notifyDiscordRoll(entry: RollHistoryEntry, character: Character): void {
   if (getDiscordConsent() !== "granted") return;
 
   const payload = buildRollPayload(entry, character);
   if (!payload) return;
+  // Sem mesa definida não há servidor de destino — não envia nada.
+  if (!payload.sessionCode) return;
 
   try {
     void fetch("/api/discord/roll", {
