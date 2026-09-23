@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 
 import {
@@ -115,6 +115,21 @@ export default function CharacterSheet({
   const [firstAidMessage, setFirstAidMessage] = useState("");
   const [lastFirstAidRoll, setLastFirstAidRoll] = useState<import("@/lib/damage").FirstAidRollResult | null>(null);
   const [rollingFirstAid, setRollingFirstAid] = useState(false);
+  const [navDrawerOpen, setNavDrawerOpen] = useState(false);
+
+  // Gaveta do nav (mobile): ESC fecha e o scroll da página trava enquanto aberta.
+  useEffect(() => {
+    if (!navDrawerOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setNavDrawerOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+      document.body.style.overflow = "";
+    };
+  }, [navDrawerOpen]);
   const categoryOrder: SkillCategory[] = ["awareness", "body", "control", "education", "fighting", "performance", "ranged_weapon", "social", "technique"];
   const statNames: Record<AttributeName, string> = {
     INT: "Inteligência",
@@ -418,9 +433,18 @@ export default function CharacterSheet({
   }
   return (
     <main className="sheet-shell">
-      <nav className="sheet-nav">
+      <nav className={`sheet-nav${navDrawerOpen ? " is-open" : ""}`}>
         <span>CYBERPUNK RED TOOLKIT</span>
-        <div>
+        <div
+          className="sheet-nav-links"
+          onClick={(event) => {
+            // No mobile este div vira a gaveta lateral: tocar em qualquer ação
+            // fecha o menu (🎲 Dados também dispara a abertura da gaveta de dados).
+            if ((event.target as HTMLElement).closest("button, a")) {
+              setNavDrawerOpen(false);
+            }
+          }}
+        >
           <button onClick={() => setDiceDrawerOpen(true)}>🎲 Dados</button>
           <Link href="/gm">
             🎭 Área do Mestre
@@ -433,7 +457,23 @@ export default function CharacterSheet({
             Novo personagem
           </button>
         </div>
+        <button
+          type="button"
+          className="nav-hamburger"
+          aria-label={navDrawerOpen ? "Fechar menu" : "Abrir menu"}
+          aria-expanded={navDrawerOpen}
+          onClick={() => setNavDrawerOpen((open) => !open)}
+        >
+          <span />
+          <span />
+          <span />
+        </button>
       </nav>
+      <div
+        className={`nav-drawer-backdrop${navDrawerOpen ? " is-open" : ""}`}
+        onClick={() => setNavDrawerOpen(false)}
+        aria-hidden="true"
+      />
       <header className="sheet-hero">
         <div className="sheet-photo">
           {character.identity.photoUrl ? (

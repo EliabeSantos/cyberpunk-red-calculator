@@ -3174,3 +3174,104 @@
   /* Reserva de espaço para a barra não cobrir o fim da página */
   .creator-shell { padding-bottom: calc(5rem + env(safe-area-inset-bottom)); }
 }
+
+/* Hamburger só existe no mobile (mostrado no bloco ≤620px).
+   Precisa de especificidade (0,2,0) para vencer `.sheet-nav button` (0,1,1)
+   da linha base — sem isso ele aparecia no desktop (blockification do flex
+   item fazia o computed virar "flex"). O bloco ≤620, posterior na fonte,
+   reativa com a mesma especificidade. */
+.sheet-nav .nav-hamburger { display: none; }
+
+/* ============================================================
+   Ficha (≤620px) — topo: nav + informações do personagem
+   ============================================================ */
+@media (max-width: 620px) {
+  /* Nav: hamburger + gaveta da direita (a faixa de chips ainda quebrava
+     em telas estreitas). Marca à esquerda, hambúrguer à direita. */
+  .sheet-nav {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 0;
+  }
+  .sheet-nav > span { font-size: 0.75rem; }
+
+  .sheet-nav .nav-hamburger {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    width: 44px;
+    height: 44px;
+    margin-left: auto;
+    padding: 0;
+    position: relative;
+    z-index: 52; /* por cima da gaveta aberta (51): vira × de fechar */
+  }
+  .sheet-nav .nav-hamburger span {
+    display: block;
+    width: 18px;
+    height: 2px;
+    background: var(--foreground);
+    transition: transform 0.2s ease, opacity 0.2s ease;
+  }
+  .sheet-nav.is-open .nav-hamburger span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+  .sheet-nav.is-open .nav-hamburger span:nth-child(2) { opacity: 0; }
+  .sheet-nav.is-open .nav-hamburger span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+  /* Itens do nav saem do fluxo e vão para um painel fixo à direita */
+  .sheet-nav-links {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: min(82vw, 20rem);
+    margin: 0;
+    padding: 5rem 1rem 1.5rem;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    box-shadow: -1.5rem 0 3rem rgb(0 0 0 / 55%);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform 0.25s ease, visibility 0.25s ease;
+    z-index: 51;
+    overflow-y: auto;
+  }
+  .sheet-nav.is-open .sheet-nav-links {
+    transform: translateX(0);
+    visibility: visible;
+  }
+  .sheet-nav-links button,
+  .sheet-nav-links a {
+    width: 100%;
+    min-height: 44px;
+    justify-content: flex-start;
+    padding: 0.65rem 0.75rem;
+    font-size: 0.8rem;
+  }
+
+  /* Fundo da gaveta: z9 — acima do conteúdo, abaixo do nav sticky (z10) */
+  .nav-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9;
+    background: rgb(0 0 0 / 60%);
+    backdrop-filter: blur(2px);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
+  }
+  .nav-drawer-backdrop.is-open {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  /* Vitais: grade 2×2 (ARMADURA não fica órfã na3ª coluna) */
+  .hero-vitals { grid-template-columns: repeat(2, 1fr); }
+  .hero-vitals small { font-size: 0.6875rem; }
+  .hero-hp-status { font-size: 0.6875rem; }
+}
