@@ -3275,3 +3275,105 @@
   .hero-vitals small { font-size: 0.6875rem; }
   .hero-hp-status { font-size: 0.6875rem; }
 }
+
+/* Menu GM: barra do topo e hambúrguer só existem no mobile (≤620px) */
+.gm-mobile-topbar { display: none; }
+.gm-nav-hamburger { display: none; }
+
+/* ============================================================
+   Menu do GM (≤620px) — hamburger + gaveta da direita
+   Substitui a barra com wrap do bloco ≤900 (que estourava em320).
+   ============================================================ */
+@media (max-width: 620px) {
+  /* Topo: marca à esquerda, hambúrguer à direita. z60: acima da gaveta
+     (z51) e do fundo (z50) — o × fica sempre clicável. */
+  .gm-mobile-topbar {
+    display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 60;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    min-height: 3.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--background);
+    border-bottom: 1px solid var(--line);
+  }
+  .gm-mobile-brand { display: flex; align-items: center; gap: 0.75rem; }
+
+  .gm-nav-hamburger {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid #46514a;
+    border-radius: 4px;
+    color: var(--foreground);
+    cursor: pointer;
+  }
+  .gm-nav-hamburger span {
+    display: block;
+    width: 18px;
+    height: 2px;
+    background: var(--foreground);
+    transition: transform 0.2s ease, opacity 0.2s ease;
+  }
+  .gm-shell.gm-nav-open .gm-nav-hamburger span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+  .gm-shell.gm-nav-open .gm-nav-hamburger span:nth-child(2) { opacity: 0; }
+  .gm-shell.gm-nav-open .gm-nav-hamburger span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+  /* Sidebar vira painel fixo à direita; padding-top desobsta a barra (z60) */
+  .gm-sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: auto;
+    width: min(82vw, 20rem);
+    height: auto;
+    padding-top: 3.5rem;
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform 0.25s ease, visibility 0.25s ease;
+    z-index: 51;
+    border-right: 1px solid var(--line);
+    border-bottom: none;
+    overflow-y: auto;
+  }
+  .gm-shell.gm-nav-open .gm-sidebar {
+    transform: translateX(0);
+    visibility: visible;
+  }
+
+  /* Conteúdo da gaveta volta a coluna com alvos ≥44px (desfaz o wrap ≤900) */
+  .gm-nav { flex-direction: column; flex-wrap: nowrap; padding: 0; }
+  .gm-nav-brand { display: none; } /* a marca já está na barra do topo */
+  .gm-nav-section { flex: none; padding: 1rem 0.75rem 0.5rem; }
+  .gm-nav-list { flex-direction: column; gap: 2px; padding: 0 0.5rem; }
+  .gm-nav-item { padding: 0.65rem 0.75rem; min-height: 44px; }
+  .gm-nav-item-active::before { display: block; }
+  .gm-nav-footer { border-left: none; border-top: 1px solid var(--line); margin-top: auto; padding: 0.75rem 1rem; }
+  .gm-nav-back { min-height: 44px; }
+
+  /* Fundo da gaveta: acima do conteúdo, abaixo da barra do topo (z60) */
+  .gm-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgb(0 0 0 / 60%);
+    backdrop-filter: blur(2px);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
+  }
+  .gm-nav-backdrop.is-open {
+    opacity: 1;
+    visibility: visible;
+  }
+}
