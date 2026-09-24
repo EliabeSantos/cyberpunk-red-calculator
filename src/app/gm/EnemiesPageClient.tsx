@@ -10,11 +10,6 @@ export default function EnemiesPageClient() {
   const [selectedEnemy, setSelectedEnemy] = useState<Enemy | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "detail" | "dice">("list");
 
-  const handleView = (enemy: Enemy) => {
-    setSelectedEnemy(enemy);
-    setViewMode("detail");
-  };
-
   const handleEdit = (enemy: Enemy) => {
     // Navigate to edit page with enemy ID
     window.location.href = `/gm/create?id=${enemy.id}`;
@@ -43,11 +38,7 @@ export default function EnemiesPageClient() {
       </header>
 
       {viewMode === "list" && (
-        <EnemyList
-          onView={handleView}
-          onEdit={handleEdit}
-          onRollDice={handleRollDice}
-        />
+        <EnemyList onEdit={handleEdit} />
       )}
 
       {viewMode === "detail" && selectedEnemy && (

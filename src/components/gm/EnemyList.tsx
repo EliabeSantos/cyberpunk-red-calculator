@@ -2,21 +2,19 @@
 
 import { useState, useEffect, Fragment } from "react";
 import type { Enemy } from "@/types/enemy";
-import { loadEnemies, removeEnemy, importCatalogEnemies, upsertEnemy } from "@/lib/gmStorage";
+import { loadEnemies, removeEnemy, importCatalogEnemies } from "@/lib/gmStorage";
 import { threatLevelLabels, threatLevelColors } from "@/data/enemies";
 import { gmEnemyCatalog, availableFactions, getEnemyById } from "@/data/gm-enemies";
 
 interface EnemyListProps {
   onEdit?: (enemy: Enemy) => void;
-  onView?: (enemy: Enemy) => void;
-  onRollDice?: (enemy: Enemy) => void;
 }
 
 // Atributos exibidos no cartão (mesma ordem do texto original; LUCK fica de fora,
 // como sempre esteve — igual ao formato antigo).
 const CARD_STAT_ORDER = ["INT", "REF", "DEX", "TECH", "COOL", "WILL", "MOVE", "BODY", "EMP"] as const;
 
-export default function EnemyList({ onEdit, onView, onRollDice }: EnemyListProps) {
+export default function EnemyList({ onEdit }: EnemyListProps) {
   const [enemies, setEnemies] = useState<Enemy[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -164,16 +162,6 @@ export default function EnemyList({ onEdit, onView, onRollDice }: EnemyListProps
             </div>
 
             <div className="enemy-card-actions">
-              {onView && (
-                <button
-                  type="button"
-                  className="enemy-action-button enemy-action-view"
-                  onClick={() => onView(enemy)}
-                  aria-label={`Visualizar ${enemy.identity.name}`}
-                >
-                  👁️ Ver
-                </button>
-              )}
               {onEdit && (
                 <button
                   type="button"
@@ -184,38 +172,6 @@ export default function EnemyList({ onEdit, onView, onRollDice }: EnemyListProps
                   ✏️ Editar
                 </button>
               )}
-              {onRollDice && (
-                <button
-                  type="button"
-                  className="enemy-action-button enemy-action-roll"
-                  onClick={() => onRollDice(enemy)}
-                  aria-label={`Rolar dados para ${enemy.identity.name}`}
-                >
-                  🎲 Rolar
-                </button>
-              )}
-              <button
-                type="button"
-                className="enemy-action-button enemy-action-duplicate"
-                onClick={() => {
-                  const duplicated: Enemy = {
-                    ...enemy,
-                    id: crypto.randomUUID(),
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                    identity: {
-                      ...enemy.identity,
-                      name: `${enemy.identity.name} (Cópia)`,
-                    },
-                  };
-                  upsertEnemy(duplicated);
-                  loadData();
-                }}
-                aria-label={`Duplicar ${enemy.identity.name}`}
-                disabled={deletingId === enemy.id}
-              >
-                📋 Copiar
-              </button>
               <button
                 type="button"
                 className="enemy-action-button enemy-action-delete"

@@ -808,6 +808,17 @@ export default function CreateEnemyPageClient() {
           </div>
         </section>
       </div>
+
+      {/* Mobile: as ações do cabeçalho saem da tela no primeiro scroll,
+          então elas ganham uma barra fixa no rodapé. Só aparece ≤620px. */}
+      <div className="gm-create-mobile-actions">
+        <button className="gm-button gm-button-secondary" onClick={handleCancel}>
+          Cancelar
+        </button>
+        <button className="gm-button gm-button-primary" onClick={handleSave} disabled={saving}>
+          {saving ? "Salvando..." : isEditing ? "Salvar Alterações" : "Criar Inimigo"}
+        </button>
+      </div>
     </div>
   );
 }

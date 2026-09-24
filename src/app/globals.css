@@ -3351,15 +3351,24 @@
     visibility: visible;
   }
 
-  /* Conteúdo da gaveta volta a coluna com alvos ≥44px (desfaz o wrap ≤900) */
-  .gm-nav { flex-direction: column; flex-wrap: nowrap; padding: 0; }
+  /* Conteúdo da gaveta volta a coluna com alvos ≥44px (desfaz o wrap ≤900).
+     align-items: stretch desfaz o center do bloco ≤900: sem ele a seção
+     encolhe para o tamanho do conteúdo e os itens não chegam às bordas */
+  .gm-nav { flex-direction: column; flex-wrap: nowrap; align-items: stretch; padding: 0; }
   .gm-nav-brand { display: none; } /* a marca já está na barra do topo */
-  .gm-nav-section { flex: none; padding: 1rem 0.75rem 0.5rem; }
-  .gm-nav-list { flex-direction: column; gap: 2px; padding: 0 0.5rem; }
-  .gm-nav-item { padding: 0.65rem 0.75rem; min-height: 44px; }
-  .gm-nav-item-active::before { display: block; }
-  .gm-nav-footer { border-left: none; border-top: 1px solid var(--line); margin-top: auto; padding: 0.75rem 1rem; }
-  .gm-nav-back { min-height: 44px; }
+
+  /* Itens de ponta a ponta: o respiro horizontal fica só no padding
+     interno do item (antes sobravam20px de cada lado, contando a
+     margem da seção com a da lista). A barra do item ativo sai dos
+     -0.5rem e encosta na borda, senão ela cairia fora da gaveta. */
+  .gm-nav-section { flex: none; padding: 1rem 0 0.5rem; }
+  .gm-nav-list { flex-direction: column; gap: 2px; padding: 0; }
+  .gm-nav-item { padding: 0.65rem 1rem; min-height: 44px; }
+  .gm-nav-item-active::before { display: block; left: 0; }
+
+  /* "Voltar" no rodapé acompanha a largura da lista */
+  .gm-nav-footer { border-left: none; border-top: 1px solid var(--line); margin-top: auto; padding: 0.75rem 0; }
+  .gm-nav-back { min-height: 44px; padding: 0.65rem 1rem; }
 
   /* Fundo da gaveta: acima do conteúdo, abaixo da barra do topo (z60) */
   .gm-nav-backdrop {
@@ -3455,4 +3464,245 @@
 
   /* Respiro maior entre as filas de botões */
   .enemy-card-actions { gap: 0.5rem; }
+}
+
+/* Barra de ações do editor de inimigo: só existe no mobile */
+.gm-create-mobile-actions { display: none; }
+
+/* ============================================================
+   Editar/Criar inimigo (≤620px) — /gm/create
+   Formulário de7 seções: as ações vão para uma barra fixa no
+   rodapé, os campos curtos viram grade de2 colunas (o bloco ≤900
+   empilhava tudo em1 coluna só) e os alvos de toque passam a44px.
+   ============================================================ */
+@media (max-width: 620px) {
+  /* Fica só com o padding do .gm-main (1.5rem) — a barra do rodapé
+     usa margem negativa para ir de ponta a ponta */
+  .gm-create-page { padding: 0; }
+
+  /* Cabeçalho só com título e subtítulo (as ações moram no rodapé) */
+  .gm-create-page .gm-page-header { gap: 0.5rem; margin-bottom: 0.75rem; padding-bottom: 0.75rem; }
+  .gm-create-page .gm-page-title { font-size: 1.2rem; }
+  .gm-create-page .gm-page-subtitle { font-size: 0.78rem; }
+  .gm-create-page .gm-page-header-actions { display: none; }
+
+  .gm-create-section { padding: 1.1rem 0; }
+  .gm-create-section-title { margin-bottom: 0.75rem; }
+
+  /* O gap do grid já cuida do espaçamento vertical */
+  .gm-form-grid { gap: 0.75rem; }
+  .gm-form-grid > .gm-form-field { margin-bottom: 0; }
+
+  /* Altura de toque; a fonte de16px vem do body e evita o zoom
+     automático do iOS quando o campo recebe foco */
+  .gm-create-page .gm-form-field input,
+  .gm-create-page .gm-form-field select { min-height: 44px; }
+
+  /*10 atributos em2 linhas de5 (o auto-fit virava3+3+3+1 aqui) */
+  .gm-stats-grid { grid-template-columns: repeat(5, 1fr); gap: 0.4rem; }
+  .gm-stat-field label { font-size: 0.6rem; }
+  .gm-stat-input { padding: 0.4rem 0.1rem; }
+  .gm-stats-summary { padding: 0.6rem 0.75rem; }
+
+  /* Combate em2 colunas: HP na primeira linha, armaduras na segunda */
+  .gm-combat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+  .gm-combat-grid > .gm-form-field { margin-bottom: 0; }
+  .gm-combat-grid > .gm-form-field label { font-size: 0.65rem; line-height: 1.3; }
+
+  /* Barra rápida de adicionar (perícia/arma/condição): quebra linha,
+     alvo ≥44px e fonte16px no select (de novo, para o iOS não dar zoom) */
+  .gm-skills-header { flex-wrap: wrap; gap: 0.5rem; }
+  .gm-skills-header > div { flex: 1; min-width: 0; flex-wrap: wrap; }
+  .gm-create-page .gm-form-select-small {
+    flex: 1 1 10rem;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0.5rem 1.8rem 0.5rem 0.6rem;
+    font-size: 1rem;
+  }
+  .gm-create-page .gm-button-small { min-height: 44px; padding: 0.5rem 0.75rem; font-size: 0.72rem; }
+
+  /* Campos das linhas em grade de2 colunas */
+  .gm-skill-fields,
+  .gm-weapon-fields,
+  .gm-condition-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+    width: 100%;
+  }
+  /* Desfaz o min-width:100% do bloco ≤900, que estouraria a coluna */
+  .gm-skill-fields .gm-form-field,
+  .gm-weapon-fields .gm-form-field,
+  .gm-condition-fields .gm-form-field { min-width: 0; margin-bottom: 0; }
+
+  /* Nomes e textos longos na faixa inteira. Na arma o4º campo é a
+     perícia (opções tipo "Electronics/Security Tech") e na condição
+     são nome e descrição */
+  .gm-skill-fields > .gm-form-field:first-child,
+  .gm-skill-fields > .gm-form-field:last-child,
+  .gm-weapon-fields > .gm-form-field:first-child,
+  .gm-weapon-fields > .gm-form-field:nth-child(4),
+  .gm-condition-fields > .gm-form-field:nth-child(1),
+  .gm-condition-fields > .gm-form-field:nth-child(2) { grid-column: 1 / -1; }
+
+  .gm-skill-row,
+  .gm-weapon-row,
+  .gm-condition-row { gap: 0.6rem; }
+  .gm-skill-base { white-space: normal; padding-top: 0; }
+
+  /* Excluir vira chip à direita em vez de micobotão no fim da pilha */
+  .gm-skill-row > .gm-button-danger,
+  .gm-weapon-row > .gm-button-danger,
+  .gm-condition-row > .gm-button-danger {
+    align-self: flex-end;
+    min-height: 44px;
+    padding: 0.5rem 0.9rem;
+  }
+
+  /* Barra de ações fixa no rodapé, com respiro para a barra do
+     navegador no iOS (safe-area) */
+  .gm-create-mobile-actions {
+    display: flex;
+    position: sticky;
+    bottom: 0;
+    z-index: 30;
+    gap: 0.5rem;
+    margin: 1.25rem -1.5rem 0;
+    padding: 0.75rem 1.5rem calc(0.75rem + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--background) 94%, transparent);
+    backdrop-filter: blur(6px);
+    border-top: 1px solid var(--line);
+  }
+  .gm-create-mobile-actions .gm-button {
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0.6rem 0.35rem;
+    font-size: 0.72rem;
+    white-space: normal;
+  }
+}
+
+/* ============================================================
+   Combate / Encontros (≤620px) — /gm/encounters
+   As grades auto-fill de18rem/22rem estouravam o viewport, os
+   cabeçalhos com ações lado a lado não cabiam e os alvos de toque
+   eram pequenos. Escopo na classe da página para não vazar para
+   /gm e /gm/create, que compartilham .gm-page.
+   ============================================================ */
+@media (max-width: 620px) {
+  /* ---- Cabeçalho: ações viram botões que dividem a largura ---- */
+  .gm-encounters-page .gm-page-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+  }
+  .gm-encounters-page .gm-page-title { font-size: 1.2rem; }
+  .gm-encounters-page .gm-page-subtitle { font-size: 0.78rem; }
+
+  /* Ações do topo em grade, não em flex: "Salvar Encontro" e
+     "Encontros Salvos" são rótulos longos e o flex encolhia a caixa
+     para baixo do texto (colisão entre os dois). Cada botão tem sua
+     própria trilha — com trilha mínima de9rem, se não couberem dois
+     lado a lado a grade sozinha empilha em duas linhas. */
+  .gm-encounters-page .gm-page-header-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 0.5rem;
+    width: 100%;
+  }
+  .gm-encounters-page .gm-page-header-actions .gm-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0.55rem 0.5rem;
+    font-size: 0.7rem;
+    line-height: 1.2;
+    text-align: center;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* ---- Setup: hero compacto (o degradê lateral fica intacto) ---- */
+  .encounter-hero { padding: 1rem 1rem 1rem 1.15rem; margin-bottom: 1rem; }
+  .encounter-hero-content { gap: 0.75rem; }
+  .encounter-hero-icon { width: 2.75rem; height: 2.75rem; font-size: 1.3rem; }
+  .encounter-hero-title { font-size: 1.05rem; }
+  .encounter-hero-desc { font-size: 0.78rem; }
+
+  /* ---- Campos e botões pequenos: alvo ≥44px.
+     Os inputs do form herdam font: inherit (16px), mas os -small
+     vêm com .65rem e disparariam o zoom automático do iOS ---- */
+  .gm-encounters-page .gm-form-field input,
+  .gm-encounters-page .gm-form-field select { min-height: 44px; }
+  .gm-encounters-page .gm-form-input-small { min-height: 44px; padding: 0.5rem 0.6rem; font-size: 1rem; }
+  .gm-encounters-page .gm-form-select-small { min-height: 44px; padding: 0.5rem 1.6rem 0.5rem 0.6rem; font-size: 1rem; }
+  .gm-encounters-page .gm-button-small { min-height: 44px; padding: 0.5rem 0.75rem; font-size: 0.72rem; }
+
+  /* ---- Preview: título em cima, controles embaixo preenchendo ---- */
+  .encounter-preview-header { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+  .encounter-preview-controls { flex-wrap: wrap; gap: 0.5rem; }
+  .encounter-minlevel-label { flex: 1 1 7rem; justify-content: space-between; }
+  .encounter-minlevel-select { flex: 1; min-width: 0; min-height: 44px; padding: 0.5rem 0.6rem; font-size: 1rem; }
+  .encounter-repick-button { flex: 1 1 6rem; }
+
+  /* minmax(18rem) e minmax(22rem) não cabem abaixo de360px:
+     a pista mínima virava overflow horizontal */
+  .encounter-participant-list { grid-template-columns: 1fr; }
+  .encounter-participants { grid-template-columns: 1fr; }
+
+  /* ---- Iniciar encontro: CTA largo no fim do formulário ---- */
+  .encounter-actions { justify-content: stretch; }
+  .encounter-start-button { width: 100%; min-height: 48px; justify-content: center; }
+
+  /* ---- Encontros salvos: dados em cima, ações embaixo ---- */
+  .encounter-saved-header { flex-wrap: wrap; gap: 0.6rem; padding: 0.65rem 0.75rem; }
+  .encounter-saved-header .gm-button { min-height: 44px; }
+  .encounter-saved-card { flex-direction: column; align-items: stretch; gap: 0.6rem; padding: 0.75rem; }
+  .encounter-saved-details { flex-wrap: wrap; }
+  .encounter-saved-actions { flex-wrap: wrap; }
+  .encounter-saved-actions .gm-button { flex: 1 1 auto; min-width: 0; min-height: 44px; }
+  .encounter-saved-back .gm-button,
+  .encounter-empty .gm-button { width: 100%; min-height: 44px; }
+
+  /* ---- Combate: topo empilhado, botão de iniciativa largo ---- */
+  .encounter-combat-header { flex-direction: column; align-items: stretch; gap: 0.75rem; padding-bottom: 0.75rem; }
+  .encounter-title { font-size: 1.05rem; }
+  .encounter-faction { font-size: 0.78rem; }
+  .encounter-combat-actions .gm-button { width: 100%; min-height: 44px; }
+
+  .encounter-participant-card { padding: 0.75rem; gap: 0.55rem; }
+
+  /* Armadura/Arma/Base: label em cima, valor embaixo — o ellipsis
+     cortava o cálculo do base de ataque */
+  .epc-info-row { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
+  .epc-info-value { text-align: left; white-space: normal; overflow: visible; }
+
+  /* Rolagens: botão cresce, o resultado cai para a linha de baixo */
+  .epc-rolls .gm-button { flex: 1 1 auto; min-height: 44px; }
+  .epc-roll-result { flex-basis: 100%; font-size: 0.68rem; }
+
+  /* ---- Controles do participante selecionado ---- */
+  .epc-controls-label-row { flex-wrap: wrap; gap: 0.25rem 0.75rem; }
+  .epc-armor-ignore { min-height: 44px; }
+  .epc-armor-ignore-text { font-size: 0.7rem; }
+  .epc-controls-row { gap: 0.5rem; }
+  .epc-controls-row .gm-form-input-small { flex: 1 1 5rem; min-width: 0; }
+  .epc-controls-row .gm-button { flex: 1 1 auto; min-width: 0; }
+  .epc-condition-inputs .gm-button { flex: 0 0 auto; min-width: 44px; }
+  .epc-zone-picker { gap: 0.5rem; }
+  .epc-zone { min-height: 44px; padding: 0.5rem 0.6rem; }
+
+  /* ---- Tags: alvo decente no × de remover ---- */
+  .epc-tag { padding: 0.3rem 0.5rem; font-size: 0.68rem; }
+  .epc-tag-remove { min-width: 32px; min-height: 32px; font-size: 1rem; }
+
+  /* ---- Resumo ---- */
+  .encounter-summary { padding: 0.75rem; }
+  .encounter-summary-stats { flex-wrap: wrap; gap: 0.35rem 0.9rem; font-size: 0.72rem; }
 }
