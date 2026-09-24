@@ -753,6 +753,7 @@
       "category": "healing",
       "source": "adapted_2077",
       "price": 50,
+      "hpRestore": 5,
       "effects": [
         "Recupera 5 HP.",
         "Aplicação como Ação."
@@ -764,6 +765,8 @@
       "category": "healing",
       "source": "adapted_2077",
       "price": 100,
+      "hpRestore": 2,
+      "stabilizes": true,
       "effects": [
         "Estabiliza personagem Mortally Wounded.",
         "Recupera 2 HP."
@@ -775,6 +778,7 @@
       "category": "healing",
       "source": "adapted_2077",
       "price": 100,
+      "hpRestore": 10,
       "effects": [
         "Recupera 10 HP."
       ],
@@ -788,6 +792,7 @@
       "category": "healing",
       "source": "adapted_2077",
       "price": 100,
+      "hpRestore": 6,
       "effects": [
         "Recupera 2 HP por rodada durante 3 rodadas."
       ]

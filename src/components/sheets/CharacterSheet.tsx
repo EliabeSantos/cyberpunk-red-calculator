@@ -10,6 +10,7 @@ import {
   upgradeSkill,
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
+import { applyHealingItem, getItemHealAmount, isHealingItem } from "@/lib/healing";
 import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, rollDeathSave, applyFirstAid, rollFirstAid } from "@/lib/damage";
 import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold, calculateHPStatus } from "@/lib/calculations";
 import { rollEvasion, reloadWeapon } from "@/lib/attacks";
@@ -93,6 +94,7 @@ export default function CharacterSheet({
   const [receivedDamage, setReceivedDamage] = useState("");
   const [hitLocation, setHitLocation] = useState<HitLocation>("body");
   const [combatError, setCombatError] = useState("");
+  const [healNotice, setHealNotice] = useState<{ text: string; isError: boolean } | null>(null);
   const [lastQuickhack, setLastQuickhack] = useState<QuickhackRollResult | null>(null);
   const [lastInitiative, setLastInitiative] = useState<{ diceRoll: number; refBonus: number; total: number; critical: boolean; fumble: boolean } | null>(null);
   const [manualInjuryLocation, setManualInjuryLocation] = useState<HitLocation>("body");
@@ -409,6 +411,19 @@ export default function CharacterSheet({
     if (!result) return;
     onUpdate(result.character);
     setLastHumanityLoss(result.cyberwareInstallation?.humanityLoss ?? null);
+  }
+  function handleUseHealingItem(inventoryItemId: string) {
+    const result = applyHealingItem(character, inventoryItemId);
+    if ("error" in result) {
+      setHealNotice({ text: result.error, isError: true });
+      return;
+    }
+    setHealNotice({
+      text: `${result.itemName} usado: ${result.restored > 0 ? `+${result.restored} HP` : "HP já está no máximo"}${result.stabilized ? " · Estabilizado" : ""}.`,
+      isError: false,
+    });
+    onUpdate(result.character);
+    setTimeout(() => setHealNotice(null), 3000);
   }
   function openHumanityAdjust() {
     setHumanityAdjustValue(String(character.humanity.current));
@@ -1538,6 +1553,7 @@ export default function CharacterSheet({
             <div className="inventory-grid">
               {character.inventory.map((item) => {
                 const catalogItem = item.catalogItemId ? getCatalogItem(item.catalogItemId) : null;
+                const healAmount = isHealingItem(item) ? getItemHealAmount(item) : null;
                 return (
                   <div key={item.id} className="inventory-card">
                     <div className="inventory-card-header">
@@ -1546,6 +1562,17 @@ export default function CharacterSheet({
                         <span className="inventory-name">{item.name}</span>
                       </div>
                       <div className="inventory-card-actions">
+                        {healAmount !== null && (
+                          <button
+                            type="button"
+                            className="inventory-action-btn use"
+                            onClick={() => handleUseHealingItem(item.id)}
+                            disabled={character.combat.isDead || character.combat.hp.current >= character.combat.hp.max}
+                            title={`Restaura ${healAmount} HP`}
+                          >
+                            ✚ Usar (+{healAmount} HP)
+                          </button>
+                        )}
                         {item.catalogItemId && (
                           <button
                             type="button"
@@ -1592,6 +1619,11 @@ export default function CharacterSheet({
             </div>
           ) : (
             <EmptyState>Inventário vazio.</EmptyState>
+          )}
+          {healNotice && (
+            <p className={healNotice.isError ? "inventory-heal-notice error" : "inventory-heal-notice"}>
+              {healNotice.text}
+            </p>
           )}
         </section>
       </section>
