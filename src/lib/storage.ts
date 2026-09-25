@@ -6,7 +6,10 @@ import {
   calculateMaximumHumanityFromCyberware,
 } from "@/lib/calculations";
 import type { Character, CriticalInjury } from "@/types/character";
-import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjuries";
+import {
+  bodyCriticalInjuries,
+  headCriticalInjuries,
+} from "@/data/criticalInjuries";
 import { createDefaultSkills } from "@/data/skills";
 
 const STORAGE_PREFIX = "cyberpunk-red-toolkit";
@@ -36,13 +39,18 @@ export function normalizeCharacter(character: Character): Character {
   // senão calcula a partir do EMP (fichas antigas/sem cyberware).
   const savedMaxHumanity = character.humanity?.max ?? 0;
   const calculatedMaxHumanity = calculateMaximumHumanity(character.stats);
-  const maximumHumanity = savedMaxHumanity > 0 ? Math.min(savedMaxHumanity, calculatedMaxHumanity) : calculatedMaxHumanity;
+  const maximumHumanity =
+    savedMaxHumanity > 0
+      ? Math.min(savedMaxHumanity, calculatedMaxHumanity)
+      : calculatedMaxHumanity;
 
   const oldHitPoints = character.combat?.hp;
   const oldHumanity = character.humanity;
-  
+
   // Normaliza criticalInjuries: converte strings antigas para objetos CriticalInjury
-  const normalizedCriticalInjuries: CriticalInjury[] = (character.combat?.criticalInjuries || []).map((injury: unknown) => {
+  const normalizedCriticalInjuries: CriticalInjury[] = (
+    character.combat?.criticalInjuries || []
+  ).map((injury: unknown) => {
     if (typeof injury === "string") {
       // String antiga: tenta encontrar na tabela oficial pelo nome
       const allInjuries = [...bodyCriticalInjuries, ...headCriticalInjuries];
@@ -71,7 +79,8 @@ export function normalizeCharacter(character: Character): Character {
       ...createDefaultSkills(),
       ...Object.fromEntries(
         Object.entries(character.skills ?? {}).map(([id, skill]) => {
-          const { base: _legacyBase, ...currentSkill } = skill as typeof skill & { base?: number };
+          const { base: _legacyBase, ...currentSkill } =
+            skill as typeof skill & { base?: number };
           return [id, currentSkill];
         }),
       ),

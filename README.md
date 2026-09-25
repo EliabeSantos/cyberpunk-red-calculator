@@ -131,11 +131,13 @@ Regras implementadas em 25/09/2026 (`tests/martial-arts.test.ts` cobre cada item
   Requisitos estruturados: perícia da forma, `WILL 8+`, `MOVE 8+` e as flags do turno. `check` rola a
   perícia da forma vs o DV do JSON; `attack` (Bone Breaking Strike, Pressure Point Strike, Flying Kick)
   vira um **ataque de Artes Marciais normal** — mesma lista, mesmo botão de dano, mesma regra de SP.
-- **Special Moves começam travados e custam 1 ponto** (decisão da mesa de 25/09/2026): o estoque de pontos
-  é o **nível da forma** — Karate 3 = 3 pontos, gastos só em moves de Karate; o Recovery compartilhado sai
-  do pool da **melhor forma**. Card mostra o saldo (`nível 3 = 3 pontos, 1 livre`), botão **🔓 Desbloquear**,
-  badge `Liberável`/`Travado` e **↺ Devolver o ponto**. Pagado, o move continua exigindo WILL 8+, MOVE 8+
-  e as flags do turno. Testes: `tests/martial-arts.test.ts` (desbloqueio, pool por forma, devolução, recusa).
+- **Special Moves começam travados e custam 1 ponto** (decisão da mesa de 25/09/2026): os
+  pontos vêm da perícia-mãe **Martial Arts** (1 ponto por nível; MA 4 = 4 pontos). O mesmo
+  bolso paga **especializações** (custo escalonado: Karate 1 = 1 pt, Karate 2 = 2 pt…) **e**
+  desbloqueio de moves. O card mostra o saldo (`nível 4 = 4 pts · 3 em especializações · 1 em
+  moves · 0 livre`), badge `Liberável`/`Travado`, botão **🔓 Desbloquear** e **↺ Devolver o
+  ponto**. Requisitos originais continuam valendo depois de pago. Testes:
+  `tests/martial-arts.test.ts` (pool único, devolução, recusa).
 
 **Fora do escopo desta rodada** (detalhado em `PENDENCIAS.md`): Grapple/Grab/Choke/Throw não existem no
 app, ROF 2 é informativo (não há economia de ações), o estado do turno é **manual** no painel do Card 03 e

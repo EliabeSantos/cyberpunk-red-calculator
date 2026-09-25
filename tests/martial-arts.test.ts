@@ -91,22 +91,33 @@ const NEUTRAL_RANDOM = 0.5;
 
 test("fichas antigas sem forma de Martial Arts recebem as skills padrões sem quebrar a UI", () => {
   const base = createEmptyCharacter("legacy-ma");
-  const legacy = {
+  const legacy: Character = {
     ...base,
     skills: {
       ...base.skills,
       martial_arts: { ...base.skills.martial_arts, level: 3 },
-    },
+    } as Character["skills"],
   };
-  delete legacy.skills.martial_arts_karate;
-  delete legacy.skills.martial_arts_taekwondo;
-  delete legacy.skills.martial_arts_judo;
-  delete legacy.skills.martial_arts_aikido;
+  delete (legacy.skills as Record<string, unknown>).martial_arts_karate;
+  delete (legacy.skills as Record<string, unknown>).martial_arts_taekwondo;
+  delete (legacy.skills as Record<string, unknown>).martial_arts_judo;
+  delete (legacy.skills as Record<string, unknown>).martial_arts_aikido;
 
   const normalized = normalizeCharacter(legacy);
-  assert.ok(normalized.skills.martial_arts_karate, "a forma padrão deve ser recriada");
-  assert.strictEqual(normalized.skills.martial_arts_karate.level, 0, "a especialização ausente começa em zero");
-  assert.strictEqual(getSkillBase(normalized, "martial_arts_karate"), normalized.stats.DEX, "a base não pode quebrar a renderização");
+  assert.ok(
+    normalized.skills.martial_arts_karate,
+    "a forma padrão deve ser recriada",
+  );
+  assert.strictEqual(
+    normalized.skills.martial_arts_karate.level,
+    0,
+    "a especialização ausente começa em zero",
+  );
+  assert.strictEqual(
+    getSkillBase(normalized, "martial_arts_karate"),
+    normalized.stats.DEX,
+    "a base não pode quebrar a renderização",
+  );
 });
 
 test("dano de Brawling e Artes Marciais segue a escala oficial de BODY", () => {

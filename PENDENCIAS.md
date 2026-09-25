@@ -126,14 +126,19 @@ Decisões que valem revisão:
   explícito listando o que falta. `check` rola a perícia da forma vs o DV do JSON; `attack` vira um
   ataque de Artes Marciais normal (entra no fluxo de dano da ficha, com dano por BODY e metade de SP);
   `passive` só confirma disponibilidade.
-- **Desbloqueio de Special Move com pontos por forma** (decisão da mesa em 25/09/2026): cada move começa
-  **travado** e custa **1 ponto** para liberar; o estoque de pontos é o **nível da forma** (Karate 3 = 3
-  pontos, gastos só em moves de Karate). O move compartilhado (Recovery) desconta do pool da **melhor
-  forma**. O desbloqueio é permanente, fica em `character.unlockedSpecialMoves` e tem botão de **devolver
-  o ponto**. Os requisitos originais continuam valendo depois de pago — pagar não substitui WILL 8+ nem as
-  flags do turno.
+- **Desbloqueio de Special Move com bolso único de Martial Arts** (decisão da mesa em 25/09/2026):
+  cada move começa travado e custa 1 ponto; o estoque de pontos é o **nível de Martial Arts**
+  (perícia-mãe, 1 ponto por nível), dividido entre **especializações** (custo escalonado
+  1, 2, 3…) e moves de todas as formas. Recovery desconta do mesmo bolso. O desbloqueio é
+  permanente em `character.unlockedSpecialMoves`, com botão **↺ Devolver o ponto**. Os
+  requisitos originais continuam valendo depois de pago.
 
 ### Pendências novas
+
+- **Especializações de Artes Marciais não compram com IP nem pontos de criação**: só com
+  pontos gerados pelos níveis de Martial Arts (1 por nível). Fichas antigas com formas já
+  compradas via IP ficam com saldo negativo ("devendo X pts") até a perícia-mãe crescer —
+  display explícito no card de perícia.
 
 - **Grapple / Grab / Choke / Throw não existem no app** (procurei e não há implementação — sem agarrar,
   sem Prone, sem Throw). Deixado de fora por decisão de 25/09/2026. Consequência: **Iron Grip** e
@@ -159,9 +164,11 @@ Decisões que valem revisão:
 
 - As 4 formas entraram em `skillDefinitions` — sair é apagar as 4 entradas de `src/data/skills.ts`, o
   array de skills com custo duplo no teste e os ataques por forma viram de volta o `skill:martial_arts`.
-- **`unlockedSpecialMoves` em `Character`** (campo novo, `string[]`, `undefined` em ficha antiga = nenhum)
-  + a regra de pool "**nível da forma = pontos, 1 ponto por move**" em `src/lib/specialMoves.ts`
-  (`getSpecialMovePool`, `unlockSpecialMove`, `refundSpecialMove`). Reversível: apagar o campo do tipo, a
-  normalização em `src/lib/storage.ts`, os três helpers e o bloco de desbloqueio do Card 03 — os moves
-  voltam a abrir só com ≥1 ponto na forma. **Não gasta IP**: o ponto vem de graça a cada nível de forma
-  comprado (o custo continua só no upgrade da perícia).
+- **`unlockedSpecialMoves` em `Character`** (campo novo, `string[]`, `undefined` em ficha
+  antiga = nenhum) + regra de pool "**nível de Martial Arts = pontos, 1 ponto por nível,
+  dividido entre especializações (escalonado 1,2,3…) e moves (1 cada)**".
+  Reversível: apagar o campo do tipo, a normalização em `src/lib/storage.ts`,
+  `getMartialArtsPoints`/`upgradeSpecialization` em `src/lib/progression.ts`, os helpers de
+  desbloqueio em `src/lib/specialMoves.ts` e o bloco do Card 03 — moves voltam a abrir só com
+  ≥1 ponto na forma, comprados com IP como antes. **Não gasta IP**: os pontos são gerados
+  gratuitamente pelos níveis de Martial Arts.

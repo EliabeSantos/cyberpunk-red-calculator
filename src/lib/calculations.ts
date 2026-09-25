@@ -4,7 +4,9 @@ import type { AttributeName } from "@/types/character";
 import type { CriticalInjury } from "@/data/criticalInjuries";
 import { ignoresWoundPenalty } from "@/lib/cyberwareEffects";
 
-export function calculateMaximumHitPoints(stats: Pick<Stats, "BODY" | "WILL">): number {
+export function calculateMaximumHitPoints(
+  stats: Pick<Stats, "BODY" | "WILL">,
+): number {
   return 10 + 5 * Math.floor((stats.BODY + stats.WILL) / 2);
 }
 export function calculateMaximumHumanity(stats: Pick<Stats, "EMP">): number {
@@ -14,7 +16,9 @@ export function calculateMaximumHumanity(stats: Pick<Stats, "EMP">): number {
 /** Calcula todos os modificadores ativos das Critical Injuries do personagem.
  * Retorna um objeto com os modificadores agrupados por tipo para fácil aplicação.
  */
-export function getCriticalInjuryModifiers(character: Pick<Character, "combat">): {
+export function getCriticalInjuryModifiers(
+  character: Pick<Character, "combat">,
+): {
   statModifiers: Record<AttributeName, number>;
   skillModifiers: Record<string, number>;
   moveModifier: number;
@@ -31,7 +35,7 @@ export function getCriticalInjuryModifiers(character: Pick<Character, "combat">)
   descriptions: string[];
 } {
   const injuries = character.combat?.criticalInjuries || [];
-  
+
   const result = {
     statModifiers: {} as Record<AttributeName, number>,
     skillModifiers: {} as Record<string, number>,
@@ -53,13 +57,15 @@ export function getCriticalInjuryModifiers(character: Pick<Character, "combat">)
       switch (mod.type) {
         case "stat":
           if (mod.stat) {
-            result.statModifiers[mod.stat] = (result.statModifiers[mod.stat] || 0) + mod.value;
+            result.statModifiers[mod.stat] =
+              (result.statModifiers[mod.stat] || 0) + mod.value;
             result.descriptions.push(`${injury.name}: ${mod.description}`);
           }
           break;
         case "skill":
           if (mod.skillId) {
-            result.skillModifiers[mod.skillId] = (result.skillModifiers[mod.skillId] || 0) + mod.value;
+            result.skillModifiers[mod.skillId] =
+              (result.skillModifiers[mod.skillId] || 0) + mod.value;
             result.descriptions.push(`${injury.name}: ${mod.description}`);
           }
           break;
@@ -124,7 +130,9 @@ export function calculateWoundThreshold(maxHP: number): number {
  * Usa o EMP do personagem para calcular o máximo inicial (EMP * 10),
  * não o valor já reduzido armazenado em character.humanity.max.
  */
-export function calculateMaximumHumanityFromCyberware(character: Pick<Character, "cyberware" | "stats">): number {
+export function calculateMaximumHumanityFromCyberware(
+  character: Pick<Character, "cyberware" | "stats">,
+): number {
   const initialMax = character.stats.EMP * 10;
   let reduction = 0;
   for (const cw of character.cyberware) {
@@ -141,7 +149,11 @@ export function calculateEmpFromHumanity(humanityCurrent: number): number {
 }
 
 /** Tipo do status de HP do personagem. */
-export type HPStatus = "normal" | "seriously_wounded" | "mortally_wounded" | "dead";
+export type HPStatus =
+  | "normal"
+  | "seriously_wounded"
+  | "mortally_wounded"
+  | "dead";
 
 /** Calcula o status de HP do personagem baseado nas regras do Cyberpunk RED.
  * - HP > Wound Threshold → Normal
@@ -164,8 +176,14 @@ export function calculateHPStatus(
 /** Penalidade de HP quando Seriously/Mortally Wounded: −2 em todas as ações (CPR).
  * Pain Editor ativo zera essa penalidade — é a única peça que faz isso hoje.
  * Fonte única para First Aid, perícia, ataque e Evasão usarem o mesmo número. */
-export function getWoundPenalty(character: Pick<Character, "combat" | "cyberware">): number {
-  const status = calculateHPStatus(character.combat.hp.current, character.combat.hp.max, character.combat.isDead);
+export function getWoundPenalty(
+  character: Pick<Character, "combat" | "cyberware">,
+): number {
+  const status = calculateHPStatus(
+    character.combat.hp.current,
+    character.combat.hp.max,
+    character.combat.isDead,
+  );
   if (status !== "seriously_wounded" && status !== "mortally_wounded") return 0;
   if (ignoresWoundPenalty(character)) return 0;
   return -2;
