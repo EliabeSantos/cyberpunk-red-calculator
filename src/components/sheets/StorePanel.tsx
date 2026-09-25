@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 
-import { catalogItems, type ItemCategory } from "@/data/items";
+import { catalogItems, getCatalogItem, type ItemCategory } from "@/data/items";
 import { addEurodollars, canPurchaseItem, getItemForFree, purchaseItem } from "@/lib/store";
 import type { Character } from "@/types/character";
 
@@ -160,6 +160,18 @@ export default function StorePanel({ character, onUpdate }: Props) {
                       <span className="item-category">{categoryLabels[item.category]}</span>
                       <h3 className="item-name">{item.name}</h3>
                       {item.effects?.[0] && <p className="item-effect">{item.effects[0]}</p>}
+                      {item.effects && item.effects.length > 1 && (
+                        <ul className="item-effects">
+                          {item.effects.slice(1).map((effect) => (
+                            <li key={effect}>{effect}</li>
+                          ))}
+                        </ul>
+                      )}
+                      {item.requires && (
+                        <p className="item-requires">
+                          Requer: {getCatalogItem(item.requires)?.name ?? item.requires}
+                        </p>
+                      )}
                     </div>
                     <div className="item-actions">
                       <span className="item-price">€$ {item.price.toLocaleString("pt-BR")}</span>

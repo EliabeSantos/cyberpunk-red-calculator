@@ -44,35 +44,48 @@ test("rollSkillCheck returns correct result for Concentration (WILL)", () => {
 
 test("rollSkillCheck works with skill level 0", () => {
   const character = characterWithStat(7, "concentration", 0);
-  const resolution = rollSkillCheck(character, "concentration");
-  
-  assert.ok("result" in resolution, "Should have result");
-  
-  if ("result" in resolution) {
-    const { skillId, statId, skillLevel, diceRoll, total } = resolution.result;
-    assert.strictEqual(skillId, "concentration");
-    assert.strictEqual(statId, "WILL");
-    assert.strictEqual(skillLevel, 0);
-    assert.ok(diceRoll >= 1 && diceRoll <= 10, `diceRoll should be 1-10, got ${diceRoll}`);
-    // total = 7 + 0 + diceRoll
-    assert.ok(total === 7 + 0 + diceRoll, `Expected total = 7 + 0 + ${diceRoll} = ${7 + 0 + diceRoll}, got ${total}`);
+  // Mock para o d10 não explodir (10) e quebrar a faixa 1–10 — era a fonte da falha intermitente.
+  const random = Math.random;
+  Math.random = () => 0.5;
+  try {
+    const resolution = rollSkillCheck(character, "concentration");
+
+    assert.ok("result" in resolution, "Should have result");
+
+    if ("result" in resolution) {
+      const { skillId, statId, skillLevel, diceRoll, total } = resolution.result;
+      assert.strictEqual(skillId, "concentration");
+      assert.strictEqual(statId, "WILL");
+      assert.strictEqual(skillLevel, 0);
+      assert.ok(diceRoll >= 1 && diceRoll <= 10, `diceRoll should be 1-10, got ${diceRoll}`);
+      // total = 7 + 0 + diceRoll
+      assert.ok(total === 7 + 0 + diceRoll, `Expected total = 7 + 0 + ${diceRoll} = ${7 + 0 + diceRoll}, got ${total}`);
+    }
+  } finally {
+    Math.random = random;
   }
 });
 
 test("rollSkillCheck works with another skill (Athletics/DEX)", () => {
   const character = characterWithStat(5, "athletics", 2);
-  const resolution = rollSkillCheck(character, "athletics");
-  
-  assert.ok("result" in resolution, "Should have result");
-  
-  if ("result" in resolution) {
-    const { skillId, statId, skillLevel, diceRoll, total } = resolution.result;
-    assert.strictEqual(skillId, "athletics");
-    assert.strictEqual(statId, "DEX");
-    assert.strictEqual(skillLevel, 2);
-    assert.ok(diceRoll >= 1 && diceRoll <= 10, `diceRoll should be 1-10, got ${diceRoll}`);
-    // total = 5 + 2 + diceRoll
-    assert.ok(total === 5 + 2 + diceRoll, `Expected total = 5 + 2 + ${diceRoll} = ${5 + 2 + diceRoll}, got ${total}`);
+  const random = Math.random;
+  Math.random = () => 0.5;
+  try {
+    const resolution = rollSkillCheck(character, "athletics");
+
+    assert.ok("result" in resolution, "Should have result");
+
+    if ("result" in resolution) {
+      const { skillId, statId, skillLevel, diceRoll, total } = resolution.result;
+      assert.strictEqual(skillId, "athletics");
+      assert.strictEqual(statId, "DEX");
+      assert.strictEqual(skillLevel, 2);
+      assert.ok(diceRoll >= 1 && diceRoll <= 10, `diceRoll should be 1-10, got ${diceRoll}`);
+      // total = 5 + 2 + diceRoll
+      assert.ok(total === 5 + 2 + diceRoll, `Expected total = 5 + 2 + ${diceRoll} = ${5 + 2 + diceRoll}, got ${total}`);
+    }
+  } finally {
+    Math.random = random;
   }
 });
 

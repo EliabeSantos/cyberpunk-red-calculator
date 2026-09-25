@@ -1,12 +1,19 @@
-import { getSkillBase, getCriticalInjuryModifiers } from "@/lib/calculations";
+import { getSkillBase, getCriticalInjuryModifiers, getWoundPenalty } from "@/lib/calculations";
 import { rollDice } from "@/lib/dice";
+import { getCatalogItem } from "@/data/items";
+import { getCyberwareAttackModifiers, getCyberwareEvasionModifiers, getCyberwarePhysicalModifiers, getCyberwareUnarmedDamageModifiers, hasInstalledCyberarm, isSmartWeapon } from "@/lib/cyberwareEffects";
+import { MARTIAL_ARTS_FORMS } from "@/data/skills";
 import type {
   AttackContext,
   AttackRollResult,
+  AttackType,
   AvailableAttack,
   AttackModifier,
 } from "@/types/attack";
 import type { Character, RollHistoryEntry } from "@/types/character";
+
+/** ROF dos ataques por perícia: Brawling e Martial Arts atacam com ROF 2. */
+const UNARMED_ROF = 2;
 
 /** Descobre ataques a partir de armas E de perícias, sem depender da UI. */
 export function getAvailableAttacks(character: Character): AvailableAttack[] {
@@ -19,22 +26,44 @@ export function getAvailableAttacks(character: Character): AvailableAttack[] {
       source: "weapon",
       context: { type: "weapon", weaponId: weapon.id },
     }));
+
+  // Artes Marciais: uma entrada por forma com nível > 0. Cada forma usa o próprio nível e
+  // nunca soma com as demais. A perícia genérica só aparece quando a ficha não tem nenhuma
+  // forma (regra: para usar Artes Marciais é preciso ao menos 1 ponto numa forma).
+  const formAttacks: AvailableAttack[] = MARTIAL_ARTS_FORMS.flatMap(({ skillId }) => {
+    const skill = character.skills[skillId];
+    if (!skill || skill.level <= 0) return [];
+    return [
+      {
+        id: `skill:${skillId}`,
+        label: skill.name,
+        detail: `${skill.stat} + ${skill.name} + 1d10 · ROF ${UNARMED_ROF}`,
+        source: "skill" as const,
+        rof: UNARMED_ROF,
+        context: { type: "martial_arts" as const, skillId },
+      },
+    ];
+  });
   const martialArts = character.skills.martial_arts;
-  const brawling = character.skills.brawling;
   const skillAttacks: AvailableAttack[] =
-    martialArts && martialArts.level > 0
+    formAttacks.length === 0 && martialArts && martialArts.level > 0
       ? [
           {
             id: "skill:martial_arts",
             label: martialArts.name,
-            detail: `${martialArts.stat} + ${martialArts.name} + 1d10`,
+            detail: `${martialArts.stat} + ${martialArts.name} + 1d10 · ROF ${UNARMED_ROF}`,
             source: "skill",
+            rof: UNARMED_ROF,
             context: { type: "martial_arts", skillId: "martial_arts" },
           },
         ]
       : [];
-  const brawlingAttack: AvailableAttack[] = brawling && brawling.level > 0 ? [{ id: "skill:brawling", label: brawling.name, detail: `${brawling.stat} + ${brawling.name} + 1d10`, source: "skill", context: { type: "brawling", skillId: "brawling" } }] : [];
-  return [...weaponAttacks, ...skillAttacks, ...brawlingAttack];
+  const brawling = character.skills.brawling;
+  const brawlingAttack: AvailableAttack[] =
+    brawling && brawling.level > 0
+      ? [{ id: "skill:brawling", label: brawling.name, detail: `${brawling.stat} + ${brawling.name} + 1d10 · ROF ${UNARMED_ROF}`, source: "skill", rof: UNARMED_ROF, context: { type: "brawling", skillId: "brawling" } }]
+      : [];
+  return [...weaponAttacks, ...formAttacks, ...skillAttacks, ...brawlingAttack];
 }
 
 function getAttackLabel(type: AttackContext["type"]): string {
@@ -49,11 +78,14 @@ export type AttackResolution =
   | { character: Character; result: AttackRollResult }
   | { error: string };
 
-function getUnarmedDamageDice(body: number): string {
-  if (body >= 9) return "4d6";
-  if (body >= 7) return "3d6";
-  if (body >= 5) return "2d6";
-  return "1d6";
+/** Dano desarmado (Brawling e Artes Marciais) por BODY:
+ * BODY 1–4 = 1d6 · 5–6 = 2d6 · 7–10 = 3d6 · 11+ = 4d6.
+ * Com cyberarm instalado o resultado nunca fica abaixo de 2d6; o bônus do cyberware
+ * continua sendo somado por cima (Gorilla Arms segue dando +1d6). */
+export function getUnarmedDamageDice(body: number, cyberwareBonusDice = 0, hasCyberarm = false): string {
+  const bodyDice = body >= 11 ? 4 : body >= 7 ? 3 : body >= 5 ? 2 : 1;
+  const totalDice = bodyDice + cyberwareBonusDice;
+  return `${hasCyberarm ? Math.max(totalDice, 2) : totalDice}d6`;
 }
 
 /** Resolve apenas a rolagem para acertar, sem calcular dano ou DV. */
@@ -63,12 +95,23 @@ export function rollAttack(
 ): AttackResolution {
   const modifiers = context.modifiers ?? [];
   let skillId = context.skillId;
-  let label = getAttackLabel(context.type);
+  let label = context.label || getAttackLabel(context.type);
   let weaponId = context.weaponId;
   let attackType = context.type;
   let damageDice: string | undefined;
+  /** De onde vêm os dados de dano (base + bônus de cyberware), para exibir na ficha. */
+  let damageSources: string[] | undefined;
   if (context.type === "brawling" || context.type === "martial_arts") {
-    damageDice = getUnarmedDamageDice(character.stats.BODY);
+    const unarmedBonus = getCyberwareUnarmedDamageModifiers(character);
+    const bonusDice = unarmedBonus.reduce((sum, modifier) => sum + modifier.value, 0);
+    const cyberarm = hasInstalledCyberarm(character);
+    const withoutFloor = getUnarmedDamageDice(character.stats.BODY, bonusDice);
+    damageDice = getUnarmedDamageDice(character.stats.BODY, bonusDice, cyberarm);
+    damageSources = [
+      `Base (BODY ${character.stats.BODY}): ${getUnarmedDamageDice(character.stats.BODY)}`,
+      ...unarmedBonus.map((modifier) => `${modifier.source}: +${modifier.value}d6`),
+      ...(damageDice !== withoutFloor ? ["Cyberarm: piso de 2d6"] : []),
+    ];
   }
   if (context.weaponId) {
     const weapon = character.weapons.find(
@@ -93,12 +136,21 @@ export function rollAttack(
   // Calcula modificadores de Critical Injuries
   const injuryModifiers = getCriticalInjuryModifiers(character);
   
-  // Determina se é ataque à distância ou corpo a corpo
-  const isRanged = ["archery", "autofire", "handgun", "heavy_weapons", "shoulder_arms", "rifle", "sniper", "shotgun", "thrown_weapon", "grenade"].includes(context.type as string);
-  const isMelee = ["melee", "martial_arts", "brawling", "unarmed"].includes(context.type as string);
+  // Determina se é ataque à distância ou corpo a corpo a partir do TIPO RESOLVIDO do ataque.
+  // Para armas isso é `weapon.attackType` (handgun, smg, heavy_weapon, melee...), não `context.type`,
+  // que é sempre "weapon" — antes, todo ataque com arma escapava desses dois modificadores (bug 3b)
+  // e a lista antiga usava ids de perícia ("heavy_weapons") em vez de AttackType ("heavy_weapon"),
+  // fora "smg" (bug 3). O fallback por perícia cobre chamadas legadas com type: "weapon".
+  const RANGED_ATTACK_TYPES: AttackType[] = ["handgun", "smg", "rifle", "shotgun", "sniper", "heavy_weapon", "thrown_weapon", "grenade", "exotic_weapon"];
+  const MELEE_ATTACK_TYPES: AttackType[] = ["melee", "martial_arts", "brawling", "unarmed"];
+  const RANGED_SKILL_IDS = ["archery", "autofire", "handgun", "heavy_weapons", "shoulder_arms"];
+  const isRanged =
+    RANGED_ATTACK_TYPES.includes(attackType) ||
+    (attackType === "weapon" && RANGED_SKILL_IDS.includes(skillId));
+  const isMelee = MELEE_ATTACK_TYPES.includes(attackType);
   
   // Calcula modificadores de Critical Injury aplicáveis ao ataque
-  const attackModifiers: AttackModifier[] = [...context.modifiers ?? []];
+  const attackModifiers: AttackModifier[] = [...modifiers];
   
   if (injuryModifiers.rangedModifier !== 0 && isRanged) {
     attackModifiers.push({ source: "Distância (lesão)", value: injuryModifiers.rangedModifier });
@@ -118,7 +170,31 @@ export function rollAttack(
   if (injuryModifiers.statModifiers[skill.stat]) {
     attackModifiers.push({ source: "STAT (lesão)", value: injuryModifiers.statModifiers[skill.stat] });
   }
+
+  // Penalidade de HP: −2 em todas as ações quando Seriously/Mortally Wounded.
+  // Pain Editor ativo zera (getWoundPenalty é a fonte única, igual ao First Aid).
+  const woundPenalty = getWoundPenalty(character);
+  if (woundPenalty !== 0) {
+    attackModifiers.push({ source: "Lesão grave (HP)", value: woundPenalty });
+  }
+
+  // Bônus passivos do cyberware instalado (Targeting Scope, Smart Link, Gorilla Arms...)
+  const weaponCatalogItemId = character.weapons.find((item) => item.id === context.weaponId)?.catalogItemId;
+  const weaponCatalog = weaponCatalogItemId ? getCatalogItem(weaponCatalogItemId) : undefined;
+  const isRangedAttack = ["archery", "autofire", "handgun", "heavy_weapons", "shoulder_arms"].includes(skillId);
+  for (const modifier of getCyberwareAttackModifiers(character, {
+    ranged: isRangedAttack,
+    smart: weaponCatalog ? isSmartWeapon(weaponCatalog) : false,
+    skillId,
+  })) {
+    attackModifiers.push(modifier);
+  }
   
+  // Efeito "todo teste físico" de cyberware ativado (é um ataque: sempre é físico)
+  for (const modifier of getCyberwarePhysicalModifiers(character)) {
+    attackModifiers.push({ source: `${modifier.source} (físico)`, value: modifier.value });
+  }
+
   // Rolagem de 1d10 com exploding dice (crítico em 10, falha crítica em 1)
   interface RollDetail { value: number; type: "normal" | "crit" | "fumble" | "crit_add" | "fumble_sub"; }
   let allRolls: RollDetail[] = [];
@@ -159,32 +235,28 @@ export function rollAttack(
   
   rollExplodingD10();
 
-  // Calcula o total do STAT com modificadores de lesão
   const statValue = character.stats[skill.stat];
-  const statModifier = injuryModifiers.statModifiers[skill.stat] || 0;
-  const modifiedStatValue = statValue + statModifier;
-  
-  const baseSkill = getSkillBase(character, skillId);
-  const modifierTotal = modifiers.reduce(
-    (total, modifier) => total + modifier.value,
-    0,
-  );
-  
+
   const injuryModifierSum = attackModifiers.reduce((sum, m) => sum + m.value, 0);
 
-  const total = modifiedStatValue + skill.level + diceTotal + modifierTotal + injuryModifierSum;
+  // Total = STAT base + perícia + d10 + modificadores.
+  // `attackModifiers` já contém context.modifiers, a lesão de STAT, a lesão grave e o cyberware,
+  // cada um UMA única vez. Antes o total somava `modifierTotal` (context.modifiers) E o STAT já
+  // modificado à parte — context.modifiers contava em dobro (bug 2) e a lesão de STAT também (bug 1).
+  const total = statValue + skill.level + diceTotal + injuryModifierSum;
 
   const result: AttackRollResult = {
     attackId: crypto.randomUUID(),
     attackType,
     label,
     roll: { expression: "1d10", rolls: allRolls.map(r => r.value), total: diceTotal },
-    stat: { id: skill.stat, value: modifiedStatValue },
+    stat: { id: skill.stat, value: statValue },
     skill: { id: skillId, value: skill.level },
     modifiers: attackModifiers,
     total,
     weaponId,
     damageDice,
+    damageSources,
     naturalRoll: allRolls[0]?.value ?? 0,
     critical: isCritical,
     fumble: isFumble,
@@ -280,9 +352,20 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
   // Aplica modificadores de Critical Injury
   const injuryModifiers = getCriticalInjuryModifiers(character);
   const injuryModifierTotal = injuryModifiers.allPhysicalModifier + injuryModifiers.allActionsModifier + (injuryModifiers.statModifiers[skill.stat] || 0);
-  
+
+  // Penalidade de HP (−2 em todas as ações); Pain Editor ativo zera.
+  const woundPenalty = getWoundPenalty(character);
+
+  // Bônus passivos de cyberware (ex.: Kerenzikov, quando aplicável)
+  const allModifiers: AttackModifier[] = [
+    ...modifiers,
+    ...(woundPenalty !== 0 ? [{ source: "Lesão grave (HP)", value: woundPenalty }] : []),
+    ...getCyberwareEvasionModifiers(character),
+    ...getCyberwarePhysicalModifiers(character).map((modifier) => ({ source: `${modifier.source} (físico)`, value: modifier.value })),
+  ];
+
   const baseSkill = getSkillBase(character, "evasion");
-  const total = baseSkill + diceTotal + modifiers.reduce((sum, item) => sum + item.value, 0) + injuryModifierTotal;
+  const total = baseSkill + diceTotal + allModifiers.reduce((sum, item) => sum + item.value, 0) + injuryModifierTotal;
   
   const result = { 
     evasionId: crypto.randomUUID(), 
@@ -290,7 +373,7 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
     stat: { id: skill.stat, value: character.stats[skill.stat] }, 
     skill: { id: "evasion" as const, value: skill.level }, 
     skillBase: baseSkill, 
-    modifiers, 
+    modifiers: allModifiers, 
     total, 
     naturalRoll: allRolls[0]?.value ?? 0,
     critical: isCritical,
@@ -310,7 +393,7 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
     timestamp: new Date().toISOString(), 
     stat: { id: skill.stat, value: character.stats[skill.stat] }, 
     skill: { id: "evasion", value: skill.level }, 
-    modifiers 
+    modifiers: allModifiers 
   };
   
   return { character: { ...character, rollHistory: [entry, ...character.rollHistory] }, result };

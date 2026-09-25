@@ -1,18 +1,31 @@
 import { getCatalogItem } from "@/data/items";
 import { getWeaponAttackProfile } from "@/data/attacks";
 import { installCyberware, type CyberwareInstallationResult } from "@/lib/cyberware";
+import { validateCyberwareInstall, validateWeaponEquip } from "@/lib/cyberwareEffects";
 import type { Character, InventoryItem, Weapon } from "@/types/character";
 
 export type EquipResult = { character: Character; cyberwareInstallation?: CyberwareInstallationResult };
 export function isEquippableItem(item: InventoryItem): boolean { return item.category === "cyberware" || item.category === "weapon" || item.category === "armor"; }
-/** Move um item do inventário à área correspondente; instalar cyberware aplica Humanity Loss. */
-export function equipInventoryItem(character: Character, inventoryItemId: string): EquipResult | null {
+/** Move um item do inventário à área correspondente; instalar cyberware aplica Humanity Loss.
+ * Retorna `{ error }` quando um requisito (pré-requisito, slot ou arma smart) não está atendido. */
+export function equipInventoryItem(character: Character, inventoryItemId: string): EquipResult | { error: string } | null {
   const inventoryItem = character.inventory.find((item) => item.id === inventoryItemId);
   if (!inventoryItem || !isEquippableItem(inventoryItem)) return null;
-  if (inventoryItem.category === "cyberware") { const cyberwareInstallation = installCyberware(character, inventoryItem); return { character: cyberwareInstallation.character, cyberwareInstallation }; }
   const catalogItem = inventoryItem.catalogItemId ? getCatalogItem(inventoryItem.catalogItemId) : undefined;
+  if (inventoryItem.category === "cyberware") {
+    if (catalogItem) {
+      const requirement = validateCyberwareInstall(character, catalogItem);
+      if (requirement) return requirement;
+    }
+    const cyberwareInstallation = installCyberware(character, inventoryItem);
+    return { character: cyberwareInstallation.character, cyberwareInstallation };
+  }
   const inventory = inventoryItem.quantity > 1 ? character.inventory.map((item) => item.id === inventoryItemId ? { ...item, quantity: item.quantity - 1 } : item) : character.inventory.filter((item) => item.id !== inventoryItemId);
   if (inventoryItem.category === "weapon") {
+    if (catalogItem) {
+      const requirement = validateWeaponEquip(character, catalogItem);
+      if (requirement) return requirement;
+    }
     const attackProfile = catalogItem ? getWeaponAttackProfile(catalogItem) : undefined;
     const weapon: Weapon = { id: crypto.randomUUID(), catalogItemId: inventoryItem.catalogItemId, name: inventoryItem.name, damage: typeof catalogItem?.damage === "string" ? catalogItem.damage : "—", rateOfFire: typeof catalogItem?.rof === "number" ? catalogItem.rof : undefined, magazine: typeof catalogItem?.ammo === "number" ? catalogItem.ammo : undefined, ammo: typeof catalogItem?.ammo === "number" ? catalogItem.ammo : undefined, skill: attackProfile?.skillId, attackType: attackProfile?.type };
     return { character: { ...character, inventory, weapons: [...character.weapons, weapon] } };

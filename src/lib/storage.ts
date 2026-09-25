@@ -7,6 +7,7 @@ import {
 } from "@/lib/calculations";
 import type { Character, CriticalInjury } from "@/types/character";
 import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjuries";
+import { createDefaultSkills } from "@/data/skills";
 
 const STORAGE_PREFIX = "cyberpunk-red-toolkit";
 const CHARACTERS_KEY = `${STORAGE_PREFIX}:characters:v1`;
@@ -29,7 +30,7 @@ function isCharacter(value: unknown): value is Character {
  * A Maximum Humanity NÃO é recalculada a partir do EMP, pois ela deve
  * refletir as penalidades do Cyberware instalado.
  */
-function normalizeCharacter(character: Character): Character {
+export function normalizeCharacter(character: Character): Character {
   const maximumHitPoints = calculateMaximumHitPoints(character.stats);
   // Maximum Humanity: usa o valor salvo se já existir (pós-criação com cyberware),
   // senão calcula a partir do EMP (fichas antigas/sem cyberware).
@@ -65,16 +66,21 @@ function normalizeCharacter(character: Character): Character {
   return {
     ...character,
     // Fichas antigas podem conter `base`; Base agora é sempre calculada sob demanda.
-    skills: Object.fromEntries(
-      Object.entries(character.skills).map(([id, skill]) => {
-        const { base: _legacyBase, ...currentSkill } = skill as typeof skill & { base?: number };
-        return [id, currentSkill];
-      }),
-    ),
+    // Também é necessário repovoar as skills ausentes (ex.: formas de Martial Arts em fichas antigas).
+    skills: {
+      ...createDefaultSkills(),
+      ...Object.fromEntries(
+        Object.entries(character.skills ?? {}).map(([id, skill]) => {
+          const { base: _legacyBase, ...currentSkill } = skill as typeof skill & { base?: number };
+          return [id, currentSkill];
+        }),
+      ),
+    },
     wallet: character.wallet ?? { eurodollars: 0 },
     primaryRole: character.primaryRole ?? null,
     roleAbilities: character.roleAbilities ?? [],
     ip: character.ip ?? character.progression?.improvementPoints ?? 0,
+    unlockedSpecialMoves: character.unlockedSpecialMoves ?? [],
     teamMembers: character.teamMembers ?? [],
     familyVehicles: character.familyVehicles ?? [],
     progression: character.progression ?? { improvementPoints: 0 },

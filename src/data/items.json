@@ -11,12 +11,31 @@
       "price": 1000,
       "rarity": "rare",
       "humanityLoss": "2d6",
+      "requires": "neural_link",
       "description": "Implante neural que acelera a percepção e os reflexos do usuário.",
       "effects": [
         "1 vez por combate, ativar como Ação.",
         "+4 Iniciativa durante 1 rodada.",
         "+1 REF para testes de reação durante o efeito."
-      ]
+      ],
+      "activation": {
+        "label": "Sandevistan",
+        "stages": [
+          {
+            "name": "Acelerado (1 rodada)",
+            "modifiers": [
+              {
+                "type": "initiative",
+                "value": 4
+              },
+              {
+                "type": "evasion",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "kerenzikov",
@@ -27,10 +46,29 @@
       "price": 750,
       "rarity": "rare",
       "humanityLoss": "2d6",
+      "requires": "neural_link",
       "effects": [
         "+2 Iniciativa se o personagem tiver se movido pelo menos 4 metros na rodada.",
         "+1 Evasão durante movimento."
-      ]
+      ],
+      "activation": {
+        "label": "Kerenzikov",
+        "stages": [
+          {
+            "name": "Em movimento",
+            "modifiers": [
+              {
+                "type": "initiative",
+                "value": 2
+              },
+              {
+                "type": "evasion",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "neural_link",
@@ -54,9 +92,22 @@
       "price": 600,
       "rarity": "uncommon",
       "humanityLoss": "1d6",
+      "requires": "neural_link",
       "effects": [
         "1 vez por combate, pode repetir Iniciativa."
-      ]
+      ],
+      "activation": {
+        "label": "Reflex Tuner",
+        "stages": [
+          {
+            "name": "Pronto para repetir Iniciativa"
+          }
+        ]
+      },
+      "action": {
+        "type": "reroll_initiative",
+        "label": "↻ Repetir Iniciativa"
+      }
     },
     {
       "id": "combat_awareness",
@@ -67,9 +118,25 @@
       "price": 1200,
       "rarity": "rare",
       "humanityLoss": "2d6",
+      "requires": "neural_link",
       "effects": [
         "+2 Percepção durante combate."
-      ]
+      ],
+      "activation": {
+        "label": "Combat Awareness",
+        "stages": [
+          {
+            "name": "Em combate",
+            "modifiers": [
+              {
+                "type": "skill",
+                "skill": "perception",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "smart_link",
@@ -80,9 +147,16 @@
       "price": 1000,
       "rarity": "rare",
       "humanityLoss": "2d6",
+      "requires": "neural_link",
       "effects": [
         "Permite utilizar armas Smart.",
         "+1 em ataques com armas compatíveis."
+      ],
+      "modifiers": [
+        {
+          "type": "attack_smart",
+          "value": 1
+        }
       ]
     },
     {
@@ -96,7 +170,16 @@
       "humanityLoss": "3d6",
       "effects": [
         "1 vez por combate, ignora penalidade de ferimento durante 1 rodada."
-      ]
+      ],
+      "activation": {
+        "label": "Pain Editor",
+        "stages": [
+          {
+            "name": "Ignorando dor (1 rodada)",
+            "ignoreWoundPenalty": true
+          }
+        ]
+      }
     },
     {
       "id": "adrenaline_booster",
@@ -110,7 +193,30 @@
       "effects": [
         "+2 MOVE durante 1 rodada.",
         "Após o efeito, -1 em testes físicos durante 1 rodada."
-      ]
+      ],
+      "activation": {
+        "label": "Adrenaline Booster",
+        "stages": [
+          {
+            "name": "Impulso (1 rodada)",
+            "modifiers": [
+              {
+                "type": "move",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "name": "Rescaldo (1 rodada)",
+            "modifiers": [
+              {
+                "type": "all_physical",
+                "value": -1
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "nano_repair",
@@ -123,7 +229,20 @@
       "humanityLoss": "3d6",
       "effects": [
         "Recupera 2 HP no início da rodada durante 3 rodadas."
-      ]
+      ],
+      "activation": {
+        "label": "Nano Repair",
+        "stages": [
+          {
+            "name": "Rodada ativa"
+          }
+        ]
+      },
+      "action": {
+        "type": "heal",
+        "label": "✚ Nano Repair +2 HP",
+        "amount": 2
+      }
     },
     {
       "id": "gorilla_arms",
@@ -137,6 +256,17 @@
       "effects": [
         "+2 Briga.",
         "Ataques desarmados causam +1d6."
+      ],
+      "modifiers": [
+        {
+          "type": "skill",
+          "skill": "brawling",
+          "value": 2
+        },
+        {
+          "type": "unarmed_damage",
+          "value": 1
+        }
       ]
     },
     {
@@ -226,6 +356,13 @@
       "effects": [
         "Permite saltos excepcionalmente altos.",
         "-2 na dificuldade de testes de salto."
+      ],
+      "modifiers": [
+        {
+          "type": "skill",
+          "skill": "athletics",
+          "value": 2
+        }
       ]
     },
     {
@@ -241,7 +378,22 @@
         "Ação para ativar.",
         "+4 Furtividade durante 1 rodada.",
         "Termina ao realizar ataque."
-      ]
+      ],
+      "activation": {
+        "label": "Optical Camo",
+        "stages": [
+          {
+            "name": "Camuflagado (1 rodada)",
+            "modifiers": [
+              {
+                "type": "skill",
+                "skill": "stealth",
+                "value": 4
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "subdermal_armor",
@@ -256,6 +408,12 @@
       "effects": [
         "Proteção sob a pele.",
         "Não acumula com armadura corporal."
+      ],
+      "modifiers": [
+        {
+          "type": "body_sp",
+          "value": 11
+        }
       ]
     },
     {
@@ -270,6 +428,12 @@
       "sp": 7,
       "effects": [
         "Proteção sob a pele."
+      ],
+      "modifiers": [
+        {
+          "type": "body_sp",
+          "value": 7
+        }
       ]
     },
     {
@@ -325,6 +489,12 @@
       "requires": "cybereye",
       "effects": [
         "+1 em ataques de longa distância."
+      ],
+      "modifiers": [
+        {
+          "type": "attack_ranged",
+          "value": 1
+        }
       ]
     },
     {
@@ -352,6 +522,13 @@
       "requires": "cyberaudio",
       "effects": [
         "+2 para identificar sons."
+      ],
+      "modifiers": [
+        {
+          "type": "skill",
+          "skill": "perception",
+          "value": 2
+        }
       ]
     },
 

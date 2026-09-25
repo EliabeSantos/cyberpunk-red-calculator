@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --experimental-loader ./tests/ts-loader.mjs --test tests/skill-model.test.ts"
+    "test": "node --experimental-strip-types --experimental-loader ./tests/ts-loader.mjs --test tests/*.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.1",

@@ -3706,3 +3706,110 @@
   .encounter-summary { padding: 0.75rem; }
   .encounter-summary-stats { flex-wrap: wrap; gap: 0.35rem 0.9rem; font-size: 0.72rem; }
 }
+
+/* ---- Cyberware: efeitos que o item aplica na ficha ---- */
+.cyberware-effects { list-style: none; margin: 0.35rem 0 0; padding: 0.35rem 0.6rem 0; border-top: 1px solid #1f2b23; display: flex; flex-direction: column; gap: 0.2rem; }
+.cyberware-effects li { font: 500 0.6rem var(--font-geist-mono), monospace; color: var(--muted); line-height: 1.35; }
+.cyberware-effects li::before { content: "▸ "; color: var(--accent); }
+
+/* ---- Cyberware ativável (fase 2): toggle manual + ação por botão ---- */
+.cyberware-card-controls { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.45rem; padding: 0.45rem 0.6rem 0.55rem; border-top: 1px solid #1f2b23; }
+.cyberware-toggle,
+.cyberware-action-btn { border: 1px solid #2a3a2d; background: #121a14; color: var(--muted); cursor: pointer; padding: 0.35rem 0.5rem; font: 600 0.6rem var(--font-geist-mono), monospace; text-align: left; transition: all 0.15s ease; }
+.cyberware-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.cyberware-toggle.is-active { border-color: var(--accent); color: var(--accent); background: #16241a; box-shadow: inset 2px 0 0 var(--accent); }
+.cyberware-action-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.cyberware-action-btn:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.cyberware-action-btn:not(:disabled):hover { background: var(--accent); color: #111700; }
+.cyberware-notice { margin: 0.5rem 0 0; font: 500 0.62rem var(--font-geist-mono), monospace; color: var(--accent); }
+.initiative-reroll-btn { border: 1px solid #2a3a2d; background: transparent; color: var(--muted); cursor: pointer; padding: 0.4rem 0.6rem; font: 700 0.65rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; transition: all 0.15s ease; }
+.initiative-reroll-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.initiative-reroll-btn:disabled { cursor: not-allowed; opacity: 0.6; }
+.stat-cyberware-bonus { font-style: normal; font: 600 0.55rem var(--font-geist-mono), monospace; color: var(--accent); margin-left: 0.25rem; }
+.damage-breakdown { margin: 0.35rem 0 0; font: 500 0.6rem var(--font-geist-mono), monospace; color: var(--muted); text-align: center; }
+
+/* ---- Loja: todos os efeitos do item + pré-requisito ---- */
+.store-item .item-effect { margin: 0.15rem 0 0; }
+.store-item .item-effects { margin: 0.2rem 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.15rem; }
+.store-item .item-effects li { font-size: 0.7rem; color: var(--muted); line-height: 1.35; }
+.store-item .item-requires { margin: 0.25rem 0 0; font: 600 0.62rem var(--font-geist-mono), monospace; color: #d5ac5a; }
+
+/* ---- Card 03: Estado do turno + Special Moves de Artes Marciais ---- */
+.turn-state-panel { border: 1px solid #2a3a2d; background: #0f1512; padding: 0.5rem 0.6rem; }
+.turn-state-header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.turn-state-title { font: 700 0.62rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
+.turn-state-reset { border: 1px solid #2a3a2d; background: transparent; color: var(--muted); cursor: pointer; padding: 0.3rem 0.5rem; font: 700 0.6rem var(--font-geist-mono), monospace; transition: all 0.15s ease; }
+.turn-state-reset:hover { border-color: var(--accent); color: var(--accent); }
+.turn-state-grid { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; margin-top: 0.45rem; align-items: center; }
+.turn-state-field { display: flex; align-items: center; gap: 0.35rem; font: 600 0.62rem var(--font-geist-mono), monospace; color: var(--muted); }
+.turn-state-field input { width: 3.5rem; background: #0a120c; border: 1px solid #2a3a2d; color: var(--foreground); padding: 0.2rem 0.3rem; font: 600 0.65rem var(--font-geist-mono), monospace; transition: border-color 0.15s ease; }
+.turn-state-field input:hover { border-color: #3a5a3d; }
+.turn-state-field input:focus { outline: none; border-color: var(--accent); }
+/* Checkbox vira chip: o input continua existindo (teclado, leitor de tela, estado controlado),
+   só ele que sai da estética — o indicador é o span que vem depois dele. */
+.turn-state-chip { position: relative; display: inline-flex; }
+.turn-state-chip input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.turn-state-chip span { display: inline-flex; align-items: center; gap: 0.3rem; border: 1px solid #2a3a2d; background: #0a120c; color: var(--muted); padding: 0.28rem 0.55rem; font: 600 0.6rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; cursor: pointer; user-select: none; transition: all 0.15s ease; }
+.turn-state-chip span::before { content: "○"; font-size: 0.75em; line-height: 1; color: #4a5a4d; }
+.turn-state-chip:hover span { border-color: #3a5a3d; color: var(--foreground); }
+.turn-state-chip input:checked + span { border-color: var(--accent); background: #1a2a1c; color: var(--foreground); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent); }
+.turn-state-chip input:checked + span::before { content: "●"; color: var(--accent); }
+.turn-state-chip input:focus-visible + span { outline: 1px solid var(--accent); outline-offset: 2px; }
+.turn-state-chip input:disabled + span { opacity: 0.5; cursor: not-allowed; }
+.turn-state-note { margin: 0.45rem 0 0; font: 500 0.6rem var(--font-geist-mono), monospace; color: var(--muted); line-height: 1.4; }
+
+.special-move-section-head { display: flex; align-items: center; gap: 0.5rem; }
+.special-move-section-head h3 { margin-right: auto; }
+.smc-toggle-all { border: 1px solid #2a3a2d; background: transparent; color: var(--muted); padding: 0.2rem 0.5rem; font: 700 0.55rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; transition: all 0.15s ease; }
+.smc-toggle-all:hover { border-color: var(--accent); color: var(--accent); }
+
+.special-move-card { border: 1px solid #2a3a2d; background: #0f1512; overflow: hidden; transition: border-color 0.15s ease; }
+.special-move-card.locked { border-color: #2a2a2a; background: #0d1110; }
+.special-move-card.unlockable { border-color: #2a4a4a; background: #0f1518; }
+.special-move-card.open { border-color: #3a5a3d; }
+/* Coluna esquerda (trilha fixa de 19rem): o aside e os painéis são grid items,
+   e o min-width automático deles é o min-content — sem isto, um conteúdo largo
+   estoura a trilha e vaza por cima da coluna principal. */
+.sheet-column { min-width: 0; }
+.sheet-column > * { min-width: 0; }
+
+.smc-header { display: flex; flex-direction: column; gap: 0.28rem; width: 100%; padding: 0.42rem 0.55rem; border: 0; background: transparent; text-align: left; cursor: pointer; transition: background 0.15s ease; }
+.smc-header-top, .smc-header-meta { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.smc-header-meta { justify-content: flex-end; gap: 0.4rem; }
+.smc-header:hover { background: #121a14; }
+.smc-header:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+.smc-form { flex-shrink: 0; font: 700 0.55rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.06em; color: #7ac0c5; border: 1px solid #2a4a4a; background: #1a2a2a; padding: 0.08rem 0.3rem; border-radius: 3px; }
+.smc-name { font: 700 0.75rem var(--font-geist-mono), monospace; color: var(--foreground); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.smc-skill-tag { flex-shrink: 0; font: 700 0.55rem var(--font-geist-mono), monospace; color: var(--accent); background: #16241a; border: 1px solid #2a4a2d; padding: 0.08rem 0.3rem; border-radius: 3px; }
+.smc-result { flex-shrink: 0; font: 700 0.7rem var(--font-geist-mono), monospace; line-height: 1; }
+.smc-result.ok { color: #5acd5a; }
+.smc-result.fail { color: #ff6b6b; }
+.smc-chevron { flex-shrink: 0; margin-left: 0.2rem; color: var(--muted); font-size: 0.7rem; line-height: 1; transition: transform 0.15s ease; }
+.special-move-card.open .smc-chevron { transform: rotate(180deg); }
+.smc-body { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0.55rem 0.55rem; border-top: 1px solid #1a2a1d; overflow-wrap: break-word; }
+.smc-badge { flex-shrink: 0; font: 700 0.55rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.08rem 0.3rem; border-radius: 3px; }
+.smc-badge.ok { color: #5acd5a; background: #16241a; border: 1px solid #2a4a2d; }
+.smc-badge.blocked { color: #ff987b; background: #281815; border: 1px solid #4a2a2a; }
+.smc-badge.unlockable { color: #7ac0c5; background: #1a2a2a; border: 1px solid #2a4a4a; }
+.smc-badge.locked { color: var(--muted); background: #141a16; border: 1px solid #2a3a2d; }
+.smc-pool { margin: 0; font: 600 0.6rem var(--font-geist-mono), monospace; color: #d5ac5a; }
+.smc-pool.unlocked { color: #acd55a; }
+.smc-requirement, .smc-effect { margin: 0; font-size: 0.68rem; line-height: 1.45; color: var(--muted); }
+.smc-requirement strong { color: var(--foreground); }
+.smc-skill { margin: 0; font: 600 0.6rem var(--font-geist-mono), monospace; color: var(--accent); }
+.smc-missing { margin: 0; padding-left: 0.4rem; list-style: none; display: flex; flex-direction: column; gap: 0.15rem; }
+.smc-missing li { font: 600 0.62rem var(--font-geist-mono), monospace; color: #ff987b; }
+.smc-use { border: 1px solid #2a3a2d; background: #121a14; color: var(--muted); cursor: pointer; padding: 0.35rem 0.5rem; font: 700 0.62rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.04em; align-self: flex-start; transition: all 0.15s ease; }
+.smc-use:disabled { cursor: not-allowed; opacity: 0.45; }
+.smc-use:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.smc-use:not(:disabled):hover { background: var(--accent); color: #111700; }
+.smc-unlock { border: 1px solid #2a4a4a; background: #12211f; color: #7ac0c5; cursor: pointer; padding: 0.35rem 0.5rem; font: 700 0.62rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.04em; align-self: flex-start; transition: all 0.15s ease; }
+.smc-unlock:disabled { cursor: not-allowed; opacity: 0.45; }
+.smc-unlock:not(:disabled):hover { background: #7ac0c5; color: #0a1210; }
+.smc-refund { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0; font: 600 0.58rem var(--font-geist-mono), monospace; text-decoration: underline dotted; text-underline-offset: 2px; align-self: flex-start; }
+.smc-refund:hover { color: #ff987b; }
+.smc-outcome { font: 600 0.65rem var(--font-geist-mono), monospace; padding: 0.35rem 0.5rem; border-left: 2px solid var(--accent); background: #0a120c; color: var(--foreground); line-height: 1.45; }
+.smc-outcome.success { border-left-color: #5acd5a; color: #a8e0a8; }
+.smc-outcome.failure { border-left-color: #ff6b6b; color: #ffcfbf; }
+.smc-outcome.info { border-left-color: #7ac0c5; color: var(--muted); }
+.martial-arts-sp-note { margin: 0.35rem 0 0; font: 600 0.6rem var(--font-geist-mono), monospace; color: #d5ac5a; text-align: center; }

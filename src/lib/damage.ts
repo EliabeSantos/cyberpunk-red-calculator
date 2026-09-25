@@ -1,10 +1,20 @@
 import { armorSlotForLocation, type HitLocation } from "@/types/combat";
 import { rollDice } from "@/lib/dice";
-import { calculateWoundThreshold, calculateHPStatus, getSkillBase, getCriticalInjuryModifiers } from "@/lib/calculations";
+import { calculateWoundThreshold, getSkillBase, getCriticalInjuryModifiers, getWoundPenalty } from "@/lib/calculations";
+import { getCyberwareBodySP } from "@/lib/cyberwareEffects";
 import { rollCriticalInjury, checkCriticalInjuryFromDamage } from "@/data/criticalInjuries";
 import type { AttackRollResult, DamageRollResult } from "@/types/attack";
 import type { Character, RollHistoryEntry, CriticalInjury } from "@/types/character";
 import { hitLocationLabels } from "@/types/combat";
+
+/** SP de um local de impacto e o SP da armadura realmente usada.
+ * Cyberware de proteção (Subdermal Armor, Skin Weave) não acumula com armadura: vale o maior.
+ * Só a armadura equipada abate; o SP do cyberware é constante. */
+function resolveArmorSP(character: Character, slot: "head" | "body"): { effectiveSP: number; wornArmorSP: number; cyberwareSP: number } {
+  const wornArmorSP = character.combat.armor[slot] ?? 0;
+  const cyberwareSP = slot === "body" ? getCyberwareBodySP(character) : 0;
+  return { effectiveSP: Math.max(wornArmorSP, cyberwareSP), wornArmorSP, cyberwareSP };
+}
 
 /** Resultado completo da aplicação de dano, incluindo detecção de Seriously Wounded e Critical Injury. */
 export interface DamageApplicationResult {
@@ -20,6 +30,8 @@ export interface DamageApplicationResult {
   /** Critical Injury causada por dois ou mais 6 nos dados de dano (separada da do Wound Threshold). */
   criticalInjuryFromDiceResult?: CriticalInjury;
   armorSPBefore: number;
+  /** true quando Artes Marciais cortou o SP da armadura pela metade (arredondado para cima). */
+  spHalvedByMartialArts?: boolean;
   armorSPAfter: number;
   damageAbsorbed: number;
   damageToHP: number;
@@ -30,7 +42,7 @@ export type DamageResolution = { character: Character; result: DamageRollResult 
 export function rollDamage(attack: AttackRollResult): DamageRollResult | { error: string } {
   if (!attack.damageDice) return { error: `${attack.label} não possui uma rolagem de dano definida.` };
   const roll = rollDice(attack.damageDice);
-  return { attackId: attack.attackId, attackName: attack.label, weaponId: attack.weaponId, damageDice: attack.damageDice, roll, total: roll.total };
+  return { attackId: attack.attackId, attackName: attack.label, weaponId: attack.weaponId, attackType: attack.attackType, damageDice: attack.damageDice, roll, total: roll.total };
 }
 
 export function rollDamageForLastAttack(character: Character): DamageResolution {
@@ -50,10 +62,12 @@ export function applyReceivedDamage(
   if (!Number.isInteger(amount) || amount <= 0) return { error: "Dano inválido." };
 
   const slot = armorSlotForLocation(hitLocation);
-  const armorSPBefore = character.combat.armor[slot] ?? 0;
+  const { effectiveSP, wornArmorSP, cyberwareSP } = resolveArmorSP(character, slot);
+  const armorSPBefore = effectiveSP;
   const damageAbsorbed = Math.min(amount, armorSPBefore);
   const damageToHP = Math.max(0, amount - damageAbsorbed);
-  const armorSPAfter = damageToHP > 0 ? Math.max(0, armorSPBefore - 1) : armorSPBefore;
+  const wornArmorSPAfter = damageToHP > 0 ? Math.max(0, wornArmorSP - 1) : wornArmorSP;
+  const armorSPAfter = Math.max(wornArmorSPAfter, cyberwareSP);
 
   const hpBefore = character.combat.hp.current;
   const hpAfter = hpBefore - damageToHP; // Permite valores negativos
@@ -112,7 +126,7 @@ export function applyReceivedDamage(
     ...character,
     combat: {
       ...character.combat,
-      armor: { ...character.combat.armor, [slot]: armorSPAfter },
+      armor: { ...character.combat.armor, [slot]: wornArmorSPAfter },
       hp: { ...character.combat.hp, current: hpAfter },
       criticalInjuries: criticalInjuryTriggered && criticalInjury
         ? [...character.combat.criticalInjuries, criticalInjury]
@@ -151,10 +165,15 @@ export function applyAttackDamage(
 ): { character: Character; result: DamageApplicationResult } | { error: string } {
   const totalDamage = damageRoll.total;
   const slot = armorSlotForLocation(hitLocation);
-  const armorSPBefore = character.combat.armor[slot] ?? 0;
+  const { effectiveSP: baseSP, wornArmorSP, cyberwareSP } = resolveArmorSP(character, slot);
+  // Artes Marciais ignoram metade do SP da armadura, arredondando para cima (SP 11 → 6).
+  const spHalvedByMartialArts = damageRoll.attackType === "martial_arts" && baseSP > 0;
+  const effectiveSP = spHalvedByMartialArts ? Math.ceil(baseSP / 2) : baseSP;
+  const armorSPBefore = effectiveSP;
   const damageAbsorbed = Math.min(totalDamage, armorSPBefore);
   const damageToHP = Math.max(0, totalDamage - damageAbsorbed);
-  const armorSPAfter = damageToHP > 0 ? Math.max(0, armorSPBefore - 1) : armorSPBefore;
+  const wornArmorSPAfter = damageToHP > 0 ? Math.max(0, wornArmorSP - 1) : wornArmorSP;
+  const armorSPAfter = Math.max(wornArmorSPAfter, cyberwareSP);
 
   const hpBefore = character.combat.hp.current;
   const hpAfter = hpBefore - damageToHP; // Permite valores negativos
@@ -227,7 +246,7 @@ export function applyAttackDamage(
     ...character,
     combat: {
       ...character.combat,
-      armor: { ...character.combat.armor, [slot]: armorSPAfter },
+      armor: { ...character.combat.armor, [slot]: wornArmorSPAfter },
       hp: { ...character.combat.hp, current: hpAfter },
       criticalInjuries: newInjuries.length > 0
         ? [...character.combat.criticalInjuries, ...newInjuries]
@@ -251,6 +270,7 @@ export function applyAttackDamage(
     criticalInjury,
     criticalInjuryFromDiceResult,
     armorSPBefore,
+    spHalvedByMartialArts,
     armorSPAfter,
     damageAbsorbed,
     damageToHP,
@@ -381,9 +401,9 @@ export function rollFirstAid(
   const injuryModifiers = getCriticalInjuryModifiers(character);
   const criticalInjuryModifier = injuryModifiers.allActionsModifier + injuryModifiers.fineManipulationModifier;
 
-  // Seriously Wounded: -2 em todas as ações (baseado no HP, não na lista de injuries)
-  const hpStatus = calculateHPStatus(character.combat.hp.current, character.combat.hp.max, character.combat.isDead);
-  const seriouslyWoundedModifier = hpStatus === "seriously_wounded" || hpStatus === "mortally_wounded" ? -2 : 0;
+  // Seriously/Mortally Wounded: -2 em todas as ações (baseado no HP, não na lista de injuries).
+  // Pain Editor ativo ignora essa penalidade — mesma fonte usada por perícia, ataque e Evasão.
+  const seriouslyWoundedModifier = getWoundPenalty(character);
 
   const injuryModifier = criticalInjuryModifier + seriouslyWoundedModifier;
 

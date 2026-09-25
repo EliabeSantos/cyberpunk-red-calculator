@@ -3,6 +3,7 @@ import {
   CHARACTER_CREATION_RULES,
   getRequiredSkillMinimum,
 } from "@/data/characterCreation";
+import { isMartialArtFormSkill } from "@/data/skills";
 import {
   calculateMaximumHitPoints,
   calculateMaximumHumanity,
@@ -67,6 +68,9 @@ export function canDecreaseAttribute(character: Pick<Character, "stats">, attrib
   return character.stats[attribute] > ATTRIBUTE_CREATION_RULES[attribute].minimum;
 }
 export function canIncreaseSkill(character: Pick<Character, "skills">, skillId: string): boolean {
+  // As formas de Martial Arts são especializações-filhas: não compram com pontos de criação
+  // (o bolso delas é o nível da perícia-mãe, ver getMartialArtsPoints).
+  if (isMartialArtFormSkill(skillId)) return false;
   const skill = character.skills[skillId];
   return Boolean(skill && skill.level < CHARACTER_CREATION_RULES.skillMaximum && getSkillPointsRemaining(character) >= skill.costMultiplier);
 }

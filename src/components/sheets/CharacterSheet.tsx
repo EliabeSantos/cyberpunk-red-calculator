@@ -5,20 +5,27 @@ import Link from "next/link";
 
 import {
   canUpgradeSkill,
+  canUpgradeSpecialization,
+  getMartialArtsPoints,
   getSkillUpgradeCost,
+  getSpecializationCost,
   grantImprovementPoints,
   upgradeSkill,
+  upgradeSpecialization,
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
 import { applyHealingItem, getItemHealAmount, isHealingItem } from "@/lib/healing";
 import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, rollDeathSave, applyFirstAid, rollFirstAid } from "@/lib/damage";
 import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold, calculateHPStatus } from "@/lib/calculations";
 import { rollEvasion, reloadWeapon } from "@/lib/attacks";
-import { rollDice } from "@/lib/dice";
+import { getInitiativeModifiers, rollInitiative as rollInitiativeRoll, type InitiativeRollResult } from "@/lib/initiative";
+import { DEFAULT_TURN_STATE, listSpecialMoveAvailability, resolveSpecialMove, refundSpecialMove, unlockSpecialMove, type SpecialMoveResolution, type TurnState } from "@/lib/specialMoves";
+import type { SpecialMove } from "@/data/specialMoves";
 import { rollSkillCheck } from "@/lib/skills";
 import { rollQuickhack } from "@/lib/quickhacks";
 import { getQuickhacksForCharacter, quickhackDefinitions, quickhackCategoriesOrder } from "@/data/quickhacks";
 import { removeCyberware } from "@/lib/cyberware";
+import { getCyberwareMoveModifier, deactivateCyberware, getInstalledCyberwareControls, runCyberwareAction, toggleCyberwareActivation } from "@/lib/cyberwareEffects";
 import { adjustHumanity } from "@/lib/humanity";
 import type { SkillCheckResult } from "@/lib/skills";
 import type { HumanityLossResult } from "@/lib/humanity";
@@ -28,8 +35,8 @@ import DiceDrawer from "@/components/dice/DiceDrawer";
 import AttackActions from "@/components/combat/AttackActions";
 import type { DiscordConsent } from "@/lib/discord/consent";
 import type { AttackRollResult, DamageRollResult, EvasionRollResult, AttackMode } from "@/types/attack";
-import type { AttributeName, Character } from "@/types/character";
-import type { SkillCategory } from "@/data/skills";
+import type { AttributeName, Character, Skill } from "@/types/character";
+import { MARTIAL_ARTS_FORMS, isMartialArtFormSkill, type SkillCategory } from "@/data/skills";
 import { hitLocationLabels, hitLocations, type HitLocation } from "@/types/combat";
 import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjuries";
 import type { CriticalInjury } from "@/data/criticalInjuries";
@@ -95,8 +102,16 @@ export default function CharacterSheet({
   const [hitLocation, setHitLocation] = useState<HitLocation>("body");
   const [combatError, setCombatError] = useState("");
   const [healNotice, setHealNotice] = useState<{ text: string; isError: boolean } | null>(null);
+  const [equipError, setEquipError] = useState("");
+  const [cyberwareNotice, setCyberwareNotice] = useState("");
   const [lastQuickhack, setLastQuickhack] = useState<QuickhackRollResult | null>(null);
-  const [lastInitiative, setLastInitiative] = useState<{ diceRoll: number; refBonus: number; total: number; critical: boolean; fumble: boolean } | null>(null);
+  const [lastInitiative, setLastInitiative] = useState<InitiativeRollResult | null>(null);
+  /** Estado do turno alimenta os requisitos dos Special Moves — o app não conta rodadas (ver PENDENCIAS.md). */
+  const [turnState, setTurnState] = useState<TurnState>(DEFAULT_TURN_STATE);
+  const [specialMoveOutcome, setSpecialMoveOutcome] = useState<SpecialMoveResolution | { error: string } | null>(null);
+  const [specialMoveHeadAim, setSpecialMoveHeadAim] = useState<Record<string, boolean>>({});
+  /** Cards de Special Move abertos. Todo mundo começa recolhido para a seção não engolir a tela. */
+  const [openSpecialMoves, setOpenSpecialMoves] = useState<Record<string, boolean>>({});
   const [manualInjuryLocation, setManualInjuryLocation] = useState<HitLocation>("body");
   const [manualInjuryName, setManualInjuryName] = useState("");
   const [weaponAttackModes, setWeaponAttackModes] = useState<Record<string, AttackMode>>({});
@@ -118,6 +133,13 @@ export default function CharacterSheet({
   const [lastFirstAidRoll, setLastFirstAidRoll] = useState<import("@/lib/damage").FirstAidRollResult | null>(null);
   const [rollingFirstAid, setRollingFirstAid] = useState(false);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
+  // Modificadores de Iniciativa já valendo (cyberware, lesões e lesão grave), para a fórmula do cabeçalho
+  const initiativeModifiers = getInitiativeModifiers(character);
+  const installedCyberwareEffects = getInstalledCyberwareControls(character);
+  const cyberwareMoveBonus = getCyberwareMoveModifier(character);
+  const initiativeRerollCyberware = installedCyberwareEffects.find(
+    (entry) => entry.action?.type === "reroll_initiative" && entry.actionEnabled,
+  );
 
   // Gaveta do nav (mobile): ESC fecha e o scroll da página trava enquanto aberta.
   useEffect(() => {
@@ -180,7 +202,11 @@ export default function CharacterSheet({
     }
   }
   function improveSkill(skillId: string) {
-    const updated = upgradeSkill(character, skillId);
+    // Formas de Martial Arts são especializações-filhas: sobem com o bolso de pontos da
+    // perícia-mãe (ver getMartialArtsPoints), nunca com IP.
+    const updated = isMartialArtFormSkill(skillId)
+      ? upgradeSpecialization(character, skillId)
+      : upgradeSkill(character, skillId);
     if (updated) {
       // Clear last skill roll if it's the skill being upgraded
       if (lastSkillRoll?.skillId === skillId) {
@@ -233,51 +259,71 @@ export default function CharacterSheet({
     onUpdate(resolution.character);
     setTimeout(() => setRollingEvasion(null), 2000);
   }
-  function rollInitiative() {
-    const dice = rollDice("1d10");
-    const rollValue = dice.rolls[0];
-    const refBonus = character.stats.REF;
-    const isCritical = rollValue === 10;
-    const isFumble = rollValue === 1;
-    let diceTotal = rollValue;
+  function rollInitiative(consumeCyberwareId?: string) {
+    // Cálculo morava aqui dentro; agora passa pelo motor para valer lesão/lesão grave
+    // e para os testes exercitarem o mesmo caminho da ficha.
+    const outcome = rollInitiativeRoll(character);
+    setRollingInitiative(outcome.result.diceRoll);
+    setLastInitiative(outcome.result);
 
-    // Exploding dice: crit on 10 adds another d10, fumble on 1 subtracts another d10
-    let extraRoll = 0;
-    if (isCritical) {
-      const extra = rollDice("1d10");
-      extraRoll = extra.rolls[0];
-      diceTotal += extraRoll;
-    } else if (isFumble) {
-      const extra = rollDice("1d10");
-      extraRoll = extra.rolls[0];
-      diceTotal -= extraRoll;
-    }
-
-    const total = diceTotal + refBonus;
-    setRollingInitiative(rollValue);
-    setLastInitiative({ diceRoll: rollValue, refBonus, total, critical: isCritical, fumble: isFumble });
-    const allRolls = isCritical
-      ? [rollValue, extraRoll]
-      : isFumble
-        ? [rollValue, extraRoll]
-        : [rollValue];
-    const expression = isCritical
-      ? `REF ${refBonus} + 1d10 (crítico!)`
-      : isFumble
-        ? `REF ${refBonus} + 1d10 (falha crítica!)`
-        : `REF ${refBonus} + 1d10`;
-    const entry: import("@/types/character").RollHistoryEntry = {
-      id: crypto.randomUUID(),
-      type: "free_roll",
-      label: "Iniciativa",
-      characterId: character.id,
-      expression,
-      rolls: allRolls,
-      total,
-      timestamp: new Date().toISOString(),
-    };
-    onUpdate({ ...character, rollHistory: [entry, ...character.rollHistory] });
+    // Peça ativada para repetir Iniciativa (Reflex Tuner): usar desliga a peça.
+    const nextCharacter = consumeCyberwareId
+      ? deactivateCyberware(outcome.character, consumeCyberwareId)
+      : outcome.character;
+    onUpdate(nextCharacter);
     setTimeout(() => setRollingInitiative(null), 2000);
+  }
+
+  /** Usa um Special Move: os requisitos já estão validados; o ataque entra no fluxo normal da ficha. */
+  function useSpecialMove(move: SpecialMove) {
+    const outcome = resolveSpecialMove(character, move, turnState, { headAim: Boolean(specialMoveHeadAim[move.id]) });
+    setSpecialMoveOutcome(outcome);
+    if ("error" in outcome) return;
+    // Abre o card para o resultado ficar visível sem precisar procurar.
+    setOpenSpecialMoves((previous) => ({ ...previous, [move.id]: true }));
+    if (outcome.kind === "attack") {
+      setLastAttack(outcome.attack);
+      setLastDamage(null);
+    }
+    if (outcome.kind !== "passive") onUpdate(outcome.character);
+  }
+
+  function toggleSpecialMove(moveId: string) {
+    setOpenSpecialMoves((previous) => ({ ...previous, [moveId]: !previous[moveId] }));
+  }
+
+  /** Desbloqueia um Special Move pagando 1 ponto do nível da forma correspondente. */
+  function unlockSpecialMoveCard(move: SpecialMove) {
+    const updated = unlockSpecialMove(character, move);
+    if (updated) onUpdate(updated);
+    // Limpa o resultado antigo (um "travado" ou o resultado daquele move) para não ficar defasado.
+    setSpecialMoveOutcome((previous) =>
+      previous && ("error" in previous || previous.move.id === move.id) ? null : previous,
+    );
+    setOpenSpecialMoves((previous) => ({ ...previous, [move.id]: true }));
+  }
+
+  /** Devolve o ponto gasto no desbloqueio (corrige erro de clique). */
+  function refundSpecialMoveCard(move: SpecialMove) {
+    const updated = refundSpecialMove(character, move);
+    if (updated) onUpdate(updated);
+    setSpecialMoveOutcome((previous) =>
+      previous && !("error" in previous) && previous.move.id === move.id ? null : previous,
+    );
+  }
+
+  /** Disponibilidade dos 9 moves para o estado atual (perícia, atributos e flags do turno). */
+  const specialMoveAvailability = listSpecialMoveAvailability(character, turnState);
+  const allSpecialMovesOpen = specialMoveAvailability.every((entry) => openSpecialMoves[entry.move.id]);
+  /** Ação disparada por botão no card de cyberware (ex.: Nano Repair → +2 HP). */
+  function handleCyberwareAction(cyberwareId: string) {
+    const outcome = runCyberwareAction(character, cyberwareId);
+    if ("error" in outcome) {
+      setCyberwareNotice(outcome.error);
+      return;
+    }
+    setCyberwareNotice(`Nano Repair: +${outcome.healed} HP.`);
+    onUpdate(outcome.character);
   }
   function addManualCriticalInjury() {
     const name = manualInjuryName.trim();
@@ -409,6 +455,8 @@ export default function CharacterSheet({
   function equipItem(inventoryItemId: string) {
     const result = equipInventoryItem(character, inventoryItemId);
     if (!result) return;
+    if ("error" in result) { setEquipError(result.error); return; }
+    setEquipError("");
     onUpdate(result.character);
     setLastHumanityLoss(result.cyberwareInstallation?.humanityLoss ?? null);
   }
@@ -445,6 +493,124 @@ export default function CharacterSheet({
   }
   function openQuickhackPanel() {
     // TODO: implementar se necessário
+  }
+
+  /** Card de perícia compartilhado pelas duas colunas.
+   * `variant: "spec"` = especialização de Martial Arts (aninhada sob a mãe): custa pontos
+   * gerados por `martial_arts`, não IP. */
+  function skillCard(id: string, skill: Skill, variant?: "spec") {
+    const isSpec = variant === "spec";
+    const base = getSkillBase(character, id);
+    const cost = isSpec ? getSpecializationCost(skill.level) : getSkillUpgradeCost(skill.level, skill.costMultiplier);
+    const canUpgrade = isSpec ? canUpgradeSpecialization(character, id) : canUpgradeSkill(character, id);
+    const rollResult = lastSkillRoll?.skillId === id ? lastSkillRoll.result : null;
+    const isMaxed = skill.level >= 10;
+    const costLabel = isSpec ? `${cost} ponto${cost === 1 ? "" : "s"} de Martial Arts` : `${cost} IP`;
+    const maPoints = id === "martial_arts" && !isSpec ? getMartialArtsPoints(character) : null;
+    return (
+      <div className={`skill-card ${isMaxed ? "maxed" : ""}${isSpec ? " skill-spec" : ""}`} key={id}>
+        <div className="skill-card-main">
+          <div className="skill-card-info">
+            <span className="skill-name">{skill.name}</span>
+            <div className="skill-meta">
+              <span className="skill-stat">{skill.stat}</span>
+              {isSpec && (
+                <span
+                  className="skill-spec-tag"
+                  title="Especialização de Martial Arts: sobe com os pontos gerados pela perícia-mãe, não com IP"
+                >
+                  esp
+                </span>
+              )}
+              {!isSpec && skill.costMultiplier === 2 && <span className="skill-double-cost">×2</span>}
+              {maPoints && (
+                <span
+                  className={`skill-ma-points${maPoints.free > 0 ? " has" : ""}${maPoints.balance < 0 ? " debt" : ""}`}
+                  title={`1 ponto por nível de Martial Arts · ${maPoints.total} gerado(s) · ${maPoints.spentSpecializations} em especializações · ${maPoints.spentMoves} em Special Moves`}
+                >
+                  {maPoints.balance < 0
+                    ? `devendo ${-maPoints.balance} pt`
+                    : `${maPoints.free} ponto${maPoints.free === 1 ? "" : "s"} livre${maPoints.free === 1 ? "" : "s"}`}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="skill-card-values">
+            <div className="skill-level-display">
+              <span className="skill-level-label">LV</span>
+              <span className="skill-level-value">{skill.level}</span>
+            </div>
+            <div className="skill-base-display">
+              <span className="skill-base-label">BASE</span>
+              <span className="skill-base-value">{base}</span>
+            </div>
+          </div>
+          <div className="skill-card-actions">
+            {!isMaxed && (
+              <button
+                type="button"
+                className="skill-upgrade-btn"
+                disabled={!canUpgrade}
+                onClick={() => improveSkill(id)}
+                title={`Custo: ${costLabel}`}
+              >
+                ↑
+              </button>
+            )}
+            <button
+              type="button"
+              className="skill-roll-btn"
+              onClick={() => handleRollSkillCheck(character, id)}
+              aria-label={`Rolar ${skill.name}`}
+              disabled={rollingSkill?.id === id}
+            >
+              {rollingSkill?.id === id ? (
+                <span className="rolling-indicator">🎲</span>
+              ) : (
+                "🎲"
+              )}
+            </button>
+          </div>
+        </div>
+        {!isMaxed && (
+          <div className="skill-upgrade-info">
+            <span className="upgrade-cost">{costLabel}</span>
+          </div>
+        )}
+        {rollResult && (
+          <div className="skill-roll-result-card">
+            <div className="roll-result-header">
+              {rollResult.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
+              {rollResult.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
+              {!rollResult.critical && !rollResult.fumble && (
+                <span className="roll-total-value">{rollResult.total}</span>
+              )}
+            </div>
+            <div className="roll-result-breakdown">
+              <span className="roll-formula">
+                {rollResult.statId} {rollResult.statBase} + {rollResult.skillName} {rollResult.skillLevel} + 1d10
+              </span>
+              <div className="roll-dice-row">
+                {rollResult.diceRolls.map((r, idx) => (
+                  <span
+                    key={idx}
+                    className={`roll-die ${r.type === 'crit' || r.type === 'crit_add' ? 'crit' : ''} ${r.type === 'fumble' || r.type === 'fumble_sub' ? 'fumble' : ''}`}
+                  >
+                    {r.type === 'crit_add' && '+'}{r.type === 'fumble_sub' && '−'}[{r.value}]
+                  </span>
+                ))}
+                <span className="dice-subtotal">= {rollResult.diceRoll}</span>
+              </div>
+              {rollResult.totalModifier !== 0 && (
+                <span className="roll-modifier">
+                  Mod: {rollResult.totalModifier >= 0 ? '+' : ''}{rollResult.totalModifier}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
   }
   return (
     <main className="sheet-shell">
@@ -586,7 +752,14 @@ export default function CharacterSheet({
                 <div key={stat}>
                   <span>{stat}</span>
                   <small>{statNames[stat]}</small>
-                  <strong>{character.stats[stat]}</strong>
+                  <strong>
+                    {character.stats[stat] + (stat === "MOVE" ? cyberwareMoveBonus : 0)}
+                    {stat === "MOVE" && cyberwareMoveBonus !== 0 && (
+                      <em className="stat-cyberware-bonus">
+                        {cyberwareMoveBonus > 0 ? `+${cyberwareMoveBonus}` : cyberwareMoveBonus}
+                      </em>
+                    )}
+                  </strong>
                 </div>
               ))}
             </div>
@@ -773,12 +946,18 @@ export default function CharacterSheet({
                 <div className="initiative-header">
                   <div className="initiative-info">
                     <span className="initiative-label">Iniciativa</span>
-                    <span className="initiative-formula">REF {character.stats.REF} + 1d10</span>
+                    <span className="initiative-formula">
+                      REF {character.stats.REF}
+                      {initiativeModifiers
+                        .map((modifier) => ` ${modifier.value >= 0 ? "+" : ""}${modifier.value} ${modifier.source}`)
+                        .join("")}{" "}
+                      + 1d10
+                    </span>
                   </div>
                   <button
                     type="button"
                     className="initiative-roll-btn"
-                    onClick={rollInitiative}
+                    onClick={() => rollInitiative()}
                     disabled={rollingInitiative !== null}
                   >
                     {rollingInitiative !== null ? (
@@ -787,6 +966,17 @@ export default function CharacterSheet({
                       "🎲 Rolar"
                     )}
                   </button>
+                  {initiativeRerollCyberware && (
+                    <button
+                      type="button"
+                      className="initiative-reroll-btn"
+                      title="Reflex Tuner: repetir Iniciativa e desligar a peça"
+                      onClick={() => rollInitiative(initiativeRerollCyberware.cyberwareId)}
+                      disabled={rollingInitiative !== null}
+                    >
+                      ↻ Repetir
+                    </button>
+                  )}
                 </div>
                 {lastInitiative && (
                   <div className="initiative-result" role="status">
@@ -795,7 +985,7 @@ export default function CharacterSheet({
                       {lastInitiative.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
                     </div>
                     <span className="initiative-result-formula">
-                      REF {lastInitiative.refBonus} + 1d10 [{lastInitiative.diceRoll}]
+                      {lastInitiative.expression}
                     </span>
                     <span className="initiative-result-total">{lastInitiative.total}</span>
                   </div>
@@ -856,6 +1046,13 @@ export default function CharacterSheet({
               onResult={(result) => {
                 setLastAttack(result);
                 setLastDamage(null);
+                // Alimenta os requisitos dos Special Moves com o ataque que acabou de ser rolado.
+                setTurnState((previous) => {
+                  if (result.attackType === "martial_arts") return { ...previous, hitMartialArts: true };
+                  if (result.attackType === "brawling") return { ...previous, hitBrawling: true };
+                  if (result.attackType === "melee") return { ...previous, meleeHits: previous.meleeHits + 1 };
+                  return previous;
+                });
               }}
               weaponAttackModes={weaponAttackModes}
               onAttackModeChange={(weaponId, mode) => setWeaponAttackModes((prev) => ({ ...prev, [weaponId]: mode }))}
@@ -933,6 +1130,14 @@ export default function CharacterSheet({
                         >
                           🎲 Rolar Dano ({attack.damageDice})
                         </button>
+                        {attack.damageSources && attack.damageSources.length > 0 && (
+                          <p className="damage-breakdown">{attack.damageSources.join(" · ")}</p>
+                        )}
+                        {attack.attackType === "martial_arts" && (
+                          <p className="martial-arts-sp-note">
+                            ⚔ Artes Marciais: ignora metade do SP da armadura, arredondando para cima (SP 11 → 6).
+                          </p>
+                        )}
 
                         {/* Damage Result */}
                         {lastDamage && lastDamage.attackId === attack.attackId && (
@@ -966,6 +1171,212 @@ export default function CharacterSheet({
                   </div>
                 );
               })()}
+            <div className="special-move-section-head">
+              <h3>Especialidades de Artes Marciais</h3>
+              <button
+                type="button"
+                className="smc-toggle-all"
+                onClick={() =>
+                  setOpenSpecialMoves(
+                    Object.fromEntries(specialMoveAvailability.map((entry) => [entry.move.id, !allSpecialMovesOpen])),
+                  )
+                }
+              >
+                {allSpecialMovesOpen ? "Recolher tudo" : "Expandir tudo"}
+              </button>
+            </div>
+            <div className="turn-state-panel">
+              <div className="turn-state-header">
+                <span className="turn-state-title">Estado do turno</span>
+                <button
+                  type="button"
+                  className="turn-state-reset"
+                  onClick={() => {
+                    setTurnState(DEFAULT_TURN_STATE);
+                    setSpecialMoveOutcome(null);
+                  }}
+                >
+                  ↻ Zerar turno
+                </button>
+              </div>
+              <div className="turn-state-grid">
+                <label className="turn-state-field">
+                  <span>Movido (m)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={turnState.movedMeters}
+                    onChange={(event) => setTurnState((previous) => ({ ...previous, movedMeters: Math.max(0, Number(event.target.value) || 0) }))}
+                  />
+                </label>
+                <label className="turn-state-field">
+                  <span>Melee Hits</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={turnState.meleeHits}
+                    onChange={(event) => setTurnState((previous) => ({ ...previous, meleeHits: Math.max(0, Number(event.target.value) || 0) }))}
+                  />
+                </label>
+                <label className="turn-state-chip">
+                  <input type="checkbox" checked={turnState.hitBrawling} onChange={(event) => setTurnState((previous) => ({ ...previous, hitBrawling: event.target.checked }))} />
+                  <span>Acertei Brawling</span>
+                </label>
+                <label className="turn-state-chip">
+                  <input type="checkbox" checked={turnState.hitMartialArts} onChange={(event) => setTurnState((previous) => ({ ...previous, hitMartialArts: event.target.checked }))} />
+                  <span>Acertei Martial Arts</span>
+                </label>
+                <label className="turn-state-chip">
+                  <input type="checkbox" checked={turnState.grabbingTarget} onChange={(event) => setTurnState((previous) => ({ ...previous, grabbingTarget: event.target.checked }))} />
+                  <span>Agarrando o alvo</span>
+                </label>
+                <label className="turn-state-chip">
+                  <input type="checkbox" checked={turnState.dodgedAllMelee} onChange={(event) => setTurnState((previous) => ({ ...previous, dodgedAllMelee: event.target.checked }))} />
+                  <span>Esquivei de todos os melee</span>
+                </label>
+              </div>
+              <p className="turn-state-note">
+                O app não conta rodadas: marque ao começar o turno e limpe com ↻. Rolar um ataque já marca o &quot;Acertei …&quot; correspondente — desmarque se ele não acertou.
+              </p>
+            </div>
+
+            {specialMoveOutcome && "error" in specialMoveOutcome && <p className="form-error">{specialMoveOutcome.error}</p>}
+
+            {specialMoveAvailability.map(({ move, skill, available, missing, points, unlocked, canUnlock }) => {
+              const outcome =
+                specialMoveOutcome && !("error" in specialMoveOutcome) && specialMoveOutcome.move.id === move.id
+                  ? specialMoveOutcome
+                  : null;
+              const open = Boolean(openSpecialMoves[move.id]);
+              const outcomeIcon =
+                outcome && outcome.kind === "check" ? (outcome.success ? "✓" : "✗") : outcome ? "⚔" : null;
+              const outcomeClass = outcome
+                ? outcome.kind === "check" && !outcome.success
+                  ? "fail"
+                  : "ok"
+                : "";
+              // Travado = sem ponto; unlockable = tem ponto e ainda não pagou.
+              let cardState = "";
+              if (!available) cardState = canUnlock ? " unlockable" : " locked";
+              return (
+                <div className={`special-move-card${cardState}${open ? " open" : ""}`} key={move.id}>
+                  <button
+                    type="button"
+                    className="smc-header"
+                    aria-expanded={open}
+                    aria-controls={`smc-body-${move.id}`}
+                    onClick={() => toggleSpecialMove(move.id)}
+                  >
+                    <span className="smc-header-top">
+                      <span className="smc-form">
+                        {move.form === "shared" ? "Comum" : move.form.charAt(0).toUpperCase() + move.form.slice(1)}
+                      </span>
+                      <span className="smc-name">{move.name}</span>
+                      <span className="smc-chevron" aria-hidden="true">
+                        ▾
+                      </span>
+                    </span>
+                    <span className="smc-header-meta">
+                      {skill && (
+                        <span className="smc-skill-tag" title={`${skill.name} ${skill.level}`}>
+                          Nv {skill.level}
+                        </span>
+                      )}
+                      {outcomeIcon && <span className={`smc-result ${outcomeClass}`}>{outcomeIcon}</span>}
+                      <span className={`smc-badge ${!unlocked ? (canUnlock ? "unlockable" : "locked") : available ? "ok" : "blocked"}`}>
+                        {!unlocked ? (canUnlock ? "Liberável" : "Travado") : available ? "Disponível" : "Bloqueado"}
+                      </span>
+                    </span>
+                  </button>
+                  {open && (
+                    <div className="smc-body" id={`smc-body-${move.id}`} role="status">
+                      <p className="smc-requirement">
+                        <strong>Requisito:</strong> {move.requirement}
+                      </p>
+                      <p className="smc-effect">{move.effect}</p>
+                      {skill && (
+                        <p className="smc-skill">
+                          Perícia usada: {skill.name} {skill.level} — o nível vem só dessa forma, sem somar com as outras.
+                        </p>
+                      )}
+                      <p className={`smc-pool${unlocked ? " unlocked" : ""}`}>
+                        {unlocked
+                          ? `✓ Desbloqueado — 1 ponto de Martial Arts gasto (${points.spentSpecializations + points.spentMoves}/${points.total})`
+                          : `Desbloqueio: 1 ponto de Martial Arts — nível ${points.total} = ${points.total} ponto${points.total === 1 ? "" : "s"} · ${points.spentSpecializations} em especializações · ${points.spentMoves} em moves · ${points.free} livre${points.free === 1 ? "" : "s"}`}
+                      </p>
+                      {points.balance < 0 && (
+                        <p className="smc-pool warn">
+                          Especializações já pagas custaram {Math.abs(points.balance)} ponto
+                          {Math.abs(points.balance) === 1 ? "" : "s"} a mais do que o nível atual de Martial Arts cobre —
+                          suba a perícia-mãe para liberar gastos.
+                        </p>
+                      )}
+                      {!available && missing.length > 0 && (
+                        <ul className="smc-missing">
+                          {missing.map((reason) => (
+                            <li key={reason}>✗ {reason}</li>
+                          ))}
+                        </ul>
+                      )}
+                      {move.headAim && available && (
+                        <label className="turn-state-chip">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(specialMoveHeadAim[move.id])}
+                            onChange={(event) =>
+                              setSpecialMoveHeadAim((previous) => ({ ...previous, [move.id]: event.target.checked }))
+                            }
+                          />
+                          <span>Mira na cabeça (−8)</span>
+                        </label>
+                      )}
+                      {!unlocked && (
+                        <button
+                          type="button"
+                          className="smc-unlock"
+                          disabled={!canUnlock}
+                          onClick={() => unlockSpecialMoveCard(move)}
+                        >
+                          {canUnlock
+                            ? "🔓 Desbloquear — 1 ponto de Martial Arts"
+                            : skill
+                              ? `Sem ponto livre de Martial Arts (${points.free}/${points.total})`
+                              : `Sem ponto em ${move.form === "shared" ? "Martial Arts" : `${move.form.charAt(0).toUpperCase() + move.form.slice(1)}`}`}
+                        </button>
+                      )}
+                      {unlocked && move.kind !== "passive" && (
+                        <button type="button" className="smc-use" disabled={!available} onClick={() => useSpecialMove(move)}>
+                          {available ? "Usar" : "Indisponível"}
+                        </button>
+                      )}
+                      {available && move.kind === "passive" && (
+                        <div className="smc-outcome info">✓ {move.outcome}</div>
+                      )}
+                      {outcome && outcome.kind === "check" && (
+                        <div className={`smc-outcome ${outcome.success ? "success" : "failure"}`}>
+                          <strong>{outcome.success ? "✓ SUCESSO" : "✗ FALHA"}</strong> — {outcome.total} vs DV {outcome.dv}
+                          {outcome.success && move.outcome ? <span> · {move.outcome}</span> : null}
+                        </div>
+                      )}
+                      {outcome && outcome.kind === "attack" && (
+                        <div className="smc-outcome info">
+                          ✓ Ataque rolado: {outcome.attack.total}. Role o dano no cartão de ataque acima —{" "}
+                          {move.outcome}
+                        </div>
+                      )}
+                      {outcome && outcome.kind === "passive" && <div className="smc-outcome info">{move.outcome}</div>}
+                      {unlocked && (
+                        <button type="button" className="smc-refund" onClick={() => refundSpecialMoveCard(move)}>
+                          ↺ Devolver o ponto
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           <h3>Dano recebido</h3>
             <div className="damage-input-section">
               <div className="damage-input-row">
@@ -1154,99 +1565,13 @@ export default function CharacterSheet({
                   <span className="skill-count">{skills.length}</span>
                 </div>
                 <div className="skill-list">
-                  {skills.map(([id, skill]) => {
-                    const base = getSkillBase(character, id);
-                    const cost = getSkillUpgradeCost(skill.level, skill.costMultiplier);
-                    const canUpgrade = canUpgradeSkill(character, id);
-                    const rollResult = lastSkillRoll?.skillId === id ? lastSkillRoll.result : null;
-                    const isMaxed = skill.level >= 10;
-                    return (
-                      <div className={`skill-card ${isMaxed ? 'maxed' : ''}`} key={id}>
-                        <div className="skill-card-main">
-                          <div className="skill-card-info">
-                            <span className="skill-name">{skill.name}</span>
-                            <div className="skill-meta">
-                              <span className="skill-stat">{skill.stat}</span>
-                              {skill.costMultiplier === 2 && <span className="skill-double-cost">×2</span>}
-                            </div>
-                          </div>
-                          <div className="skill-card-values">
-                            <div className="skill-level-display">
-                              <span className="skill-level-label">LV</span>
-                              <span className="skill-level-value">{skill.level}</span>
-                            </div>
-                            <div className="skill-base-display">
-                              <span className="skill-base-label">BASE</span>
-                              <span className="skill-base-value">{base}</span>
-                            </div>
-                          </div>
-                          <div className="skill-card-actions">
-                            {!isMaxed && (
-                              <button
-                                type="button"
-                                className="skill-upgrade-btn"
-                                disabled={!canUpgrade}
-                                onClick={() => improveSkill(id)}
-                                title={`Custo: ${cost} IP`}
-                              >
-                                ↑
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              className="skill-roll-btn"
-                              onClick={() => handleRollSkillCheck(character, id)}
-                              aria-label={`Rolar ${skill.name}`}
-                              disabled={rollingSkill?.id === id}
-                            >
-                              {rollingSkill?.id === id ? (
-                                <span className="rolling-indicator">🎲</span>
-                              ) : (
-                                "🎲"
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                        {!isMaxed && (
-                          <div className="skill-upgrade-info">
-                            <span className="upgrade-cost">{cost} IP</span>
-                          </div>
-                        )}
-                        {rollResult && (
-                          <div className="skill-roll-result-card">
-                            <div className="roll-result-header">
-                              {rollResult.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
-                              {rollResult.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
-                              {!rollResult.critical && !rollResult.fumble && (
-                                <span className="roll-total-value">{rollResult.total}</span>
-                              )}
-                            </div>
-                            <div className="roll-result-breakdown">
-                              <span className="roll-formula">
-                                {rollResult.statId} {rollResult.statBase} + {rollResult.skillName} {rollResult.skillLevel} + 1d10
-                              </span>
-                              <div className="roll-dice-row">
-                                {rollResult.diceRolls.map((r, idx) => (
-                                  <span
-                                    key={idx}
-                                    className={`roll-die ${r.type === 'crit' || r.type === 'crit_add' ? 'crit' : ''} ${r.type === 'fumble' || r.type === 'fumble_sub' ? 'fumble' : ''}`}
-                                  >
-                                    {r.type === 'crit_add' && '+'}{r.type === 'fumble_sub' && '−'}[{r.value}]
-                                  </span>
-                                ))}
-                                <span className="dice-subtotal">= {rollResult.diceRoll}</span>
-                              </div>
-                              {rollResult.totalModifier !== 0 && (
-                                <span className="roll-modifier">
-                                  Mod: {rollResult.totalModifier >= 0 ? '+' : ''}{rollResult.totalModifier}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {skills.map(([id, skill]) => (
+                    <React.Fragment key={id}>
+                      {skillCard(id, skill)}
+                      {id === "martial_arts" &&
+                        MARTIAL_ARTS_FORMS.map(({ skillId }) => skillCard(skillId, character.skills[skillId], "spec"))}
+                    </React.Fragment>
+                  ))}
                 </div>
               </div>
             ))}
@@ -1259,99 +1584,13 @@ export default function CharacterSheet({
                   <span className="skill-count">{skills.length}</span>
                 </div>
                 <div className="skill-list">
-                  {skills.map(([id, skill]) => {
-                    const base = getSkillBase(character, id);
-                    const cost = getSkillUpgradeCost(skill.level, skill.costMultiplier);
-                    const canUpgrade = canUpgradeSkill(character, id);
-                    const rollResult = lastSkillRoll?.skillId === id ? lastSkillRoll.result : null;
-                    const isMaxed = skill.level >= 10;
-                    return (
-                      <div className={`skill-card ${isMaxed ? 'maxed' : ''}`} key={id}>
-                        <div className="skill-card-main">
-                          <div className="skill-card-info">
-                            <span className="skill-name">{skill.name}</span>
-                            <div className="skill-meta">
-                              <span className="skill-stat">{skill.stat}</span>
-                              {skill.costMultiplier === 2 && <span className="skill-double-cost">×2</span>}
-                            </div>
-                          </div>
-                          <div className="skill-card-values">
-                            <div className="skill-level-display">
-                              <span className="skill-level-label">LV</span>
-                              <span className="skill-level-value">{skill.level}</span>
-                            </div>
-                            <div className="skill-base-display">
-                              <span className="skill-base-label">BASE</span>
-                              <span className="skill-base-value">{base}</span>
-                            </div>
-                          </div>
-                          <div className="skill-card-actions">
-                            {!isMaxed && (
-                              <button
-                                type="button"
-                                className="skill-upgrade-btn"
-                                disabled={!canUpgrade}
-                                onClick={() => improveSkill(id)}
-                                title={`Custo: ${cost} IP`}
-                              >
-                                ↑
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              className="skill-roll-btn"
-                              onClick={() => handleRollSkillCheck(character, id)}
-                              aria-label={`Rolar ${skill.name}`}
-                              disabled={rollingSkill?.id === id}
-                            >
-                              {rollingSkill?.id === id ? (
-                                <span className="rolling-indicator">🎲</span>
-                              ) : (
-                                "🎲"
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                        {!isMaxed && (
-                          <div className="skill-upgrade-info">
-                            <span className="upgrade-cost">{cost} IP</span>
-                          </div>
-                        )}
-                        {rollResult && (
-                          <div className="skill-roll-result-card">
-                            <div className="roll-result-header">
-                              {rollResult.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
-                              {rollResult.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
-                              {!rollResult.critical && !rollResult.fumble && (
-                                <span className="roll-total-value">{rollResult.total}</span>
-                              )}
-                            </div>
-                            <div className="roll-result-breakdown">
-                              <span className="roll-formula">
-                                {rollResult.statId} {rollResult.statBase} + {rollResult.skillName} {rollResult.skillLevel} + 1d10
-                              </span>
-                              <div className="roll-dice-row">
-                                {rollResult.diceRolls.map((r, idx) => (
-                                  <span
-                                    key={idx}
-                                    className={`roll-die ${r.type === 'crit' || r.type === 'crit_add' ? 'crit' : ''} ${r.type === 'fumble' || r.type === 'fumble_sub' ? 'fumble' : ''}`}
-                                  >
-                                    {r.type === 'crit_add' && '+'}{r.type === 'fumble_sub' && '−'}[{r.value}]
-                                  </span>
-                                ))}
-                                <span className="dice-subtotal">= {rollResult.diceRoll}</span>
-                              </div>
-                              {rollResult.totalModifier !== 0 && (
-                                <span className="roll-modifier">
-                                  Mod: {rollResult.totalModifier >= 0 ? '+' : ''}{rollResult.totalModifier}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {skills.map(([id, skill]) => (
+                    <React.Fragment key={id}>
+                      {skillCard(id, skill)}
+                      {id === "martial_arts" &&
+                        MARTIAL_ARTS_FORMS.map(({ skillId }) => skillCard(skillId, character.skills[skillId], "spec"))}
+                    </React.Fragment>
+                  ))}
                 </div>
               </div>
             ))}
@@ -1514,7 +1753,10 @@ export default function CharacterSheet({
           <PanelTitle number="06">Cyberware</PanelTitle>
           {character.cyberware.length ? (
             <div className="cyberware-grid">
-              {character.cyberware.map((item) => (
+              {character.cyberware.map((item) => {
+                const control = installedCyberwareEffects.find((entry) => entry.cyberwareId === item.id);
+                const effects = control?.effects ?? [];
+                return (
                 <div key={item.id} className="cyberware-card">
                   <div className="cyberware-card-header">
                     <div className="cyberware-card-title">
@@ -1539,11 +1781,49 @@ export default function CharacterSheet({
                         : "Sem perda"}
                     </span>
                   </div>
+                  {effects.length > 0 && (
+                    <ul className="cyberware-effects">
+                      {effects.map((effect) => (
+                        <li key={effect}>{effect}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {control?.activation && (
+                    <div className="cyberware-card-controls">
+                      <button
+                        type="button"
+                        className={`cyberware-toggle${control.activation.activeStage !== undefined ? " is-active" : ""}`}
+                        aria-pressed={control.activation.activeStage !== undefined}
+                        onClick={() => {
+                          setCyberwareNotice("");
+                          onUpdate(toggleCyberwareActivation(character, item.id));
+                        }}
+                      >
+                        {control.activation.activeStage !== undefined
+                          ? `● ${control.activation.label}: ${control.activation.stages[control.activation.activeStage]}`
+                          : `○ ${control.activation.label}: inativo`}
+                      </button>
+                      {control.action?.type === "heal" && (
+                        <button
+                          type="button"
+                          className="cyberware-action-btn"
+                          disabled={!control.actionEnabled}
+                          onClick={() => handleCyberwareAction(item.id)}
+                        >
+                          {control.action.label}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <EmptyState>Nenhum cyberware instalado.</EmptyState>
+          )}
+          {cyberwareNotice && (
+            <p className="cyberware-notice" role="status">{cyberwareNotice}</p>
           )}
         </section>
 
@@ -1613,6 +1893,13 @@ export default function CharacterSheet({
                     {item.notes && (
                       <div className="inventory-card-notes">{item.notes}</div>
                     )}
+                    {item.category === "cyberware" && catalogItem?.effects && catalogItem.effects.length > 0 && (
+                      <ul className="cyberware-effects">
+                        {catalogItem.effects.map((effect) => (
+                          <li key={effect}>{effect}</li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 );
               })}
@@ -1623,6 +1910,11 @@ export default function CharacterSheet({
           {healNotice && (
             <p className={healNotice.isError ? "inventory-heal-notice error" : "inventory-heal-notice"}>
               {healNotice.text}
+            </p>
+          )}
+          {equipError && (
+            <p className="inventory-heal-notice error" role="alert">
+              {equipError}
             </p>
           )}
         </section>

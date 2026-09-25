@@ -1,6 +1,7 @@
-import { skillDefinitions } from "@/data/skills";
+import { isPhysicalSkill, skillDefinitions } from "@/data/skills";
 import { rollDice } from "@/lib/dice";
-import { getCriticalInjuryModifiers } from "@/lib/calculations";
+import { getCriticalInjuryModifiers, getWoundPenalty } from "@/lib/calculations";
+import { getCyberwarePhysicalModifiers, getCyberwareSkillModifierFor } from "@/lib/cyberwareEffects";
 import type { Character, Skill, RollHistoryEntry } from "@/types/character";
 
 /** Registro de check de perícia no histórico */
@@ -56,7 +57,11 @@ export function rollSkillCheck(
 
   // Calcula modificadores de Critical Injuries
   const injuryModifiers = getCriticalInjuryModifiers(character);
-  
+
+  // Bônus passivos do cyberware instalado (ex.: Gorilla Arms +2 Briga, Audio Filter +2 Percepção)
+  const cyberwareModifiers = getCyberwareSkillModifierFor(character, skillId);
+  const cyberwareModifier = cyberwareModifiers.reduce((total, modifier) => total + modifier.value, 0);
+
   // Calcula modificador do STAT (se houver)
   const statModifier = injuryModifiers.statModifiers[definition.stat] || 0;
   const modifiedStatValue = statValue + statModifier;
@@ -76,16 +81,20 @@ export function rollSkillCheck(
   const allActions = allActionsModifier;
   
   // Determina quais modificadores se aplicam a esta perícia
-  const isPhysicalSkill = ["athletics", "brawling", "concentration", "contortionist", "dance", "endurance", "resist_torture_drugs", "stealth", "drive_land_vehicle", "pilot_air_vehicle", "pilot_sea_vehicle", "riding", "brawling", "evasion", "martial_arts", "melee_weapon", "archery", "autofire", "handgun", "heavy_weapons", "shoulder_arms", "acting", "play_instrument", "bribery", "conversation", "human_perception", "interrogation", "persuasion", "personal_grooming", "streetwise", "trading", "wardrobe_style", "air_vehicle_tech", "basic_tech", "cybertech", "demolitions", "electronics_security", "first_aid", "forgery", "land_vehicle_tech", "paint_draw_sculpt", "paramedic", "photography_film", "pick_lock", "pick_pocket", "sea_vehicle_tech", "weaponstech"].includes(skillId);
-  
+  const physicalSkill = isPhysicalSkill(skillId);
+
   const isMentalSkill = ["concentration", "education", "perception", "tracking", "accounting", "animal_handling", "bureaucracy", "business", "composition", "criminology", "cryptography", "deduction", "education", "gamble", "language", "library_search", "local_expert", "science", "tactics", "wilderness_survival"].includes(skillId);
   
   const isSocialSkill = ["bribery", "conversation", "human_perception", "interrogation", "persuasion", "personal_grooming", "streetwise", "trading", "wardrobe_style"].includes(skillId);
   
+  // Efeito all_physical vindo de cyberware ativado (ex.: rescaldo do Adrenaline Booster)
+  const cyberwarePhysical = physicalSkill ? getCyberwarePhysicalModifiers(character) : [];
+  const cyberwarePhysicalModifier = cyberwarePhysical.reduce((total, modifier) => total + modifier.value, 0);
+
   // Calcula o modificador total
-  let totalModifier = statModifier + skillModifier + allActions;
-  
-  if (isPhysicalSkill) {
+  let totalModifier = statModifier + skillModifier + allActions + cyberwareModifier + cyberwarePhysicalModifier;
+
+  if (physicalSkill) {
     totalModifier += allPhysicalModifier;
   }
   if (isMentalSkill) {
@@ -126,6 +135,11 @@ export function rollSkillCheck(
     totalModifier += socialModifier;
   }
   
+  // Penalidade de Seriously/Mortally Wounded (−2 em todas as ações).
+  // Pain Editor ativo zera aqui também — mesma regra do First Aid (getWoundPenalty).
+  const woundPenalty = getWoundPenalty(character);
+  totalModifier += woundPenalty;
+
   // Rolagem de 1d10 com exploding dice (crítico em 10, falha crítica em 1)
   interface RollDetail { value: number; type: "normal" | "crit" | "fumble" | "crit_add" | "fumble_sub"; }
   let allRolls: RollDetail[] = [];
@@ -166,9 +180,12 @@ export function rollSkillCheck(
   
   rollExplodingD10();
 
-  // Total = STAT + Skill Level + d10 (com exploding) + Modifiers
+  // Total = STAT base + Skill Level + d10 (com exploding) + Modifiers.
+  // O STAT modulado pela lesão já está dentro de `totalModifier` (aparece como tag
+  // "STAT (DEX)" e o painel exibe o STAT base) — usar `finalStatValue` aqui contava
+  // a penalidade de STAT em dobro (bug 1).
   const finalStatValue = statValue + statModifier;
-  const total = finalStatValue + skill.level + diceTotal + totalModifier;
+  const total = statValue + skill.level + diceTotal + totalModifier;
 
   const result: SkillCheckResult = {
     skillId,
@@ -191,6 +208,8 @@ export function rollSkillCheck(
   const modifierEntries = [];
   if (statModifier !== 0) modifierEntries.push({ source: `STAT (${definition.stat})`, value: statModifier });
   if (skillModifier !== 0) modifierEntries.push({ source: `Perícia (${skill.name})`, value: skillModifier });
+  for (const modifier of cyberwareModifiers) modifierEntries.push({ source: `Cyberware (${modifier.source})`, value: modifier.value });
+  for (const modifier of cyberwarePhysical) modifierEntries.push({ source: `Cyberware físico (${modifier.source})`, value: modifier.value });
   if (allPhysicalModifier !== 0) modifierEntries.push({ source: "Físico (lesão)", value: allPhysicalModifier });
   if (allMentalModifier !== 0) modifierEntries.push({ source: "Mental (lesão)", value: allMentalModifier });
   if (allActions !== 0) modifierEntries.push({ source: "Todas ações (lesão)", value: allActions });
@@ -199,6 +218,7 @@ export function rollSkillCheck(
   if (rangedModifier !== 0) modifierEntries.push({ source: "Distância (lesão)", value: rangedModifier });
   if (meleeModifier !== 0) modifierEntries.push({ source: "Corpo a corpo (lesão)", value: meleeModifier });
   if (socialModifier !== 0) modifierEntries.push({ source: "Social (lesão)", value: socialModifier });
+  if (woundPenalty !== 0) modifierEntries.push({ source: "Lesão grave (HP)", value: woundPenalty });
 
   // Registra no histórico de rolagens
   const historyEntry: RollHistoryEntry = {

@@ -5,7 +5,7 @@ import { getAvailableAttacks, rollAttack, rollEvasion } from "../src/lib/attacks
 import { applyReceivedDamage, rollDamage } from "../src/lib/damage.ts";
 import { getSkillBase } from "../src/lib/calculations.ts";
 import { getAttributePointsRemaining, getCreationPointSummary, getSkillPointsSpent, validateCharacterCreation, validateCharacterEdit } from "../src/lib/characterCreation.ts";
-import { skillDefinitions } from "../src/data/skills.ts";
+import { skillDefinitions, MARTIAL_ARTS_FORMS, isPhysicalSkill } from "../src/data/skills.ts";
 import { statNames, createEmptyCharacter } from "../src/types/character.ts";
 import { catalogItems } from "../src/data/items.ts";
 import { getItemForFree, getSellPrice, purchaseItem, sellInventoryItem } from "../src/lib/store.ts";
@@ -68,11 +68,22 @@ test("creation validates exact pools and STAT limits", () => {
   assert.equal(validateCharacterCreation(character).valid, false);
 });
 
-test("the catalog has the 66 official skills in their official categories", () => {
-  assert.equal(Object.keys(skillDefinitions).length, 66);
-  assert.deepEqual(Object.keys(skillDefinitions).filter((id) => skillDefinitions[id].costMultiplier === 2), ["pilot_air_vehicle", "martial_arts", "autofire", "heavy_weapons", "demolitions", "electronics_security", "paramedic"]);
+test("the catalog has the 66 official skills, the known extra and the 4 Martial Arts forms", () => {
+  // 66 oficiais + `interface` (ainda em aberto na pendência nº 5) + as 4 formas de Martial Arts.
+  const KNOWN_EXTRA_SKILLS = ["interface"];
+  const MARTIAL_ARTS_FORM_SKILLS = 4;
+  assert.equal(Object.keys(skillDefinitions).length, 66 + KNOWN_EXTRA_SKILLS.length + MARTIAL_ARTS_FORM_SKILLS);
+  assert.deepEqual(Object.keys(skillDefinitions).filter((id) => skillDefinitions[id].costMultiplier === 2), ["pilot_air_vehicle", "martial_arts", "martial_arts_karate", "martial_arts_taekwondo", "martial_arts_judo", "martial_arts_aikido", "autofire", "heavy_weapons", "demolitions", "electronics_security", "paramedic"]);
   assert.equal(skillDefinitions.handgun.category, "ranged_weapon");
   assert.equal(skillDefinitions.paramedic.category, "technique");
+  // As formas são perícias próprias de combate, físicas e não obrigatórias na criação.
+  for (const form of MARTIAL_ARTS_FORMS) {
+    assert.equal(skillDefinitions[form.skillId].category, "fighting");
+    assert.equal(skillDefinitions[form.skillId].stat, "DEX");
+    assert.equal(skillDefinitions[form.skillId].costMultiplier, 2);
+    assert.equal(skillDefinitions[form.skillId].creation.required, false);
+    assert.equal(isPhysicalSkill(form.skillId), true);
+  }
 });
 
 test("the character has only the ten Cyberpunk RED STATs", () => {
@@ -154,7 +165,9 @@ test("Martial Arts supplies central damage dice without a weapon", () => {
   character.skills.martial_arts.level = 4;
   const martial = getAvailableAttacks(character).find((attack) => attack.context.type === "martial_arts");
   assert.ok(martial); const result = rollAttack(character, martial!.context);
-  assert.ok("result" in result); if ("result" in result) assert.equal(result.result.damageDice, "2d6");
+  // Escala oficial por BODY: createEmptyCharacter nasce com BODY 2 → 1d6
+  // (pendência nº 6 resolvida: era a expectativa do teste que estava errada).
+  assert.ok("result" in result); if ("result" in result) assert.equal(result.result.damageDice, "1d6");
 });
 
 test("localized armor absorbs damage and loses one SP only on penetration", () => {
@@ -198,7 +211,7 @@ test("paid, free, and sale inventory flows share catalog prices safely", () => {
 
 test("sale validates quantity and never allows negative inventory", () => {
   const item = catalogItems.find((candidate) => candidate.price > 0)!;
-  let character = getItemForFree(createEmptyCharacter("sale-quantity"), item.id); assert.ok("character" in character);
+  const character = getItemForFree(createEmptyCharacter("sale-quantity"), item.id); assert.ok("character" in character);
   if ("character" in character) { const failed = sellInventoryItem(character.character, character.character.inventory[0].id, character.character.inventory[0].quantity + 1); assert.deepEqual(failed, { error: "invalid-quantity" }); assert.equal(character.character.inventory[0].quantity, item.quantity ?? 1); }
   assert.equal(getSellPrice(50), 5); assert.equal(getSellPrice(100), 10); assert.equal(getSellPrice(500), 50); assert.equal(getSellPrice(1000), 100);
 });

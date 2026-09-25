@@ -2,6 +2,7 @@ import type { Stats } from "@/types/character";
 import type { Character } from "@/types/character";
 import type { AttributeName } from "@/types/character";
 import type { CriticalInjury } from "@/data/criticalInjuries";
+import { ignoresWoundPenalty } from "@/lib/cyberwareEffects";
 
 export function calculateMaximumHitPoints(stats: Pick<Stats, "BODY" | "WILL">): number {
   return 10 + 5 * Math.floor((stats.BODY + stats.WILL) / 2);
@@ -160,12 +161,22 @@ export function calculateHPStatus(
   return "normal";
 }
 
+/** Penalidade de HP quando Seriously/Mortally Wounded: −2 em todas as ações (CPR).
+ * Pain Editor ativo zera essa penalidade — é a única peça que faz isso hoje.
+ * Fonte única para First Aid, perícia, ataque e Evasão usarem o mesmo número. */
+export function getWoundPenalty(character: Pick<Character, "combat" | "cyberware">): number {
+  const status = calculateHPStatus(character.combat.hp.current, character.combat.hp.max, character.combat.isDead);
+  if (status !== "seriously_wounded" && status !== "mortally_wounded") return 0;
+  if (ignoresWoundPenalty(character)) return 0;
+  return -2;
+}
+
 /** A única fórmula de Base: STAT associado + nível da Skill. */
 export function getSkillBase(
   character: Pick<import("@/types/character").Character, "stats" | "skills">,
   skillId: string,
 ): number {
   const skill = character.skills[skillId];
-  if (!skill) throw new Error(`Perícia não encontrada: ${skillId}`);
+  if (!skill) return 0;
   return character.stats[skill.stat] + skill.level;
 }
