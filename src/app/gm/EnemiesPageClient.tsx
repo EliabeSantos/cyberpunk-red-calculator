@@ -5,6 +5,7 @@ import Link from "next/link";
 import EnemyList from "@/components/gm/EnemyList";
 import type { Enemy } from "@/types/enemy";
 import type { EnemyRollContext } from "@/lib/enemyRolls";
+import { publishMesaGmAttack, publishMesaGmDamage, publishMesaGmSkill } from "@/lib/mesa/gmRollPublish";
 
 export default function EnemiesPageClient() {
   const [selectedEnemy, setSelectedEnemy] = useState<Enemy | null>(null);
@@ -244,6 +245,13 @@ function EnemyDiceView({
     if ("result" in result) {
       setLastAttackResult(result.result);
       setLastDamageResult(null);
+      publishMesaGmAttack(
+        result.result.enemyName,
+        result.result.label,
+        `${result.result.stat.id} ${result.result.stat.value} + ${result.result.skill.name} ${result.result.skill.value} + 1d10`,
+        result.result.total,
+        result.result.diceRolls.map((r) => r.value),
+      );
     }
   };
 
@@ -259,6 +267,13 @@ function EnemyDiceView({
     
     if ("result" in result) {
       setLastSkillResult(result.result);
+      publishMesaGmSkill(
+        result.result.enemyName,
+        result.result.skillName,
+        `${result.result.statId} ${result.result.statBase} + ${result.result.skillName} ${result.result.skillLevel} + 1d10`,
+        result.result.total,
+        result.result.diceRolls.map((r) => r.value),
+      );
     }
   };
 
@@ -269,6 +284,13 @@ function EnemyDiceView({
     
     if ("result" in result) {
       setLastDamageResult(result.result);
+      publishMesaGmDamage(
+        result.result.enemyName,
+        `Dano de ${result.result.attackName}`,
+        result.result.damageDice,
+        result.result.total,
+        result.result.roll.rolls,
+      );
     }
   };
 

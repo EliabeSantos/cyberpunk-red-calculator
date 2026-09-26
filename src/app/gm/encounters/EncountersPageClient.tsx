@@ -20,6 +20,12 @@ import { gmEnemyCatalog, availableFactions } from "@/data/gm-enemies";
 import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjuries";
 import { rollDice } from "@/lib/dice";
 import { notifyEnemyAttack, notifyEnemyDamage, notifyEnemyInitiative } from "@/lib/discord/rollNotify";
+import {
+  publishMesaGmAttack,
+  publishMesaGmDamage,
+  publishMesaGmInitiative,
+} from "@/lib/mesa/gmRollPublish";
+import MesaEncounterStart, { type MesaEnemySeed } from "@/components/mesa/MesaEncounterStart";
 
 export default function EncountersPageClient() {
   const [phase, setPhase] = useState<"setup" | "combat" | "saved">("setup");
@@ -79,6 +85,23 @@ export default function EncountersPageClient() {
     const count = Math.min(4, gmEnemyCatalog.filter((e) => e.identity.faction === f).length || 1);
     setEnemyCount(count);
   };
+
+  /**
+   * Os inimigos deste encontro no formato que a mesa partilhada aceita.
+   * HP atual é preservado (se o Mestre já aplicou dano antes de lançar o
+   * combate online, o inimigo entra ferido — mas com o HP máximo intacto).
+   */
+  const mesaEnemies: MesaEnemySeed[] = (encounter?.participants ?? [])
+    .filter((p) => !p.isPlayer)
+    .slice(0, 20)
+    .map((p) => ({
+      name: (p.name || p.archetype || "Inimigo").trim().slice(0, 60),
+      hp: Math.max(1, p.hp.current),
+      hpMax: Math.max(1, p.hp.max),
+      ref: Math.max(1, p.refStat),
+      // MOVE do bestiário (encontros salvos antes de existir este campo caem em 5).
+      move: Math.max(0, Math.min(20, p.moveStat ?? 5)),
+    }));
 
   const handleStartEncounter = () => {
     if (!faction || !encounterName.trim()) return;
@@ -145,6 +168,16 @@ export default function EncountersPageClient() {
     setEncounter(next);
     // Espelho no Discord (mesmos portões do jogador): consentimento + mesa.
     notifyEnemyAttack(next.participants[participantIndex]);
+    const p = next.participants[participantIndex];
+    if (p.lastAttackRoll) {
+      publishMesaGmAttack(
+        p.name.trim() || p.archetype.trim() || "Inimigo",
+        p.weaponName || "Ataque",
+        "1d10",
+        p.lastAttackRoll.total,
+        p.lastAttackRoll.diceRolls,
+      );
+    }
   };
 
   const handleRollDamage = (participantIndex: number) => {
@@ -152,6 +185,16 @@ export default function EncountersPageClient() {
     const next = rollDamage(encounter, participantIndex);
     setEncounter(next);
     notifyEnemyDamage(next.participants[participantIndex]);
+    const p = next.participants[participantIndex];
+    if (p.lastDamageRoll) {
+      publishMesaGmDamage(
+        p.name.trim() || p.archetype.trim() || "Inimigo",
+        `Dano de ${p.weaponName || "ataque"}`,
+        p.damageExpression,
+        p.lastDamageRoll.total,
+        p.lastDamageRoll.rolls,
+      );
+    }
   };
 
   const handleApplyDamage = (participantIndex: number) => {
@@ -208,6 +251,10 @@ export default function EncountersPageClient() {
         total: r.total,
       })),
     );
+    rolled.forEach((r) => {
+      const actor = r.participant.name.trim() || r.participant.archetype.trim() || "Inimigo";
+      publishMesaGmInitiative(actor, r.total);
+    });
   };
 
   return (
@@ -446,6 +493,7 @@ export default function EncountersPageClient() {
               <p className="encounter-faction">Facção: {encounter.faction} · {encounter.participants.length} participantes</p>
             </div>
             <div className="encounter-combat-actions">
+              <MesaEncounterStart enemies={mesaEnemies} />
               <button className="gm-button gm-button-small" onClick={handleRollInitiative}>
                 🎲 Iniciativa
               </button>

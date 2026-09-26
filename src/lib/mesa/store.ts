@@ -1154,10 +1154,14 @@ export async function registerRoll(input: {
   // Só o combatente VINCULADO a este participante pode ser debitado por ele.
   const mine = combatants.find((row) => row.participant_id === participant.id) ?? null;
 
+  // GM rola de fora (tela de encontro/inimigo): reporta o dado, nunca debita
+  // Action do combatente — o GM controla inimigos livremente na CPR.
+  const canDebit = actionType !== null && participant.role !== "gm" && mine !== null;
+
   let debited = false;
   let denial: string | null = null;
 
-  if (actionType) {
+  if (canDebit) {
     if (!mine) {
       denial = "not_allowed";
     } else {
