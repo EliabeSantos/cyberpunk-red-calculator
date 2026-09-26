@@ -2,7 +2,6 @@ import { getSkillBase, getCriticalInjuryModifiers, getWoundPenalty } from "@/lib
 import { rollDice } from "@/lib/dice";
 import { getCatalogItem } from "@/data/items";
 import { getCyberwareAttackModifiers, getCyberwareEvasionModifiers, getCyberwarePhysicalModifiers, getCyberwareUnarmedDamageModifiers, hasInstalledCyberarm, isSmartWeapon } from "@/lib/cyberwareEffects";
-import { MARTIAL_ARTS_FORMS } from "@/data/skills";
 import type {
   AttackContext,
   AttackRollResult,
@@ -27,26 +26,12 @@ export function getAvailableAttacks(character: Character): AvailableAttack[] {
       context: { type: "weapon", weaponId: weapon.id },
     }));
 
-  // Artes Marciais: uma entrada por forma com nível > 0. Cada forma usa o próprio nível e
-  // nunca soma com as demais. A perícia genérica só aparece quando a ficha não tem nenhuma
-  // forma (regra: para usar Artes Marciais é preciso ao menos 1 ponto numa forma).
-  const formAttacks: AvailableAttack[] = MARTIAL_ARTS_FORMS.flatMap(({ skillId }) => {
-    const skill = character.skills[skillId];
-    if (!skill || skill.level <= 0) return [];
-    return [
-      {
-        id: `skill:${skillId}`,
-        label: skill.name,
-        detail: `${skill.stat} + ${skill.name} + 1d10 · ROF ${UNARMED_ROF}`,
-        source: "skill" as const,
-        rof: UNARMED_ROF,
-        context: { type: "martial_arts" as const, skillId },
-      },
-    ];
-  });
+  // Artes Marciais: UM card só, "Martial Arts", que rola a perícia-mãe (decisão da mesa
+  // de 26/09/2026). As formas (Karate/Taekwondo/Judo/Aikido) não viram ataque próprio:
+  // elas alimentam apenas os Special Moves.
   const martialArts = character.skills.martial_arts;
   const skillAttacks: AvailableAttack[] =
-    formAttacks.length === 0 && martialArts && martialArts.level > 0
+    martialArts && martialArts.level > 0
       ? [
           {
             id: "skill:martial_arts",
@@ -63,7 +48,7 @@ export function getAvailableAttacks(character: Character): AvailableAttack[] {
     brawling && brawling.level > 0
       ? [{ id: "skill:brawling", label: brawling.name, detail: `${brawling.stat} + ${brawling.name} + 1d10 · ROF ${UNARMED_ROF}`, source: "skill", rof: UNARMED_ROF, context: { type: "brawling", skillId: "brawling" } }]
       : [];
-  return [...weaponAttacks, ...formAttacks, ...skillAttacks, ...brawlingAttack];
+  return [...weaponAttacks, ...skillAttacks, ...brawlingAttack];
 }
 
 function getAttackLabel(type: AttackContext["type"]): string {

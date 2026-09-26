@@ -114,9 +114,11 @@ Decisões que valem revisão:
   (`hasInstalledCyberarm`, `src/lib/cyberwareEffects.ts`). O **+1d6 do Gorilla Arms continua valendo por
   cima** — decisão de 25/09/2026: piso + bônus do item, e não piso no lugar do bônus (ex.: BODY 5 → 3d6).
 - **4 formas como perícias separadas** (`martial_arts_karate`, `_taekwondo`, `_judo`, `_aikido`,
-  categoria `fighting`, custo duplo). Cada ataque usa o nível **só daquela forma** — nunca soma —, e o
-  personagem precisa de ≥1 ponto na forma para ela aparecer na lista de ataques. A perícia genérica
-  `martial_arts` continua aparecendo quando a ficha não tem nenhuma forma (compatibilidade).
+  categoria `fighting`, custo duplo). Cada **Special Move** da forma usa o nível **só daquela forma** —
+  nunca soma. Elas **não aparecem na lista de ataques** (decisão da mesa de 26/09/2026).
+- **Um card de ataque "Martial Arts"**: a lista "Rolar Ataques" emite **um único card**
+  (`skill:martial_arts`) que rola a **perícia-mãe** — só aparece com nível > 0 em `martial_arts`.
+  As formas alimentam apenas os Special Moves.
 - **ROF 2** exibido no detalhe dos ataques por perícia (Brawling e todas as formas).
 - **Martial Arts ignora metade do SP, arredondando para cima** (SP 11 → 6): aplicado em
   `applyAttackDamage` quando `DamageRollResult.attackType === "martial_arts"`, com a marca

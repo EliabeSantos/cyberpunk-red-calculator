@@ -119,9 +119,11 @@ Regras implementadas em 25/09/2026 (`tests/martial-arts.test.ts` cobre cada item
   **+1d6 do Gorilla Arms continua somando por cima** (decisão da mesa: piso **+** bônus, não piso no lugar
   do bônus — BODY 5 com Gorilla Arms segue em `3d6`).
 - **Quatro formas são perícias separadas**: `Martial Arts (Karate)`, `(Taekwondo)`, `(Judo)`, `(Aikido)`,
-  categoria `fighting`, custo duplo, sem nível obrigatório na criação. Cada ataque rola **só o nível da
-  forma escolhida** — Karate 4 + Aikido 3 nunca valem 7. A ficha lista uma entrada por forma com ≥1 ponto
-  (e mantém a genérica `Martial Arts` quando não há nenhuma forma).
+  categoria `fighting`, custo duplo, sem nível obrigatório na criação. Servem **só para os Special Moves**
+  daquela forma (cada move rola **só o nível da sua forma** — Karate 4 + Aikido 3 nunca valem 7).
+- **Um card de ataque só** (decisão da mesa de 26/09/2026): a lista "Rolar Ataques" do Card 03 tem **um
+  único card `Martial Arts`**, que rola a **perícia-mãe** (`martial_arts`, a de IP). As formas não viram
+  cards de ataque próprios. O card só aparece com nível na mãe > 0.
 - **ROF 2** aparece no detalhe de todo ataque por perícia (Brawling e formas).
 - **Martial Arts ignora metade do SP, arredondando para cima** (SP 11 → 6): vale no caminho
   `rollAttack → rollDamage → applyAttackDamage`, que carrega `attackType` até lá, e a ficha avisa embaixo

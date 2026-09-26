@@ -232,50 +232,47 @@ test("a especialização sobe pelo bolso da perícia-mãe e respeita o saldo dis
   );
 });
 
-test("cada forma de Martial Arts é uma perícia própria e nunca soma", () => {
+test("a lista de ataques tem um único card Martial Arts, rolando a perícia-mãe", () => {
   const character = fighter();
   const attacks = getAvailableAttacks(character);
-  const karate = attacks.find(
-    (attack) => attack.id === "skill:martial_arts_karate",
-  );
-  const aikido = attacks.find(
-    (attack) => attack.id === "skill:martial_arts_aikido",
+  const maCards = attacks.filter((attack) =>
+    attack.id.startsWith("skill:martial_arts"),
   );
 
-  assert.ok(karate, "Karate 4 deve aparecer na lista de ataques");
-  assert.ok(aikido, "Aikido 3 deve aparecer na lista de ataques");
-  assert.strictEqual(karate!.label, "Martial Arts (Karate)");
-  assert.strictEqual(karate!.rof, 2, "Brawling e Martial Arts têm ROF 2");
-  assert.strictEqual(aikido!.rof, 2);
+  assert.strictEqual(
+    maCards.length,
+    1,
+    "as formas não viram cards de ataque próprios",
+  );
+  assert.strictEqual(maCards[0].id, "skill:martial_arts");
+  assert.strictEqual(maCards[0].label, "Martial Arts");
+  assert.strictEqual(
+    maCards[0].rof,
+    2,
+    "Brawling e Martial Arts têm ROF 2",
+  );
   assert.ok(
     attacks.find((attack) => attack.id === "skill:brawling")?.rof === 2,
   );
 
-  // A genérica não aparece junto das formas: para usar Artes Marciais vale a forma escolhida.
-  assert.ok(!attacks.some((attack) => attack.id === "skill:martial_arts"));
-
   withRandom(NEUTRAL_RANDOM, () => {
-    const karateRoll = rollAttack(character, karate!.context);
-    assert.ok("result" in karateRoll);
-    assert.strictEqual(karateRoll.result.skill.id, "martial_arts_karate");
+    const roll = rollAttack(character, maCards[0].context);
+    assert.ok("result" in roll);
+    assert.strictEqual(roll.result.skill.id, "martial_arts");
     assert.strictEqual(
-      karateRoll.result.skill.value,
-      4,
-      "usa só o nível de Karate",
+      roll.result.skill.value,
+      7,
+      "rola a perícia-mãe (não soma nem escolhe forma)",
     );
     assert.strictEqual(
-      karateRoll.result.total,
-      karateRoll.result.stat.value +
-        karateRoll.result.skill.value +
-        karateRoll.result.roll.total,
-      "Karate 4 não some com Aikido 3",
+      roll.result.total,
+      roll.result.stat.value +
+        roll.result.skill.value +
+        roll.result.roll.total,
+      "Martial Arts não some com Karate/Aikido/etc.",
     );
-
-    const aikidoRoll = rollAttack(character, aikido!.context);
-    assert.ok("result" in aikidoRoll);
-    assert.strictEqual(aikidoRoll.result.skill.value, 3, "Aikido rola com 3");
     assert.strictEqual(
-      aikidoRoll.result.label,
+      roll.result.label,
       "Artes Marciais",
       "rótulo continua vindo do tipo do ataque",
     );
@@ -356,11 +353,11 @@ test("Martial Arts ignora metade do SP da armadura (arredondando para cima)", ()
 test("o tipo do ataque sobrevive até a rolagem de dano (é o que liga a regra de SP)", () => {
   const character = fighter();
   const attacks = getAvailableAttacks(character);
-  const karate = attacks.find(
-    (attack) => attack.id === "skill:martial_arts_karate",
+  const ma = attacks.find(
+    (attack) => attack.id === "skill:martial_arts",
   )!;
 
-  const resolution = rollAttack(character, karate.context);
+  const resolution = rollAttack(character, ma.context);
   assert.ok("result" in resolution);
 
   const damage = rollDamage(resolution.result);
