@@ -3891,6 +3891,9 @@
 /* Indicador de CONECTADO no nav da ficha — vale mesmo com o painel fechado */
 .sheet-nav-links .mesa-nav-connected { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 
+/* Indicador de CONECTADO no nav do GM */
+.gm-nav .mesa-nav-connected { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+
 .mesa-form { display: grid; gap: .8rem; }
 .mesa-form label { display: grid; gap: .3rem; color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; }
 .mesa-form input { padding: .6rem .7rem; background: #0a120c; border: 1px solid #3d4742; color: var(--foreground); font-size: .9rem; }

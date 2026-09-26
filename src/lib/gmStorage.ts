@@ -160,6 +160,8 @@ export interface EncounterParticipant {
   weaponSkillId: string;
   weaponSkillName: string;
   refStat: number;
+  /** STAT MOVE do inimigo — alimenta o orçamento MOVE × 2 da mesa online. */
+  moveStat?: number;
   skillValue: number;
   attackBase: number;
   damageExpression: string;
@@ -280,6 +282,7 @@ export function createEncounterFromFaction(
       weaponSkillId: skillId,
       weaponSkillName: skill?.name ?? skillId,
       refStat,
+      moveStat: source.stats.MOVE,
       skillValue,
       attackBase,
       damageExpression,

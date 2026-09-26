@@ -34,6 +34,7 @@ import type { QuickhackRollResult, QuickhackCategory } from "@/lib/quickhacks";
 import StorePanel from "@/components/sheets/StorePanel";
 import DiceDrawer from "@/components/dice/DiceDrawer";
 import AttackActions from "@/components/combat/AttackActions";
+import MesaEntry from "@/components/mesa/MesaEntry";
 import type { DiscordConsent } from "@/lib/discord/consent";
 import type { AttackRollResult, DamageRollResult, EvasionRollResult, AttackMode } from "@/types/attack";
 import type { AttributeName, Character, Skill } from "@/types/character";
@@ -623,6 +624,7 @@ export default function CharacterSheet({
           }}
         >
           <button onClick={() => setDiceDrawerOpen(true)}>🎲 Dados</button>
+          <MesaEntry />
           <Link href="/gm">
             🎭 Área do Mestre
           </Link>
