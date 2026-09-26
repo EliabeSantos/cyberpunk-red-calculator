@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import MesaEntry from "@/components/mesa/MesaEntry";
 
 const navItems: Array<{ href: string; label: string; icon: string; disabled?: boolean }> = [
   { href: "/gm", label: "Inimigos", icon: "👥" },
@@ -53,6 +55,7 @@ export default function GMNav() {
           <span className="gm-nav-back-icon">←</span>
           <span>Voltar para Fichas</span>
         </Link>
+        <MesaEntry />
       </div>
     </nav>
   );

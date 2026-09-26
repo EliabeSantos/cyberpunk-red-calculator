@@ -1,7 +1,9 @@
 "use client";
 
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import GMNav from "@/components/gm/GMNav";
+import MesaRoomDock from "@/components/mesa/MesaRoomDock";
+import { subscribeToMembership, getMembershipSnapshot, getServerMembershipSnapshot } from "@/lib/mesa/membershipStore";
 
 interface GMShellProps {
   children: ReactNode;
@@ -60,6 +62,7 @@ export default function GMShell({ children }: GMShellProps) {
       <main className="gm-main" role="main">
         {children}
       </main>
+      <MesaRoomDock />
     </div>
   );
 }
