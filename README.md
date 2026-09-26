@@ -139,6 +139,12 @@ Regras implementadas em 25/09/2026 (`tests/martial-arts.test.ts` cobre cada item
   ponto**. Requisitos originais continuam valendo depois de pago. Testes:
   `tests/martial-arts.test.ts` (pool único, devolução, recusa).
 
+- **Especializações no Card 03**: as 4 formas (Karate, Taekwondo, Judo, Aikido) **saíram da
+  lista de perícias** e ganharam um painel próprio no Card 03, entre Ataques e Special Moves,
+  com **↑/↓** para subir/reverter nível (custo escalonado em pontos de MA), saldo do bolso e
+  aviso de dívida. A perícia-mãe `Martial Arts` continua na lista de perícias (compra com IP)
+  e exibe badge `N pontos livres` — ela é a **única fonte** dos pontos: 1 ponto por nível.
+
 **Fora do escopo desta rodada** (detalhado em `PENDENCIAS.md`): Grapple/Grab/Choke/Throw não existem no
 app, ROF 2 é informativo (não há economia de ações), o estado do turno é **manual** no painel do Card 03 e
 efeitos que miram um alvo (lesões, ablação, Prone) são **relatados**, não aplicados — a ficha do jogador

@@ -138,7 +138,12 @@ Decisões que valem revisão:
 - **Especializações de Artes Marciais não compram com IP nem pontos de criação**: só com
   pontos gerados pelos níveis de Martial Arts (1 por nível). Fichas antigas com formas já
   compradas via IP ficam com saldo negativo ("devendo X pts") até a perícia-mãe crescer —
-  display explícito no card de perícia.
+  display explícito no badge da perícia-mãe (lista de perícias) e no painel de especializações.
+- **Painel de especializações no Card 03** (decisão de 26/09/2026): as 4 formas **saíram da
+  lista de perícias** — só o card `Martial Arts` aparece lá (com badge de pontos livres/dívida).
+  O painel "Especializações de Artes Marciais" no Card 03 tem **↑** (subir, custa o nível
+  seguinte do bolso) e **↓** (reverter nível, devolve o mesmo valor), com saldo do bolso e
+  aviso de dívida. A criação continua listando as formas desabilitadas com tag `esp.`.
 
 - **Grapple / Grab / Choke / Throw não existem no app** (procurei e não há implementação — sem agarrar,
   sem Prone, sem Throw). Deixado de fora por decisão de 25/09/2026. Consequência: **Iron Grip** e

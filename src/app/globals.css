@@ -3794,6 +3794,21 @@
 .smc-badge.locked { color: var(--muted); background: #141a16; border: 1px solid #2a3a2d; }
 .smc-pool { margin: 0; font: 600 0.6rem var(--font-geist-mono), monospace; color: #d5ac5a; }
 .smc-pool.unlocked { color: #acd55a; }
+.ma-specializations { margin-top: .5rem; border-top: 1px solid var(--line); padding-top: .45rem; }
+.ma-specializations h3 { margin: 0 0 .35rem; font-size: .7rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: .05em; }
+.ma-points-badge { font: 600 .55rem var(--font-geist-mono), monospace; color: var(--muted); background: #1a2a1c; padding: .1rem .35rem; border-radius: 3px; border: 1px solid #2a4a2d; flex-shrink: 0; }
+.ma-points-line { margin: 0 0 .4rem; font: 500 .55rem var(--font-geist-mono), monospace; color: var(--muted); }
+.ma-points-line.warn { color: #d55a5a; }
+.ma-spec-card { display: flex; align-items: center; gap: .4rem; padding: .35rem 0; border-bottom: 1px solid #1a2a1d; }
+.ma-spec-info { flex: 1; min-width: 0; }
+.ma-spec-name { font-size: .72rem; color: var(--foreground); }
+.ma-spec-level { font: 600 .65rem var(--font-geist-mono), monospace; color: var(--accent); margin-left: .4rem; }
+.ma-spec-actions { display: flex; gap: .2rem; flex-shrink: 0; }
+.ma-spec-btn { width: 1.5rem; height: 1.5rem; display: grid; place-items: center; border-radius: 4px; font-size: .75rem; cursor: pointer; border: 1px solid #3a5a3d; background: transparent; color: var(--accent); transition: all .15s ease; }
+.ma-spec-btn.up:hover:not(:disabled) { background: #1a3a1c; border-color: var(--accent); }
+.ma-spec-btn.down:hover:not(:disabled) { background: #3a1a1c; border-color: #5a3a3d; color: #ff6b6b; }
+.ma-spec-btn:disabled { opacity: .35; cursor: not-allowed; }
+.ma-spec-cost { font: 500 .5rem var(--font-geist-mono), monospace; color: var(--muted); flex-shrink: 0; }
 .smc-requirement, .smc-effect { margin: 0; font-size: 0.68rem; line-height: 1.45; color: var(--muted); }
 .smc-requirement strong { color: var(--foreground); }
 .smc-skill { margin: 0; font: 600 0.6rem var(--font-geist-mono), monospace; color: var(--accent); }

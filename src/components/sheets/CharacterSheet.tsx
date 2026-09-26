@@ -12,6 +12,7 @@ import {
   grantImprovementPoints,
   upgradeSkill,
   upgradeSpecialization,
+  downgradeSpecialization,
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
 import { applyHealingItem, getItemHealAmount, isHealingItem } from "@/lib/healing";
@@ -171,7 +172,7 @@ export default function CharacterSheet({
     awareness: "Awareness", body: "Body", control: "Control", education: "Education", fighting: "Fighting", performance: "Performance", ranged_weapon: "Ranged Weapon", social: "Social", technique: "Technique",
   };
   const skillsByCategory = categoryOrder
-    .map((category) => [category, Object.entries(character.skills).filter(([, skill]) => skill.category === category)] as const)
+    .map((category) => [category, Object.entries(character.skills).filter(([id, skill]) => skill.category === category && !isMartialArtFormSkill(id))] as const)
     .filter(([, skills]) => skills.length > 0)
     .sort((a, b) => a[1].length - b[1].length);
   
@@ -202,11 +203,7 @@ export default function CharacterSheet({
     }
   }
   function improveSkill(skillId: string) {
-    // Formas de Martial Arts são especializações-filhas: sobem com o bolso de pontos da
-    // perícia-mãe (ver getMartialArtsPoints), nunca com IP.
-    const updated = isMartialArtFormSkill(skillId)
-      ? upgradeSpecialization(character, skillId)
-      : upgradeSkill(character, skillId);
+    const updated = upgradeSkill(character, skillId);
     if (updated) {
       // Clear last skill roll if it's the skill being upgraded
       if (lastSkillRoll?.skillId === skillId) {
@@ -214,6 +211,14 @@ export default function CharacterSheet({
       }
       onUpdate(updated);
     }
+  }
+  function upgradeSpec(skillId: string) {
+    const updated = upgradeSpecialization(character, skillId);
+    if (updated) onUpdate(updated);
+  }
+  function downgradeSpec(skillId: string) {
+    const updated = downgradeSpecialization(character, skillId);
+    if (updated) onUpdate(updated);
   }
   function improveRole(roleId: import("@/types/roles").RoleId) {
     const updated = spendIPOnRoleAbility(character, roleId);
@@ -314,6 +319,7 @@ export default function CharacterSheet({
 
   /** Disponibilidade dos 9 moves para o estado atual (perícia, atributos e flags do turno). */
   const specialMoveAvailability = listSpecialMoveAvailability(character, turnState);
+  const maPoints = getMartialArtsPoints(character);
   const allSpecialMovesOpen = specialMoveAvailability.every((entry) => openSpecialMoves[entry.move.id]);
   /** Ação disparada por botão no card de cyberware (ex.: Nano Repair → +2 HP). */
   function handleCyberwareAction(cyberwareId: string) {
@@ -498,31 +504,21 @@ export default function CharacterSheet({
   /** Card de perícia compartilhado pelas duas colunas.
    * `variant: "spec"` = especialização de Martial Arts (aninhada sob a mãe): custa pontos
    * gerados por `martial_arts`, não IP. */
-  function skillCard(id: string, skill: Skill, variant?: "spec") {
-    const isSpec = variant === "spec";
+  function skillCard(id: string, skill: Skill) {
     const base = getSkillBase(character, id);
-    const cost = isSpec ? getSpecializationCost(skill.level) : getSkillUpgradeCost(skill.level, skill.costMultiplier);
-    const canUpgrade = isSpec ? canUpgradeSpecialization(character, id) : canUpgradeSkill(character, id);
+    const cost = getSkillUpgradeCost(skill.level, skill.costMultiplier);
+    const canUpgrade = canUpgradeSkill(character, id);
     const rollResult = lastSkillRoll?.skillId === id ? lastSkillRoll.result : null;
     const isMaxed = skill.level >= 10;
-    const costLabel = isSpec ? `${cost} ponto${cost === 1 ? "" : "s"} de Martial Arts` : `${cost} IP`;
-    const maPoints = id === "martial_arts" && !isSpec ? getMartialArtsPoints(character) : null;
+    const maPoints = id === "martial_arts" ? getMartialArtsPoints(character) : null;
     return (
-      <div className={`skill-card ${isMaxed ? "maxed" : ""}${isSpec ? " skill-spec" : ""}`} key={id}>
+      <div className={`skill-card ${isMaxed ? "maxed" : ""}`} key={id}>
         <div className="skill-card-main">
           <div className="skill-card-info">
             <span className="skill-name">{skill.name}</span>
             <div className="skill-meta">
               <span className="skill-stat">{skill.stat}</span>
-              {isSpec && (
-                <span
-                  className="skill-spec-tag"
-                  title="Especialização de Martial Arts: sobe com os pontos gerados pela perícia-mãe, não com IP"
-                >
-                  esp
-                </span>
-              )}
-              {!isSpec && skill.costMultiplier === 2 && <span className="skill-double-cost">×2</span>}
+              {skill.costMultiplier === 2 && <span className="skill-double-cost">×2</span>}
               {maPoints && (
                 <span
                   className={`skill-ma-points${maPoints.free > 0 ? " has" : ""}${maPoints.balance < 0 ? " debt" : ""}`}
@@ -552,7 +548,7 @@ export default function CharacterSheet({
                 className="skill-upgrade-btn"
                 disabled={!canUpgrade}
                 onClick={() => improveSkill(id)}
-                title={`Custo: ${costLabel}`}
+                title={`Custo: ${cost} IP`}
               >
                 ↑
               </button>
@@ -574,7 +570,7 @@ export default function CharacterSheet({
         </div>
         {!isMaxed && (
           <div className="skill-upgrade-info">
-            <span className="upgrade-cost">{costLabel}</span>
+            <span className="upgrade-cost">{cost} IP</span>
           </div>
         )}
         {rollResult && (
@@ -1171,6 +1167,35 @@ export default function CharacterSheet({
                   </div>
                 );
               })()}
+            <div className="ma-specializations">
+              <div className="special-move-section-head">
+                <h3>Especializações de Artes Marciais</h3>
+                <span className="ma-points-badge">{maPoints.free} pt livre{maPoints.free === 1 ? "" : "s"}</span>
+              </div>
+              <p className={`ma-points-line${maPoints.balance < 0 ? " warn" : ""}`}>
+                MA {maPoints.total} → {maPoints.total} pt · {maPoints.spentSpecializations} espec · {maPoints.spentMoves} moves · {maPoints.free} livre
+                {maPoints.balance < 0 ? ` · devendo ${-maPoints.balance}` : ""}
+              </p>
+              {MARTIAL_ARTS_FORMS.map(({ skillId }) => {
+                const skill = character.skills[skillId];
+                const cost = getSpecializationCost(skill.level);
+                const canUp = canUpgradeSpecialization(character, skillId);
+                const canDown = skill.level > 0;
+                return (
+                  <div className="ma-spec-card" key={skillId}>
+                    <div className="ma-spec-info">
+                      <span className="ma-spec-name">{skill.name}</span>
+                      <span className="ma-spec-level">NV {skill.level}</span>
+                    </div>
+                    <div className="ma-spec-actions">
+                      <button type="button" className="ma-spec-btn up" disabled={!canUp} onClick={() => upgradeSpec(skillId)} title={`Custo: ${cost} ponto${cost === 1 ? "" : "s"} de Martial Arts`}>↑</button>
+                      <button type="button" className="ma-spec-btn down" disabled={!canDown} onClick={() => downgradeSpec(skillId)}>↓</button>
+                    </div>
+                    <span className="ma-spec-cost">{cost}pt</span>
+                  </div>
+                );
+              })}
+            </div>
             <div className="special-move-section-head">
               <h3>Especialidades de Artes Marciais</h3>
               <button
@@ -1565,13 +1590,7 @@ export default function CharacterSheet({
                   <span className="skill-count">{skills.length}</span>
                 </div>
                 <div className="skill-list">
-                  {skills.map(([id, skill]) => (
-                    <React.Fragment key={id}>
-                      {skillCard(id, skill)}
-                      {id === "martial_arts" &&
-                        MARTIAL_ARTS_FORMS.map(({ skillId }) => skillCard(skillId, character.skills[skillId], "spec"))}
-                    </React.Fragment>
-                  ))}
+                  {skills.map(([id, skill]) => skillCard(id, skill))}
                 </div>
               </div>
             ))}
@@ -1584,13 +1603,7 @@ export default function CharacterSheet({
                   <span className="skill-count">{skills.length}</span>
                 </div>
                 <div className="skill-list">
-                  {skills.map(([id, skill]) => (
-                    <React.Fragment key={id}>
-                      {skillCard(id, skill)}
-                      {id === "martial_arts" &&
-                        MARTIAL_ARTS_FORMS.map(({ skillId }) => skillCard(skillId, character.skills[skillId], "spec"))}
-                    </React.Fragment>
-                  ))}
+                  {skills.map(([id, skill]) => skillCard(id, skill))}
                 </div>
               </div>
             ))}

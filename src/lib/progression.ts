@@ -81,6 +81,20 @@ export function upgradeSpecialization(
     },
   };
 }
+
+/** Reverte 1 nível (devolve 1 ponto ao bolso de Martial Arts). */
+export function downgradeSpecialization(
+  character: Character,
+  skillId: string,
+): Character | null {
+  const skill = character.skills[skillId];
+  if (!skill || skill.level <= 0 || !MARTIAL_ARTS_FORMS.some((entry) => entry.skillId === skillId))
+    return null;
+  return {
+    ...character,
+    skills: { ...character.skills, [skillId]: { ...skill, level: skill.level - 1 } },
+  };
+}
 export function canUpgradeSkill(
   character: Character,
   skillId: string,
