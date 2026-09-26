@@ -26,6 +26,71 @@ Detalhes:
 - Token e chaves ficam só no servidor (env server-side) e nunca chegam ao navegador — nada de `NEXT_PUBLIC_*`.
 - Se o Discord ou o banco falhar, a rolagem do site continua funcionando normalmente.
 
+## Mesa online (modo grupo)
+
+Além do modo local (ficha, criação, combate e rolagens funcionando **sem servidor**), o app permite jogar em grupo: um GM cria uma **mesa**, os jogadores entram por um código de 5 caracteres e o **combate é compartilhado** em tempo real.
+
+### Configuração
+
+1. Rode no SQL Editor do Supabase (junto com a migração do Discord) o arquivo `supabase/migrations/20260926000000_mesa_sessions.sql` — cria as tabelas `mesa_sessions`, `mesa_participants`, `mesa_characters`, `mesa_combats` e `mesa_combatants` (RLS habilitado sem policies: só o servidor acessa, via service role).
+2. Adicione ao `.env.local` (as duas últimas variáveis são públicas, vão para o navegador):
+
+```env
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+NEXT_PUBLIC_SUPABASE_URL=        # mesma URL do projeto
+NEXT_PUBLIC_SUPABASE_ANON_KEY=   # Project Settings → API → anon public
+```
+
+3. Sem as variáveis `NEXT_PUBLIC_*` o app não quebra: o modo online passa a usar **polling de 4s** em vez do Realtime. Para tempo real de verdade, preencha-as.
+
+### Como testar com 2+ pessoas (navegadores diferentes)
+
+1. `npm run dev` e abra `http://localhost:3000` no navegador A (o GM).
+2. Na ficha, clique em **🌐 Mesa online** → **[CRIAR MESA]** → nome do GM → **Criar**. A sala abre como **painel sobre a própria ficha** (a URL continua sendo a tela principal); o link de convite é `http://localhost:3000/mesa/XXXXX`.
+3. No navegador B (ou uma janela anônima), abra a mesma ficha e clique em **🌐 Mesa online** → **[ENTRAR EM MESA]** → digite o código → **Entrar**. (O link direto `http://localhost:3000/mesa/XXXXX` também funciona: leva à mesma tela principal com o painel já aberto — **não** existe tela separada de mesa.)
+4. Cada um associa um personagem (**📋 Usar este personagem na Mesa** — uma cópia da ficha vai ao servidor para validação das regras).
+5. O GM abre **⚔️ Encontros**, cria o encontro (facção, nível, inimigos) e clica em **[ ⚔ Iniciar combate na Mesa ]** — os inimigos criados ali entram na mesa partilhada. Depois é só **[ ROLAR INICIATIVA ]** e **▶ Iniciar Turno**: jogadores agem só no próprio turno e com as 2 Actions do turno; o servidor rejeita qualquer ação fora disso (a UI apenas esconde os botões).
+6. **Economia de ações**: `attack/item/other` custam 1 das 2 Actions; **mover custa 0 Actions** e sai de um orçamento próprio de **MOVE × 2 metros por turno** (MOVE 10 → 20 m, com o bônus de cyberware já somado). O jogador digita os metros no campo ao lado de **[ MOVER ]** e o servidor valida o que sobrou. Inimigos usam o MOVE do bestiário (`moveStat`).
+7. Sem abrir o painel, role um ataque na ficha (**🎲 Rolar ataque**, card 03) e reabra a mesa: a rolagem já está em **Dados na mesa** e as Actions do turno foram debitadas.
+8. Repita o teste publicando em dois dispositivos (mesma LAN ou via túnel/ngrok).
+
+> O **código da mesa do Discord** (`🎲 Dados`) é uma coisa diferente do **código de convite da Mesa** (`joinCode`, 5 caracteres). Convite = quem entra na sessão; Discord = para onde a rolagem é publicada.
+
+### Onde a mesa vive na interface
+
+A mesa **não é uma tela separada**. O botão **🌐 Mesa online** fica sempre no nav da ficha; criar/entrar abre a sala como **painel por cima da tela principal** (`MesaRoomDock`), e fechar devolve a ficha exatamente como estava. A rota `/mesa/XXXXX` só existe para o link de convite e monta **a mesma tela principal** com o painel já aberto. O estado "qual mesa está aberta" vive em `src/lib/mesa/mesaUiStore.ts` (em memória — recarregar a página fecha o painel; reabre pelo nav).
+
+**A conexão não depende do painel.** Enquanto houver assinatura em `membershipStore`, o jogador continua na mesa mesmo com o painel fechado (a ficha, o inventário e as rolagens locais seguem funcionando normalmente); o botão do nav vira um indicador **`● Mesa XXXXX`** para mostrar isso. Só há **dois** caminhos de saída:
+
+- o jogador clicar em **[ Sair da mesa ]** — no rodapé da sala ou ao lado de cada mesa na lista do nav (`DELETE /api/mesa/[id]/participant` some com ele na lista de jogadores; o Mestre só pode sair depois de encerrar a sessão);
+- o Mestre **encerrar a sessão** — aí todos caem fora sozinhos, inclusive quem estava com o painel fechado (a conferência acontece ao abrir a tela e, com o painel aberto, em tempo real).
+
+O **[ ⚔ Iniciar combate na Mesa ]** mora em **⚔️ Encontros** (`/gm/encounters`), ao lado do encontro que o Mestre acabou de montar: é dali que os inimigos entram na mesa partilhada. O painel da mesa só aponta para essa tela.
+
+### Dados rolados na ficha valem na mesa
+
+Enquanto o jogador estiver conectado, **o dado rolado na CharacterSheet é a ação da mesa** — não é preciso repetir o clique no painel:
+
+- O espelho acontece no mesmo ponto do espelho do Discord (`CharacterToolkit.onUpdate` → `publishMesaRoll`), **fire-and-forget**: mesa encerrada ou rede fora nunca quebra a ficha local; sem assinatura ativa nada é enviado (modo local intacto).
+- `POST /api/mesa/[id]/combat/roll` valida no servidor com a **mesma `resolveAction`** do botão ATAQUE. No turno do jogador, **ataque, testes de perícia e Evasão debitam 1 Action**. Fora do turno ou sem Actions sobrando, a rolagem **ainda entra no registro**, marcada com o motivo (`· fora do seu turno`, `· sem Actions sobrando`).
+- **Dano, dano recebido e rolagem livre/iniciativa** entram no registro **sem custar Action** (pertencem ao mesmo ataque ou não são ação de combate).
+- As linhas aparecem em **Dados na mesa** (topo do painel de combate) e no **Registro do combate**, com nome, total e expressão: `Zuberi: Ataque Pistola 17 (REF 6 + 1d10 [7])`.
+- Sem combate ativo não há registro: a rolagem não é enviada (`registered: false`). Tipos sem significado na mesa (ex.: humanidade) são recusados com `400 invalid_roll`.
+
+Os botões **[ ATAQUE ]**, **[ ITEM ]** e **[ MOVER ]** do painel continuam existindo como atalho (GM ou jogador sem ficha aberta) — os dois caminhos passam pela **mesma validação** do servidor. A política (quais rolagens vão e quanto custa) fica em `src/lib/mesa/rollPolicy.ts`, módulo puro compartilhado por navegador, servidor e testes.
+
+### Limitações conhecidas (Escopo 1+2)
+
+- **Entrega 3 pendente**: dano/HP/SP/condições/lesões/death saves ainda são resolvidos **no navegador** e apenas replicados para os outros jogadores (o schema e o adaptador `combatEngine.ts` já estão prontos para subir isso para o servidor).
+- Sem contas: a identidade é um token anônimo por navegador (`localStorage`); limpar os dados do navegador libera a mesa (o GM pode re-entrar com o mesmo código).
+- Sem chat, voz, mapa tático ou VTT — só ficha, lobby e painel de combate compartilhado.
+- O Realtime usa **broadcast público por id de sessão** (uuid não adivinhável), não `postgres_changes`.
+
+### Arquitetura em uma linha
+
+`localStorage` continua a fonte da verdade **local**; a Mesa guarda uma **cópia** da ficha em `mesa_characters` (jsonb) para o servidor validar as regras. Toda regra de combate vive em `src/lib/combatEngine.ts` (funções puras), usada **tanto pelo modo local quanto pelo endpoint do servidor** — a única diferença é onde o estado é persistido.
+
 ## Cyberware: o que já aplica efeito
 
 O catálogo (`src/data/items.json`) tem dois campos por item:

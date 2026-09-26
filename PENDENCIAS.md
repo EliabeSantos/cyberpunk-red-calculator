@@ -179,3 +179,73 @@ Decisões que valem revisão:
   desbloqueio em `src/lib/specialMoves.ts` e o bloco do Card 03 — moves voltam a abrir só com
   ≥1 ponto na forma, comprados com IP como antes. **Não gasta IP**: os pontos são gerados
   gratuitamente pelos níveis de Martial Arts.
+
+## Mesa online (implementada em 26/09/2026 — Escopos 1 e 2)
+
+- **Entrega 3 pendente**: dano/HP/SP/condições/lesões/death saves **ainda são calculados no navegador** e
+  apenas replicados aos outros jogadores. O servidor valida permissão, turno, ordem e economia de Actions
+  (2 por turno, `attack/item/other = 1`, `move = 0`), mas não valida o resultado de um ataque. O schema
+  (`mesa_combatants.hp/sp/conditions/injuries`) e o adaptador `src/lib/combatEngine.ts` já estão prontos
+  para subir essa parte para o servidor sem reescrever regras.
+- **Identidade sem contas**: `playerToken` (UUID em `localStorage`, header `x-mesa-token`). Limpar os dados
+  do navegador solta o jogador da mesa; o GM pode re-entrar com o mesmo código (`joinCode` não muda).
+- **Duas codes diferentes** (decisão deliberada): `joinCode` (5 chars, convite da Mesa) × `sessionCode`
+  (código da mesa do Discord em 🎲 Dados). Não foram fundidas para não quebrar o comportamento já testado.
+- **Cópia da ficha no servidor**: `mesa_characters.sheet` é um snapshot jsonb enviado pelo cliente
+  (`maybePushSheet`) — serve para o servidor calcular validações, **não** é a fonte da verdade local.
+  Risco: se a ficha mudar sem o push (ex.: offline), o servidor valida com dados velhos; a UI marca
+  "fora de sincronia" e há `POST /participant` para reenviar.
+- **`mesa_combats.session_id` é UNIQUE**: começar um novo combate **reutiliza e reseta** a linha em vez de
+  criar outra (sem lixo de combates encerrados).
+- **Realtime via broadcast público** por id de sessão (uuid não adivinhável), não `postgres_changes` —
+  por isso o RLS "sem policies" não impede a sincronização. Sem `NEXT_PUBLIC_SUPABASE_*` no build, o
+  cliente cai em polling de 4s (funcional, só mais lento).
+- **Cliente Supabase duplicado**: `src/lib/supabaseAdmin.ts` (novo) coexiste com o de
+  `src/lib/discord/sessionStore.ts` para não mexer em código coberto por testes. Consolidação pendente.
+- **Modo local intocado**: nenhuma tela, storage ou regra do modo offline mudou; a Mesa é um par de botões
+  adicionais no nav da ficha.
+- **A mesa é um painel, não uma rota** (refatoração de 26/09/2026): criar/entrar não navega — a sala abre
+  como overlay (`MesaRoomDock`) montado pelo `CharacterToolkit`, sobre a mesma ficha. A rota `/mesa/XXXXX`
+  passou a renderizar a tela principal com esse painel já aberto (o `MesaRoom` deixou de ser página própria).
+  Estado de UI em `src/lib/mesa/mesaUiStore.ts` (em memória; não sobrevive a reload).
+- **Início do combate saiu da Mesa para Encontros**: o botão **[ ⚔ Iniciar combate na Mesa ]** fica em
+  `/gm/encounters` (`MesaEncounterStart`), pegando os inimigos do encontro criado ali (HP atual + HP máx +
+  REF). O `EnemyPicker` que existia dentro do painel da Mesa foi removido; a API `POST /combatants`
+  (`addEnemies`) continua existindo mas ficou sem UI — pendência: reaproveitá-la para reinforçar o combate
+  em curso com inimigos extras.
+- **`hpMax` opcional no payload de inimigos**: `sanitizeEnemies` aceita `{ name, hp, hpMax?, ref }`; sem
+  `hpMax`, o inimigo entra cheio (`hp_max = hp`). Retrocompatível com clientes antigos.
+- **Conexão persistente e desconexão explícita** (decisão de 26/09/2026): estar na mesa é uma assinatura em
+  `membershipStore`, **independente do painel** — fechar o overlay não desconecta (o nav passa a mostrar
+  `● Mesa XXXXX`). Só há dois caminhos de saída: o botão **[ Sair da mesa ]** (`leaveMesa` → `DELETE
+  /participant` → `removeMembership`) e o Mestre **encerrar a sessão** (efeito no `MesaRoom` + conferência
+  única ao montar o `MesaRoomDock`). `[ ENCERRAR COMBATE ]` **não** derruba ninguém: é entre lutas.
+  Falha de rede **não** desconecta — só 4xx do servidor ou decisão local.
+- **Mestre não sai de sessão aberta**: `leaveSession` devolve 403 `gm_must_finish_session` para `role = "gm"`
+  enquanto `status ≠ finished` (a mesa ficaria sem quem pode encerrá-la). Depois de encerrar, pode sair.
+- **Movimento = MOVE × 2 metros por turno**: `movementMetersPerTurn(MOVE)` em `combatEngine.ts` é a fonte única;
+  o servidor calcula `movement_max` ao criar o combatente (personagem = `stats.MOVE + getCyberwareMoveModifier`,
+  inimigo = `moveStat` do bestiário) e zera `movement_remaining` por `movement_max` **da linha** ao virar turno
+  (não mais por constante). Ficha sem MOVE cai em 6 m (= MOVE 3), igual ao default da coluna.
+- **Encontros salvos antes do campo `moveStat`** caem em MOVE 5 (→ 10 m de orçamento) — decisão simples para
+  não recriar encontros; o campo é gravado a partir de `stats.MOVE` do bestiário em diante.
+- **Combatente órfão quando o jogador sai no meio da luta**: a FK `participant_id on delete set null` mantém o
+  personagem na ordem de iniciativa, comandado só pelo Mestre. Se o mesmo navegador voltar à mesa, entra como
+  participante novo e **não** reassume esse combatente — é o GM quem o move/remove.
+- **Com o painel fechado não há Realtime nem polling**: a conferência de "sessão encerrada" acontece ao montar
+  o `MesaRoomDock` (uma chamada por abertura de tela). Querer estado de conexão em tempo real com o painel
+  fechado exigiria manter o canal aberto para todo navegador conectado (rede em troca de um indicador).
+- **Rolagem da ficha = ação da mesa** (decisão de 26/09/2026): com mesa ativa, cada roll novo do histórico é
+  espelhado por `publishMesaRoll` (`src/lib/mesa/rollPublish.ts` → `POST /api/mesa/[id]/combat/roll`), no mesmo
+  gatilho do espelho do Discord e igualmente **fire-and-forget**. **Ataque, testes de perícia e Evasão debitam
+  1 Action** (mesma `resolveAction` do botão ATAQUE — servidor valida turno/posse/orçamento); **dano, dano
+  recebido e rolagem livre/iniciativa** entram só no registro (custo 0, porque são o mesmo ataque ou não são
+  ação de combate). Fora do turno ou sem Actions a linha **ainda entra**, marcada com o motivo (`· fora do seu
+  turno`, `· sem Actions sobrando`) — a rolagem já aconteceu e não pode ser desfeita. Sem combate ativo nada é
+  enviado (`registered: false`); tipos sem significado na mesa (ex.: `humanity_loss`) dão `400 invalid_roll`.
+  A política fica em `src/lib/mesa/rollPolicy.ts`, módulo puro compartilhado por navegador, servidor e testes.
+- **Limitações do espelho de rolagens**: só passa por ele o que passa por `CharacterToolkit.onUpdate` —
+  rolagens das telas do GM (`enemyRolls`, `/gm/encounters`) **não** vão para a mesa; e o espelho é ida
+  (`ficha → mesa`): o orçamento debitado e a linha em **Dados na mesa** aparecem no painel, não como feedback
+  dentro da ficha. `event_log` continua append-only em jsonb (dois rolls simultâneos podem se sobrescrever,
+  mesma limitação dos demais eventos do combate).
