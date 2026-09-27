@@ -27,8 +27,11 @@ import {
   type CombatActionType,
 } from "@/lib/combatEngine";
 import { getCyberwareMoveModifier } from "@/lib/cyberwareEffects";
+import { mergeBattleRoster, startBattleSnapshot } from "@/lib/mesa/battleHistory";
 import { generateJoinCode, normalizeJoinCode } from "@/lib/mesa/joinCode";
 import type {
+  MesaBattle,
+  MesaBattleCombatant,
   MesaCombat,
   MesaCombatant,
   MesaEvent,
@@ -38,7 +41,13 @@ import type {
 } from "@/lib/mesa/types";
 import { DatabaseQueryError, getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { ACTION_LABELS, DENIAL_MESSAGES } from "@/lib/mesa/messages";
-import { formatRollEvent, MESA_ROLL_ACTION, parseMesaRoll, rollDenialNote } from "@/lib/mesa/rollPolicy";
+import {
+  formatRollEvent,
+  MESA_ROLL_ACTION,
+  parseMesaRoll,
+  planRollDebit,
+  rollDenialNote,
+} from "@/lib/mesa/rollPolicy";
 import { rollInitiative } from "@/lib/initiative";
 import type { Character } from "@/types/character";
 
@@ -98,6 +107,268 @@ async function query<T>(
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// Coluna `source_key` (migração 20260927000000) — presença detectada no uso
+// ---------------------------------------------------------------------------
+
+const SOURCE_KEY_MIGRATION =
+  "Esta mesa precisa da migração 20260927000000_mesa_combatant_source_key.sql no Supabase para espelhar o HP dos inimigos.";
+
+/**
+ * `unknown` = ainda não testado · `yes` = coluna existe · `no` = migração
+ * pendente. Cacheado por processo para não repetir escritas que vão falhar.
+ */
+let sourceKeySupport: "unknown" | "yes" | "no" = "unknown";
+
+function mentionsSourceKey(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("source_key");
+}
+
+function withoutSourceKey(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return rows.map((row) => {
+    const copy = { ...row };
+    delete copy.source_key;
+    return copy;
+  });
+}
+
+/**
+ * Cria as linhas de combatente guardando `source_key`.
+ *
+ * Se a migração ainda não tiver sido aplicada, re-insere SEM a coluna em vez
+ * de derrubar o início do combate: o que se perde é só o espelho de HP dos
+ * inimigos — pessoas, turno e economia de ações continuam funcionando.
+ */
+async function insertCombatantRows(rows: Array<Record<string, unknown>>, context: string): Promise<void> {
+  // Só um insert que LEVA a coluna serve de teste: payload só de personagens
+  // não prova nada sobre a migração.
+  const testsColumn = rows.some((row) => "source_key" in row);
+  try {
+    await query(db().from("mesa_combatants").insert(sourceKeySupport === "no" ? withoutSourceKey(rows) : rows), context);
+    if (testsColumn) sourceKeySupport = "yes";
+  } catch (error) {
+    if (sourceKeySupport === "no" || !mentionsSourceKey(error)) throw error;
+    sourceKeySupport = "no";
+    await query(db().from("mesa_combatants").insert(withoutSourceKey(rows)), context);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Partida (histórico) — tabela `mesa_battles` (migração 20260927000001)
+// ---------------------------------------------------------------------------
+
+const BATTLE_MIGRATION =
+  "Esta mesa precisa da migração 20260927000001_mesa_battles.sql no Supabase para registrar o histórico de partidas e impedir encontro repetido.";
+
+/**
+ * `unknown` = ainda não testado · `yes` = tabela existe · `no` = migração
+ * pendente. Cacheado por processo, igual a `sourceKeySupport`.
+ *
+ * Sem a tabela o combate continua começando (só não há histórico nem bloqueio
+ * de encontro repetido) — a feature nova não pode regressar a luta em si.
+ */
+let battleSupport: "unknown" | "yes" | "no" = "unknown";
+
+/** Postgres para tabela inexistente: `relation "public.mesa_battles" does not exist`. */
+function missingBattleTable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("mesa_battles") &&
+    error.message.includes("does not exist")
+  );
+}
+
+interface BattleRow {
+  id: string;
+  session_id: string;
+  join_code: string;
+  encounter_id: string | null;
+  encounter_name: string;
+  status: MesaBattle["status"];
+  started_at: string;
+  ended_at: string | null;
+  final_round: number | null;
+  combatants: MesaBattleCombatant[] | null;
+  event_log: MesaEvent[] | null;
+}
+
+function toBattle(row: BattleRow): MesaBattle {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    joinCode: row.join_code,
+    encounterId: row.encounter_id,
+    encounterName: row.encounter_name,
+    status: row.status,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    finalRound: row.final_round,
+    combatants: Array.isArray(row.combatants) ? row.combatants : [],
+  };
+}
+
+/** Combatentes da mesa, na ordem da iniciativa (lê todos, inclusive os que saíram). */
+async function listCombatants(sessionId: string): Promise<CombatantRow[]> {
+  const rows = (await query(
+    db().from("mesa_combatants").select("*").eq("session_id", sessionId).order("sort_order"),
+    "Falha ao consultar combatentes",
+  )) as CombatantRow[] | null;
+  return rows ?? [];
+}
+
+/** A partida já lançada por ESTE encontro, se houver. Sem migração: `null`. */
+async function findBattleByEncounter(encounterId: string): Promise<BattleRow | null> {
+  if (battleSupport === "no") return null;
+  try {
+    const row = (await query(
+      db().from("mesa_battles").select("*").eq("encounter_id", encounterId).maybeSingle(),
+      "Falha ao consultar a partida",
+    )) as BattleRow | null;
+    battleSupport = "yes";
+    return row;
+  } catch (error) {
+    if (missingBattleTable(error)) {
+      battleSupport = "no";
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Reserva o registro da partida ANTES de mexer no combate: o UNIQUE de
+ * `encounter_id` é a autoridade contra encontro repetido, e falhar aqui não
+ * deixa nada pela metade.
+ *
+ * Devolve `null` quando a migração está pendente (aí não há o que registrar).
+ */
+async function reserveBattle(input: {
+  sessionId: string;
+  joinCode: string;
+  encounterId: string | null;
+  encounterName: string;
+}): Promise<string | null> {
+  if (battleSupport === "no") return null;
+  try {
+    const created = (await query(
+      db()
+        .from("mesa_battles")
+        .insert({
+          session_id: input.sessionId,
+          join_code: input.joinCode,
+          encounter_id: input.encounterId,
+          encounter_name: input.encounterName.slice(0, 60),
+          status: "active",
+        })
+        .select("id")
+        .single(),
+      "Falha ao registrar a partida",
+    )) as { id: string } | null;
+    battleSupport = "yes";
+    return created?.id ?? null;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("duplicate key")) {
+      // Corrida entre dois lançamentos do mesmo encontro: o banco decidiu.
+      throw new MesaError(
+        "Este encontro já foi usado em uma partida e não pode ser iniciado de novo.",
+        409,
+        "encounter_used",
+      );
+    }
+    if (missingBattleTable(error)) {
+      battleSupport = "no";
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Guarda com que vida cada combatente entrou na partida.
+ *
+ * Falhar aqui NÃO derruba o combate que já começou: o registro continua lá
+ * (só sem o snapshot de entrada) e o fechamento ainda grava a vida final.
+ */
+async function updateBattleRoster(battleId: string, combatants: MesaBattleCombatant[]): Promise<void> {
+  if (battleSupport === "no") return;
+  try {
+    await query(
+      db().from("mesa_battles").update({ combatants }).eq("id", battleId),
+      "Falha ao registrar os combatentes da partida",
+    );
+  } catch (error) {
+    if (missingBattleTable(error)) battleSupport = "no";
+    // qualquer outra falha aqui é só perda de histórico: o combate segue.
+  }
+}
+
+/** Apaga uma reserva órfã (o lançamento falhou no meio). */
+async function discardBattle(battleId: string): Promise<void> {
+  try {
+    await query(db().from("mesa_battles").delete().eq("id", battleId), "Falha ao descartar a partida");
+  } catch {
+    // O erro real do lançamento é quem importa; uma reserva que sobrar só
+    // mantém o encontro bloqueado (o lado seguro do bloqueio).
+  }
+}
+
+/**
+ * Fecha a partida ativa da sessão com o estado final.
+ *
+ * Chamado em TODOS os fins de combate: GM encerrar, sessão encerrar e fim
+ * automático (todos os inimigos caídos). Idempotente — sem partida ativa é um
+ * no-op, então pode ser chamada sem medo nos caminhos defensivos.
+ */
+async function completeActiveBattle(sessionId: string): Promise<void> {
+  if (battleSupport === "no") return;
+
+  let battle: BattleRow | null;
+  try {
+    battle = (await query(
+      db()
+        .from("mesa_battles")
+        .select("*")
+        .eq("session_id", sessionId)
+        .eq("status", "active")
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      "Falha ao consultar a partida",
+    )) as BattleRow | null;
+    battleSupport = "yes";
+  } catch (error) {
+    if (missingBattleTable(error)) {
+      battleSupport = "no";
+      return;
+    }
+    throw error;
+  }
+  if (!battle) return;
+
+  const combatants = await listCombatants(sessionId);
+  const combat = (await query(
+    db().from("mesa_combats").select("*").eq("session_id", sessionId).maybeSingle(),
+    "Falha ao consultar o combate",
+  )) as CombatRow | null;
+
+  await query(
+    db()
+      .from("mesa_battles")
+      .update({
+        status: "completed",
+        ended_at: new Date().toISOString(),
+        final_round: combat?.round ?? battle.final_round ?? 1,
+        combatants: mergeBattleRoster(
+          Array.isArray(battle.combatants) ? battle.combatants : [],
+          combatants.map((row) => toCombatant(row)),
+        ),
+        event_log: Array.isArray(combat?.event_log) ? combat.event_log : [],
+      })
+      .eq("id", battle.id),
+    "Falha ao concluir a partida",
+  );
+}
+
 interface SessionRow {
   id: string;
   name: string;
@@ -138,6 +409,7 @@ interface CombatantRow {
   character_id: string | null;
   participant_id: string | null;
   name: string;
+  source_key?: string | null;
   initiative: number | null;
   initiative_detail: MesaCombatant["initiativeDetail"];
   actions_max: number;
@@ -196,6 +468,7 @@ function toCombatant(row: CombatantRow): MesaCombatant {
     characterId: row.character_id,
     participantId: row.participant_id,
     name: row.name,
+    sourceKey: row.source_key ?? null,
     initiative: row.initiative,
     initiativeDetail: row.initiative_detail ?? null,
     actionsMax: row.actions_max,
@@ -577,21 +850,87 @@ function movementBudgetFor(sheet: Character): number {
   return movementMetersPerTurn(move + getCyberwareMoveModifier({ cyberware }));
 }
 
-/** Reinicia (ou cria) o combate da mesa e monta os combatentes vinculados. */
+/**
+ * Leitura do encontro que originou o combate (`body.encounter`).
+ *
+ * Só o `id` importa para o vínculo (é ele que o banco torna único); o nome é
+ * rótulo do histórico. Encontro ausente/velho = combate avulso, sem vínculo.
+ */
+function sanitizeEncounterRef(raw: unknown): { id: string; name: string } | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  const id = typeof value.id === "string" ? value.id.trim() : "";
+  if (!id || id.length > 120) return null;
+  const name = typeof value.name === "string" && value.name.trim() ? value.name.trim() : "Encontro";
+  return { id, name: name.slice(0, 60) };
+}
+
+/**
+ * Reinicia (ou cria) o combate da mesa e monta os combatentes vinculados.
+ *
+ * Quando o pedido vem de um encontro, nasce junto a **partida** dele em
+ * `mesa_battles`: o encontro passa a ser de uso único (o UNIQUE de
+ * `encounter_id` recusa um segundo lançamento em qualquer mesa) e a luta vira
+ * histórico quando terminar.
+ *
+ * `restart: true` pede explicitamente o recomeço da MESMA partida ainda ativa
+ * nesta mesa — é o caminho do "Encerrar e reiniciar" sem fechar a luta dos
+ * outros. Sem ele, partida em andamento é erro.
+ */
 export async function startCombat(input: {
   sessionId: unknown;
   token: unknown;
   enemies?: unknown;
+  encounter?: unknown;
+  restart?: unknown;
 }): Promise<void> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireGM({ session, participant });
   requireActiveSession(session);
 
+  const encounter = sanitizeEncounterRef(input.encounter);
+  const restart = input.restart === true;
+
+  // 1. Encontro checado ANTES de qualquer escrita: falhou aqui e nada mudou.
+  let reuseBattleId: string | null = null;
+  if (encounter) {
+    const prior = await findBattleByEncounter(encounter.id);
+    if (prior) {
+      if (prior.status === "completed") {
+        throw new MesaError(
+          "Este encontro já foi concluído em uma partida e não pode ser iniciado de novo.",
+          409,
+          "encounter_used",
+        );
+      }
+      if (prior.session_id !== session.id) {
+        throw new MesaError(
+          `Este encontro já está em combate na Mesa ${prior.join_code}.`,
+          409,
+          "encounter_in_use",
+        );
+      }
+      if (!restart) {
+        // Código próprio: a UI oferece "reiniciar" SÓ para este caso (a outra
+        // hipótese de `encounter_in_use` é combate em mesa de fora — recomeçar
+        // ali não é possível, é abrir a Mesa certa).
+        throw new MesaError(
+          "Este encontro já está em combate nesta mesa. Reinicie para recomeçar.",
+          409,
+          "encounter_restart",
+        );
+      }
+      // Mesma partida, mesma mesa, GM mandou recomeçar: reaproveita a linha
+      // (um encontro = uma partida no histórico, mesmo reiniciada).
+      reuseBattleId = prior.id;
+    }
+  }
+
   const existingCombat = (await query(
     db().from("mesa_combats").select("*").eq("session_id", session.id).maybeSingle(),
     "Falha ao consultar o combate",
   )) as CombatRow | null;
-  if (existingCombat && existingCombat.status === "active") {
+  if (existingCombat && existingCombat.status === "active" && !reuseBattleId) {
     throw new MesaError("Já existe um combate ativo nesta mesa.", 409, "combat_already_active");
   }
 
@@ -606,93 +945,119 @@ export async function startCombat(input: {
     throw new MesaError("Vincule ao menos um personagem ou inimigo antes de iniciar o combate.", 400, "no_combatants");
   }
 
-  // Reutiliza a linha de combate (session_id é único) para permitir um novo
-  // combate depois de um anterior encerrado.
-  let combatId: string;
-  if (existingCombat) {
-    await query(db().from("mesa_combatants").delete().eq("combat_id", existingCombat.id), "Falha ao limpar combatentes");
-    const reset = (await query(
-      db()
-        .from("mesa_combats")
-        .update({
-          status: "active",
-          round: 1,
-          active_combatant_id: null,
-          turn_started_at: null,
-          initiative_started: false,
-          event_log: [],
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existingCombat.id)
-        .select("*")
-        .single(),
-      "Falha ao reiniciar o combate",
-    )) as CombatRow | null;
-    combatId = (reset ?? existingCombat).id;
-  } else {
-    const created = (await query(
-      db()
-        .from("mesa_combats")
-        .insert({ session_id: session.id, status: "active", round: 1, initiative_started: false, event_log: [] })
-        .select("*")
-        .single(),
-      "Falha ao criar o combate",
-    )) as CombatRow | null;
-    if (!created) throw new MesaError("Não foi possível iniciar o combate.", 500, "combat_failed");
-    combatId = created.id;
+  // 2. Reserva o registro da partida (o UNIQUE é a autoridade contra encontro
+  //    repetido). Toda escrita abaixo acontece dentro de um try que desfaz a
+  //    reserva se algo falhar.
+  const battleId =
+    reuseBattleId ??
+    (await reserveBattle({
+      sessionId: session.id,
+      joinCode: session.joinCode,
+      encounterId: encounter?.id ?? null,
+      encounterName: encounter?.name ?? "Combate",
+    }));
+
+  try {
+    // Reutiliza a linha de combate (session_id é único) para permitir um novo
+    // combate depois de um anterior encerrado.
+    let combatId: string;
+    if (existingCombat) {
+      await query(db().from("mesa_combatants").delete().eq("combat_id", existingCombat.id), "Falha ao limpar combatentes");
+      const reset = (await query(
+        db()
+          .from("mesa_combats")
+          .update({
+            status: "active",
+            round: 1,
+            active_combatant_id: null,
+            turn_started_at: null,
+            initiative_started: false,
+            event_log: [],
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", existingCombat.id)
+          .select("*")
+          .single(),
+        "Falha ao reiniciar o combate",
+      )) as CombatRow | null;
+      combatId = (reset ?? existingCombat).id;
+    } else {
+      const created = (await query(
+        db()
+          .from("mesa_combats")
+          .insert({ session_id: session.id, status: "active", round: 1, initiative_started: false, event_log: [] })
+          .select("*")
+          .single(),
+        "Falha ao criar o combate",
+      )) as CombatRow | null;
+      if (!created) throw new MesaError("Não foi possível iniciar o combate.", 500, "combat_failed");
+      combatId = created.id;
+    }
+
+    const rows: Record<string, unknown>[] = [];
+    let sortOrder = 0;
+
+    for (const row of participantsRow) {
+      if (!row.character_id) continue;
+      const sheet = await loadSheet(row.character_id);
+      if (!sheet) continue;
+      // MOVE × 2 metros por turno — mesma regra do modo local, calculada aqui.
+      const movement = movementBudgetFor(sheet);
+      rows.push({
+        combat_id: combatId,
+        session_id: session.id,
+        kind: "character",
+        character_id: row.character_id,
+        participant_id: row.id,
+        name: (sheet.identity?.name || row.display_name).slice(0, 60),
+        actions_max: ACTIONS_PER_TURN,
+        actions_remaining: ACTIONS_PER_TURN,
+        movement_max: movement,
+        movement_remaining: movement,
+        hp_current: sheet.combat.hp.current,
+        hp_max: sheet.combat.hp.max,
+        is_dead: Boolean(sheet.combat.isDead),
+        sort_order: sortOrder++,
+      });
+    }
+
+    for (const enemy of enemies) {
+      const movement = enemyMovementBudget(enemy.move);
+      rows.push({
+        combat_id: combatId,
+        session_id: session.id,
+        kind: "enemy",
+        name: enemy.name,
+        // Chave do participante do encontro: é por ela que o HP aplicado lá em
+        // Encontros acha esta linha aqui (ver `syncCombatHp`).
+        source_key: enemy.key,
+        initiative_detail: { refBonus: enemy.ref },
+        actions_max: ACTIONS_PER_TURN,
+        actions_remaining: ACTIONS_PER_TURN,
+        movement_max: movement,
+        movement_remaining: movement,
+        hp_current: enemy.hp,
+        hp_max: enemy.hpMax,
+        is_dead: false,
+        sort_order: sortOrder++,
+      });
+    }
+
+    if (rows.length === 0) throw new MesaError("Nenhum combatente pôde ser criado.", 400, "no_combatants");
+
+    await insertCombatantRows(rows, "Falha ao criar os combatentes");
+    await query(db().from("mesa_sessions").update({ status: "active", updated_at: new Date().toISOString() }).eq("id", session.id), "Falha ao atualizar a mesa");
+    await appendEvent(combatId, { kind: "combat_started", text: "Combate iniciado" }, []);
+
+    // 3. Snapshot de ENTRADA da partida: com que vida cada linha começou.
+    if (battleId) {
+      const combatants = await listCombatants(session.id);
+      await updateBattleRoster(battleId, startBattleSnapshot(combatants.map((row) => toCombatant(row))));
+    }
+  } catch (error) {
+    if (battleId && !reuseBattleId) await discardBattle(battleId);
+    throw error;
   }
-
-  const rows: Record<string, unknown>[] = [];
-  let sortOrder = 0;
-
-  for (const row of participantsRow) {
-    if (!row.character_id) continue;
-    const sheet = await loadSheet(row.character_id);
-    if (!sheet) continue;
-    // MOVE × 2 metros por turno — mesma regra do modo local, calculada aqui.
-    const movement = movementBudgetFor(sheet);
-    rows.push({
-      combat_id: combatId,
-      session_id: session.id,
-      kind: "character",
-      character_id: row.character_id,
-      participant_id: row.id,
-      name: (sheet.identity?.name || row.display_name).slice(0, 60),
-      actions_max: ACTIONS_PER_TURN,
-      actions_remaining: ACTIONS_PER_TURN,
-      movement_max: movement,
-      movement_remaining: movement,
-      hp_current: sheet.combat.hp.current,
-      hp_max: sheet.combat.hp.max,
-      is_dead: Boolean(sheet.combat.isDead),
-      sort_order: sortOrder++,
-    });
-  }
-
-  for (const enemy of enemies) {
-    const movement = enemyMovementBudget(enemy.move);
-    rows.push({
-      combat_id: combatId,
-      session_id: session.id,
-      kind: "enemy",
-      name: enemy.name,
-      initiative_detail: { refBonus: enemy.ref },
-      actions_max: ACTIONS_PER_TURN,
-      actions_remaining: ACTIONS_PER_TURN,
-      movement_max: movement,
-      movement_remaining: movement,
-      hp_current: enemy.hp,
-      hp_max: enemy.hpMax,
-      is_dead: false,
-      sort_order: sortOrder++,
-    });
-  }
-
-  if (rows.length === 0) throw new MesaError("Nenhum combatente pôde ser criado.", 400, "no_combatants");
-
-  await query(db().from("mesa_combatants").insert(rows), "Falha ao criar os combatentes");
-  await query(db().from("mesa_sessions").update({ status: "active", updated_at: new Date().toISOString() }).eq("id", session.id), "Falha ao atualizar a mesa");
-  await appendEvent(combatId, { kind: "combat_started", text: "Combate iniciado" }, []);
 }
 
 interface EnemyInput {
@@ -704,6 +1069,8 @@ interface EnemyInput {
   ref: number;
   /** STAT MOVE do inimigo; `null` quando o cliente não informou (fallback 6 m). */
   move: number | null;
+  /** Chave estável do participante do encontro (vira `source_key`). */
+  key: string | null;
 }
 
 /** MOVE × 2 metros quando o encontro informa o MOVE; senão o fallback do motor. */
@@ -730,7 +1097,11 @@ function sanitizeEnemies(raw: unknown): EnemyInput[] {
       enemy.move === undefined || enemy.move === null || !Number.isFinite(rawMove)
         ? null
         : Math.max(0, Math.min(20, Math.floor(rawMove)));
-    return { name, hp, hpMax, ref, move };
+    // Chave de origem (opcional): identifica QUAL participante do encontro é
+    // este inimigo, para o HP aplicado lá chegar a esta linha.
+    const rawKey = typeof enemy.key === "string" ? enemy.key.trim() : "";
+    const key = rawKey.length > 0 ? rawKey.slice(0, 80) : null;
+    return { name, hp, hpMax, ref, move, key };
   });
 }
 
@@ -762,6 +1133,7 @@ export async function addEnemies(input: {
       session_id: session.id,
       kind: "enemy" as const,
       name: enemy.name,
+      source_key: enemy.key,
       // Já em combate: entra no fim da ordem com iniciativa 0.
       initiative: combat.initiative_started ? 0 : null,
       initiative_detail: { refBonus: enemy.ref },
@@ -776,7 +1148,7 @@ export async function addEnemies(input: {
     };
   });
 
-  await query(db().from("mesa_combatants").insert(rows), "Falha ao adicionar inimigos");
+  await insertCombatantRows(rows, "Falha ao adicionar inimigos");
   await appendEvent(combat.id, { kind: "enemy", text: `${rows.length} inimigo(s) adicionado(s)` }, []);
 }
 
@@ -845,6 +1217,148 @@ export async function updateCombatant(input: {
   if (Object.keys(update).length === 0) throw new MesaError("Nada para atualizar.", 400, "empty_patch");
 
   await query(db().from("mesa_combatants").update(update).eq("id", row.id), "Falha ao atualizar o combatente");
+}
+
+// ---------------------------------------------------------------------------
+// Espelho de VIDA (HP) — da origem PARA a mesa
+// ---------------------------------------------------------------------------
+
+function sanitizeSourceKey(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  return value.length > 0 ? value.slice(0, 80) : null;
+}
+
+function sanitizeHp(raw: unknown): number {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) throw new MesaError("HP inválido.", 400, "invalid_hp");
+  return Math.floor(value);
+}
+
+/** Linha de inimigo pela chave do participante do encontro que o originou. */
+async function findEnemyBySourceKey(combatId: string, key: string): Promise<CombatantRow | null> {
+  if (sourceKeySupport === "no") throw new MesaError(SOURCE_KEY_MIGRATION, 503, "migration_pending");
+  try {
+    const rows = (await query(
+      db()
+        .from("mesa_combatants")
+        .select("*")
+        .eq("combat_id", combatId)
+        .eq("kind", "enemy")
+        .eq("source_key", key)
+        .order("sort_order")
+        .limit(1),
+      "Falha ao consultar o inimigo",
+    )) as CombatantRow[] | null;
+    return rows?.[0] ?? null;
+  } catch (error) {
+    if (mentionsSourceKey(error)) {
+      sourceKeySupport = "no";
+      throw new MesaError(SOURCE_KEY_MIGRATION, 503, "migration_pending");
+    }
+    throw error;
+  }
+}
+
+/**
+ * Inimigo pela chave do encontro, sem derrubar a rolagem se a migração do
+ * `source_key` estiver pendente: nesse caso a linha não é encontrada e o dado
+ * vira relatório (entra no Registro, não debita) — mesmo degradado o Mestre
+ * continua rolando na tela do encontro.
+ */
+async function findEnemyForRoll(combatId: string, key: string): Promise<CombatantRow | null> {
+  try {
+    return await findEnemyBySourceKey(combatId, key);
+  } catch (error) {
+    if (error instanceof MesaError && error.code === "migration_pending") return null;
+    throw error;
+  }
+}
+
+/** Combatente do próprio participante (ficha dele é quem manda no HP). */
+async function findOwnCombatant(combatId: string, participantId: string): Promise<CombatantRow | null> {
+  const rows = (await query(
+    db()
+      .from("mesa_combatants")
+      .select("*")
+      .eq("combat_id", combatId)
+      .eq("participant_id", participantId)
+      .order("sort_order")
+      .limit(1),
+    "Falha ao consultar o combatente",
+  )) as CombatantRow[] | null;
+  return rows?.[0] ?? null;
+}
+
+/**
+ * Sincroniza a VIDA de um combatente com o valor da ORIGEM.
+ *
+ * Um sentindo só (decisão de 27/09/2026): quem manda é a ficha do jogador e o
+ * encontro do Mestre — a mesa apenas exibe. Um ajuste manual feito no painel da
+ * mesa é sobrescrito na próxima mudança da origem; não há escrita de volta na
+ * ficha (evita loop e respeita o localStorage do jogador como fonte da verdade).
+ *
+ * Dois caminhos:
+ *   • **sem `key`** → o combatente ligado a ESTE participante (qualquer papel);
+ *   • **com `key`** → inimigo pelo `source_key` — somente Mestre, que é quem
+ *     aplica dano em `/gm/encounters`.
+ *
+ * Sem combate ativo ou sem combatente correspondente não dá erro: devolve
+ * `{ updated: false }` e nada muda (o chamador é fire-and-forget).
+ */
+export async function syncCombatHp(input: {
+  sessionId: unknown;
+  token: unknown;
+  hp?: unknown;
+  hpMax?: unknown;
+  isDead?: unknown;
+  key?: unknown;
+}): Promise<{ updated: boolean }> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  if (session.status === "finished") return { updated: false };
+
+  const hp = sanitizeHp(input.hp);
+  const hpMax =
+    typeof input.hpMax === "number" && Number.isFinite(input.hpMax) ? Math.max(1, Math.floor(input.hpMax)) : null;
+  const key = sanitizeSourceKey(input.key);
+  if (key) requireGM({ session, participant });
+
+  const combat = await getActiveCombat(session.id);
+  if (!combat) return { updated: false };
+
+  const row = key
+    ? await findEnemyBySourceKey(combat.id, key)
+    : await findOwnCombatant(combat.id, participant.id);
+  if (!row) return { updated: false };
+
+  const max = hpMax ?? row.hp_max;
+  const clamped = Math.max(-999, Math.min(max, hp));
+  const update: Record<string, unknown> = { hp_current: clamped };
+  if (hpMax !== null) update.hp_max = hpMax;
+
+  if (key) {
+    // Inimigo não faz death save nesta aplicação: 0 HP = fora da ordem de turno,
+    // cura acima de 0 = volta a agir. Regra determinística, sem estado próprio.
+    update.is_dead = clamped <= 0;
+  } else if (typeof input.isDead === "boolean") {
+    // Ficha manda: morte só quando a ficha diz morte (0 HP com death save
+    // pendente continua em jogo, como no modo local).
+    update.is_dead = input.isDead;
+  } else if (clamped > 0) {
+    update.is_dead = false;
+  }
+
+  try {
+    await query(db().from("mesa_combatants").update(update).eq("id", row.id), "Falha ao atualizar o HP");
+  } catch (error) {
+    if (mentionsSourceKey(error)) {
+      sourceKeySupport = "no";
+      throw new MesaError(SOURCE_KEY_MIGRATION, 503, "migration_pending");
+    }
+    throw error;
+  }
+
+  return { updated: true };
 }
 
 /** Rola a iniciativa de todos (somente GM) e abre o primeiro turno. */
@@ -997,6 +1511,8 @@ async function advanceActiveTurn(sessionId: string, combat: CombatRow, log: Mesa
       "Falha ao encerrar o combate",
     );
     await appendEvent(combat.id, { kind: "combat_finished", text: "Combate encerrado" }, log);
+    // Todos os inimigos caíram: a partida encerra sozinha e vira histórico.
+    await completeActiveBattle(sessionId);
     return;
   }
 
@@ -1119,12 +1635,19 @@ export async function performAction(input: {
 }
 
 /**
- * Registra uma rolagem feita NA ficha de um participante conectado à mesa.
+ * Registra uma rolagem feita NA ficha (do jogador) ou NA TELA DO ENCONTRO
+ * (do Mestre) por alguém conectado à mesa.
  *
  * A rolagem usa a MESMA economia do botão ATAQUE: o servidor valida com
  * `resolveAction` (combate ativo? iniciativa? seu turno? sobrou Action?) e só
- * debita se puder. Fora do turno ela ainda entra no Registro do combate — o
- * dado aconteceu e todo mundo deve ver — só que marcada como "não contou".
+ * debita se puder — quem paga é `planRollDebit`. Fora do turno ela ainda entra
+ * no Registro do combate — o dado aconteceu e todo mundo deve ver — só que
+ * marcada como "não contou".
+ *
+ * Com `key` (a chave do participante do encontro) o Mestre rola COM o inimigo:
+ * o débito sai da linha dele na mesa e o Registro passa a usar o nome do
+ * inimigo. Sem chave, o GM segue como relatório puro — comanda inimigos
+ * livremente na CPR e nada é debitado de combatente algum.
  *
  * Sem combate ativo não há registro: devolve `registered: false` e nada muda.
  * O chamador é fire-and-forget; falha aqui nunca pode quebrar a ficha local.
@@ -1133,12 +1656,17 @@ export async function registerRoll(input: {
   sessionId: unknown;
   token: unknown;
   roll: unknown;
+  key?: unknown;
 }): Promise<{ registered: boolean; debited: boolean }> {
   const parsed = parseMesaRoll(input.roll);
   if (!parsed.ok) throw new MesaError(parsed.reason, 400, "invalid_roll");
 
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireActiveSession(session);
+
+  // Chave de inimigo só sai da tela do Mestre (mesma trava do espelho de HP).
+  const key = sanitizeSourceKey(input.key);
+  if (key) requireGM({ session, participant });
 
   const combat = await getActiveCombat(session.id);
   if (!combat) return { registered: false, debited: false };
@@ -1151,51 +1679,52 @@ export async function registerRoll(input: {
     "Falha ao consultar os combatentes",
   )) as CombatantRow[];
 
-  // Só o combatente VINCULADO a este participante pode ser debitado por ele.
+  // Quem esta rolagem representa: o combatente VINCULADO ao participante ou,
+  // quando veio chave, a linha do inimigo vinda do encontro.
   const mine = combatants.find((row) => row.participant_id === participant.id) ?? null;
+  const target = key ? await findEnemyForRoll(combat.id, key) : participant.role === "gm" ? null : mine;
 
-  // GM rola de fora (tela de encontro/inimigo): reporta o dado, nunca debita
-  // Action do combatente — o GM controla inimigos livremente na CPR.
-  const canDebit = actionType !== null && participant.role !== "gm" && mine !== null;
+  const plan = planRollDebit({
+    role: participant.role,
+    actionType,
+    hasKey: key !== null,
+    targetFound: target !== null,
+  });
 
   let debited = false;
-  let denial: string | null = null;
+  let denial: string | null = plan.denial;
 
-  if (canDebit) {
-    if (!mine) {
-      denial = "not_allowed";
+  if (plan.canDebit && target && actionType !== null) {
+    const economy = {
+      actionsMax: target.actions_max,
+      actionsRemaining: target.actions_remaining,
+      movementMax: target.movement_max,
+      movementRemaining: target.movement_remaining,
+    };
+    const result = resolveAction({
+      combatStatus: combat.status,
+      initiativeStarted: combat.initiative_started,
+      activeCombatantId: combat.active_combatant_id,
+      actorRole: participant.role,
+      actorOwnsCombatant: true,
+      combatant: { id: target.id, isDead: target.is_dead, ...economy },
+      actionType,
+      meters: 0,
+    });
+
+    if (result.ok) {
+      const next = applyAction(economy, actionType, 0);
+      await query(
+        db().from("mesa_combatants").update({ actions_remaining: next.actionsRemaining }).eq("id", target.id),
+        "Falha ao consumir a ação",
+      );
+      debited = true;
     } else {
-      const economy = {
-        actionsMax: mine.actions_max,
-        actionsRemaining: mine.actions_remaining,
-        movementMax: mine.movement_max,
-        movementRemaining: mine.movement_remaining,
-      };
-      const result = resolveAction({
-        combatStatus: combat.status,
-        initiativeStarted: combat.initiative_started,
-        activeCombatantId: combat.active_combatant_id,
-        actorRole: participant.role,
-        actorOwnsCombatant: true,
-        combatant: { id: mine.id, isDead: mine.is_dead, ...economy },
-        actionType,
-        meters: 0,
-      });
-
-      if (result.ok) {
-        const next = applyAction(economy, actionType, 0);
-        await query(
-          db().from("mesa_combatants").update({ actions_remaining: next.actionsRemaining }).eq("id", mine.id),
-          "Falha ao consumir a ação",
-        );
-        debited = true;
-      } else {
-        denial = result.reason;
-      }
+      denial = result.reason;
     }
   }
 
-  const actor = mine?.name ?? participant.displayName;
+  const actor = target?.name ?? participant.displayName;
   const note = actionType && !debited ? rollDenialNote(denial) : "";
   await appendEvent(
     combat.id,
@@ -1245,6 +1774,8 @@ export async function endCombat(input: { sessionId: unknown; token: unknown }): 
     "Falha ao encerrar o combate",
   );
   await appendEvent(combat.id, { kind: "combat_finished", text: "Combate encerrado pelo Mestre" }, combat.event_log ?? []);
+  // Fim explícito do Mestre: fecha a partida com o estado final (histórico).
+  await completeActiveBattle(session.id);
 }
 
 /** Encerra a sessão inteira (somente GM). */
@@ -1259,10 +1790,48 @@ export async function finishSession(input: { sessionId: unknown; token: unknown 
       "Falha ao encerrar o combate",
     );
   }
+  // Sessão encerrada com luta rolando: a partida também fecha (histórico).
+  await completeActiveBattle(session.id);
   await query(
     db().from("mesa_sessions").update({ status: "finished", updated_at: new Date().toISOString() }).eq("id", session.id),
     "Falha ao encerrar a sessão",
   );
+}
+
+/**
+ * Histórico de partidas da mesa (somente GM).
+ *
+ * É o que a tela de **⚔️ Encontros** lista como "Histórico de partidas" e com
+ * o que ela reconcilia o vínculo local de cada encontro (concluído / em
+ * andamento) — inclusive a luta que terminou com a tela fechada.
+ *
+ * Sem a migração `20260927000001` devolve `503 migration_pending`: o histórico
+ * é opcional, mas não dá para fingir que está vazio.
+ */
+export async function listBattles(input: { sessionId: unknown; token: unknown }): Promise<MesaBattle[]> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireGM({ session, participant });
+
+  if (battleSupport === "no") throw new MesaError(BATTLE_MIGRATION, 503, "migration_pending");
+  try {
+    const rows = (await query(
+      db()
+        .from("mesa_battles")
+        .select("*")
+        .eq("session_id", session.id)
+        .order("started_at", { ascending: false })
+        .limit(50),
+      "Falha ao consultar o histórico de partidas",
+    )) as BattleRow[] | null;
+    battleSupport = "yes";
+    return (rows ?? []).map(toBattle);
+  } catch (error) {
+    if (missingBattleTable(error)) {
+      battleSupport = "no";
+      throw new MesaError(BATTLE_MIGRATION, 503, "migration_pending");
+    }
+    throw error;
+  }
 }
 
 /**

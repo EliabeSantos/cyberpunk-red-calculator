@@ -1402,10 +1402,6 @@
   gap: 0.25rem;
   padding: 0.5rem 0.75rem;
 }
-.initiative-result-header {
-  display: flex;
-  gap: 0.5rem;
-}
 .initiative-result-formula {
   color: var(--muted);
   font: 0.68rem var(--font-geist-mono), monospace;
@@ -1541,10 +1537,17 @@
 .gm-nav-item-badge { margin-left: auto; padding: .15rem .4rem; background: rgba(199, 255, 61, .15); color: var(--accent); font: 600 .5rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: .06em; border-radius: 3px; }
 .gm-nav-item-disabled { opacity: .5; cursor: not-allowed; }
 .gm-nav-divider { height: 1px; background: var(--line); margin: .5rem 1.25rem; }
-.gm-nav-footer { padding: .75rem 1rem; border-top: 1px solid var(--line); margin-top: auto; }
-.gm-nav-back { display: flex; align-items: center; gap: .6rem; padding: .55rem .75rem; color: var(--muted); text-decoration: none; font-size: .75rem; border-radius: 4px; transition: all .15s ease; border: 1px solid transparent; }
-.gm-nav-back:hover { color: var(--foreground); background: rgba(255, 255, 255, .04); border-color: var(--line); }
-.gm-nav-back-icon { display: grid; place-items: center; width: 1.4rem; height: 1.4rem; font-size: .8rem; background: rgba(255, 255, 255, .04); border-radius: 3px; }
+.gm-nav-footer { display: flex; flex-direction: column; gap: .35rem; padding: .85rem .75rem 1rem; border-top: 1px solid var(--line); margin-top: auto; background: linear-gradient(180deg, rgb(0 0 0 / 0) 0%, rgb(0 0 0 / .3) 100%); }
+.gm-nav-back { display: flex; align-items: center; gap: .7rem; padding: .6rem .75rem; color: var(--muted); text-decoration: none; font: 500 .78rem var(--font-geist-sans), sans-serif; border: 1px solid transparent; border-radius: 4px; transition: all .15s ease; }
+.gm-nav-back:hover { color: var(--foreground); background: rgba(199, 255, 61, .06); border-color: rgba(199, 255, 61, .12); }
+.gm-nav-back-icon { display: grid; place-items: center; width: 1.6rem; height: 1.6rem; font-size: .85rem; background: rgba(255, 255, 255, .04); border-radius: 4px; flex-shrink: 0; transition: all .15s ease; }
+.gm-nav-back:hover .gm-nav-back-icon { background: rgba(199, 255, 61, .15); color: var(--accent); }
+/* Botão da Mesa online (MesaEntry) dentro do rodapé do nav GM */
+.gm-nav-footer > button { display: flex; align-items: center; gap: .7rem; width: 100%; padding: .6rem .75rem; border: 1px solid var(--line); border-radius: 4px; background: rgb(0 0 0 / .25); color: var(--muted); cursor: pointer; font: 500 .78rem var(--font-geist-sans), sans-serif; text-align: left; transition: all .15s ease; }
+.gm-nav-footer > button:hover { color: var(--foreground); border-color: rgba(199, 255, 61, .3); background: rgba(199, 255, 61, .07); }
+.gm-nav-footer > button:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
+.gm-nav-footer > button.mesa-nav-connected { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); font-weight: 700; letter-spacing: .02em; text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
+.gm-nav-footer > button.mesa-nav-connected:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: var(--accent); }
 .gm-page { min-height: 100vh; }
 .gm-page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--line); }
 .gm-page-title { margin: 0; font-size: 1.5rem; color: var(--foreground); }
@@ -2016,10 +2019,20 @@
 
 /* --- Encounter Combat --- */
 .encounter-combat { display: grid; gap: 1.25rem; }
-.encounter-combat-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--line); }
-.encounter-title { margin: 0; font-size: 1.3rem; color: var(--foreground); font-family: var(--font-geist-mono), monospace; }
-.encounter-faction { margin: .3rem 0 0; color: var(--muted); font-size: .85rem; }
-.encounter-combat-actions { display: flex; gap: .5rem; }
+.encounter-combat-header { position: relative; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem 1.5rem; padding: 1.05rem 1.35rem; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 55%), color-mix(in srgb, var(--panel) 96%, transparent); box-shadow: inset 0 1px 0 rgb(255 255 255 / .04), 0 12px 28px rgb(0 0 0 / .3); }
+.encounter-combat-header::after { content: ""; position: absolute; top: -1px; right: -1px; width: 16px; height: 16px; background: linear-gradient(225deg, var(--accent) 0 50%, transparent 50%); opacity: .9; pointer-events: none; }
+.encounter-combat-id { min-width: 0; }
+.encounter-combat-eyebrow { display: inline-flex; align-items: center; gap: .45rem; color: var(--accent); font: 700 .6rem var(--font-geist-mono), monospace; letter-spacing: .2em; text-transform: uppercase; }
+.encounter-combat-eyebrow::before { content: ""; width: .42rem; height: .42rem; background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: encounter-pulse 1.8s ease-in-out infinite; }
+.encounter-title { margin: .4rem 0 0; font-size: 1.35rem; letter-spacing: -.02em; color: var(--foreground); font-family: var(--font-geist-mono), monospace; }
+.encounter-combat-meta { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
+.encounter-meta-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .22rem .55rem; border: 1px solid var(--line); background: rgb(0 0 0 / .35); color: var(--muted); font: 600 .62rem var(--font-geist-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
+.encounter-meta-chip::before { content: "//"; color: var(--accent); font-weight: 700; letter-spacing: 0; }
+.encounter-combat-actions { display: flex; align-items: flex-start; justify-content: flex-end; flex-wrap: wrap; gap: .6rem; margin-left: auto; max-width: min(100%, 34rem); }
+.encounter-action-initiative { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; padding: .55rem 1.1rem; min-height: 2.35rem; letter-spacing: .1em; background: color-mix(in srgb, var(--accent) 10%, transparent); transition: background .2s, color .2s, box-shadow .2s, transform .1s; }
+.encounter-action-initiative:hover { background: var(--accent); color: #111700; box-shadow: 0 0 0 1px var(--accent), 0 6px 20px color-mix(in srgb, var(--accent) 32%, transparent); }
+.encounter-action-initiative:active { transform: translateY(1px); }
+.encounter-action-icon { font-size: .9rem; line-height: 1; }
 .encounter-participants { display: grid; grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr)); gap: .75rem; }
 .encounter-participant-card { border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, transparent); padding: .85rem; cursor: pointer; transition: border-color .2s, background .2s, box-shadow .2s; display: flex; flex-direction: column; gap: .6rem; }
 .encounter-participant-card:hover { border-color: #455049; }
@@ -2054,6 +2067,8 @@
 .epc-tag { display: inline-flex; align-items: center; gap: .2rem; padding: .08rem .35rem; font-size: .6rem; font-family: var(--font-geist-mono), monospace; border-radius: 2px; cursor: default; }
 .epc-tag-personality { background: #1a1a2e; border: 1px solid #6c63ff; color: #b8b5ff; }
 .epc-tag-personality:hover { background: #252545; border-color: #8a83ff; }
+.epc-tag-implant { background: #0f1f1a; border: 1px solid #2fbf9a; color: #b6f0df; }
+.epc-tag-implant:hover { background: #143029; border-color: #4fe0bd; }
 .epc-tag-condition { background: #2a1815; border: 1px solid #ff987b; color: #ffcfbf; }
 .epc-tag-remove { background: transparent; border: none; color: #ff6b6b; cursor: pointer; font-size: .75rem; padding: 0; margin-left: .1rem; line-height: 1; }
 .epc-tag-remove:hover { color: #ff987b; }
@@ -2564,10 +2579,20 @@
 
 /* --- Encounter Combat --- */
 .encounter-combat { display: grid; gap: 1.25rem; }
-.encounter-combat-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--line); }
-.encounter-title { margin: 0; font-size: 1.3rem; color: var(--foreground); font-family: var(--font-geist-mono), monospace; }
-.encounter-faction { margin: .3rem 0 0; color: var(--muted); font-size: .85rem; }
-.encounter-combat-actions { display: flex; gap: .5rem; }
+.encounter-combat-header { position: relative; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem 1.5rem; padding: 1.05rem 1.35rem; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 55%), color-mix(in srgb, var(--panel) 96%, transparent); box-shadow: inset 0 1px 0 rgb(255 255 255 / .04), 0 12px 28px rgb(0 0 0 / .3); }
+.encounter-combat-header::after { content: ""; position: absolute; top: -1px; right: -1px; width: 16px; height: 16px; background: linear-gradient(225deg, var(--accent) 0 50%, transparent 50%); opacity: .9; pointer-events: none; }
+.encounter-combat-id { min-width: 0; }
+.encounter-combat-eyebrow { display: inline-flex; align-items: center; gap: .45rem; color: var(--accent); font: 700 .6rem var(--font-geist-mono), monospace; letter-spacing: .2em; text-transform: uppercase; }
+.encounter-combat-eyebrow::before { content: ""; width: .42rem; height: .42rem; background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: encounter-pulse 1.8s ease-in-out infinite; }
+.encounter-title { margin: .4rem 0 0; font-size: 1.35rem; letter-spacing: -.02em; color: var(--foreground); font-family: var(--font-geist-mono), monospace; }
+.encounter-combat-meta { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
+.encounter-meta-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .22rem .55rem; border: 1px solid var(--line); background: rgb(0 0 0 / .35); color: var(--muted); font: 600 .62rem var(--font-geist-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
+.encounter-meta-chip::before { content: "//"; color: var(--accent); font-weight: 700; letter-spacing: 0; }
+.encounter-combat-actions { display: flex; align-items: flex-start; justify-content: flex-end; flex-wrap: wrap; gap: .6rem; margin-left: auto; max-width: min(100%, 34rem); }
+.encounter-action-initiative { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; padding: .55rem 1.1rem; min-height: 2.35rem; letter-spacing: .1em; background: color-mix(in srgb, var(--accent) 10%, transparent); transition: background .2s, color .2s, box-shadow .2s, transform .1s; }
+.encounter-action-initiative:hover { background: var(--accent); color: #111700; box-shadow: 0 0 0 1px var(--accent), 0 6px 20px color-mix(in srgb, var(--accent) 32%, transparent); }
+.encounter-action-initiative:active { transform: translateY(1px); }
+.encounter-action-icon { font-size: .9rem; line-height: 1; }
 .encounter-participants { display: grid; grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr)); gap: .75rem; }
 .encounter-participant-card { border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, transparent); padding: .85rem; cursor: pointer; transition: border-color .2s, background .2s, box-shadow .2s; display: flex; flex-direction: column; gap: .6rem; }
 .encounter-participant-card:hover { border-color: #455049; }
@@ -2602,6 +2627,8 @@
 .epc-tag { display: inline-flex; align-items: center; gap: .2rem; padding: .08rem .35rem; font-size: .6rem; font-family: var(--font-geist-mono), monospace; border-radius: 2px; cursor: default; }
 .epc-tag-personality { background: #1a1a2e; border: 1px solid #6c63ff; color: #b8b5ff; }
 .epc-tag-personality:hover { background: #252545; border-color: #8a83ff; }
+.epc-tag-implant { background: #0f1f1a; border: 1px solid #2fbf9a; color: #b6f0df; }
+.epc-tag-implant:hover { background: #143029; border-color: #4fe0bd; }
 .epc-tag-condition { background: #2a1815; border: 1px solid #ff987b; color: #ffcfbf; }
 .epc-tag-remove { background: transparent; border: none; color: #ff6b6b; cursor: pointer; font-size: .75rem; padding: 0; margin-left: .1rem; line-height: 1; }
 .epc-tag-remove:hover { color: #ff987b; }
@@ -2762,7 +2789,8 @@
   .gm-nav-list { flex-direction: row; gap: .25rem; padding: 0; }
   .gm-nav-item { padding: .4rem .6rem; }
   .gm-nav-item-active::before { display: none; }
-  .gm-nav-footer { border-top: none; border-left: 1px solid var(--line); margin-top: 0; padding: .5rem 1rem; }
+  .gm-nav-footer { flex-direction: row; align-items: center; gap: .5rem; border-top: none; border-left: 1px solid var(--line); margin-top: 0; padding: .5rem 1rem; background: none; }
+  .gm-nav-footer > button { width: auto; padding: .5rem .7rem; }
 }
 
 /* --- GM Create Page Responsive --- */
@@ -3366,9 +3394,10 @@
   .gm-nav-item { padding: 0.65rem 1rem; min-height: 44px; }
   .gm-nav-item-active::before { display: block; left: 0; }
 
-  /* "Voltar" no rodapé acompanha a largura da lista */
-  .gm-nav-footer { border-left: none; border-top: 1px solid var(--line); margin-top: auto; padding: 0.75rem 0; }
+  /* "Voltar" e "Mesa online" no rodapé acompanham a largura da lista */
+  .gm-nav-footer { flex-direction: column; align-items: stretch; gap: 0.35rem; border-left: none; border-top: 1px solid var(--line); margin-top: auto; padding: 0.75rem 0; }
   .gm-nav-back { min-height: 44px; padding: 0.65rem 1rem; }
+  .gm-nav-footer > button { width: 100%; min-height: 44px; padding: 0.65rem 1rem; }
 
   /* Fundo da gaveta: acima do conteúdo, abaixo da barra do topo (z60) */
   .gm-nav-backdrop {
@@ -3670,13 +3699,28 @@
   .encounter-saved-back .gm-button,
   .encounter-empty .gm-button { width: 100%; min-height: 44px; }
 
-  /* ---- Combate: topo empilhado, botão de iniciativa largo ---- */
-  .encounter-combat-header { flex-direction: column; align-items: stretch; gap: 0.75rem; padding-bottom: 0.75rem; }
+  /* ---- Combate: topo empilhado, botões largos ---- */
+  .encounter-combat-header { flex-direction: column; align-items: stretch; gap: 0.85rem; padding: 0.9rem 1rem; }
   .encounter-title { font-size: 1.05rem; }
-  .encounter-faction { font-size: 0.78rem; }
-  .encounter-combat-actions .gm-button { width: 100%; min-height: 44px; }
-  .mesa-encounter-start { width: 100%; align-items: stretch; }
-  .mesa-encounter-start .mesa-notice { max-width: none; }
+  .encounter-combat-meta { margin-top: 0.5rem; }
+  .encounter-combat-actions { justify-content: stretch; max-width: none; margin-left: 0; }
+  .encounter-combat-actions > * { width: 100%; max-width: none; }
+  .encounter-combat-actions .gm-button,
+  .encounter-combat-actions .mesa-ghost { min-height: 44px; }
+  .encounter-action-initiative { min-height: 44px; }
+  /* As regras base de .mesa-encounter-start* vêm DEPOIS deste bloco no
+     arquivo, então aqui precisa de especificidade maior para vencer. */
+  .encounter-combat-actions .mesa-encounter-start { width: 100%; max-width: none; flex-direction: column; align-items: stretch; justify-content: flex-start; }
+  .encounter-combat-actions .mesa-encounter-start .mesa-notice,
+  .encounter-combat-actions .mesa-encounter-start .mesa-hint { flex: 0 0 auto; max-width: none; text-align: left; }
+  .encounter-combat-actions .mesa-encounter-start-code { justify-content: center; }
+  .encounter-combat-actions .mesa-encounter-start-done,
+  .encounter-combat-actions .mesa-encounter-start-busy { flex: 0 0 auto; max-width: none; text-align: left; }
+
+  /* ---- Histórico de partidas: cartão vira coluna, botão largo ---- */
+  .encounter-history-header { flex-wrap: wrap; gap: 0.6rem; padding: 0.65rem 0.75rem; }
+  .encounter-history-header .gm-button { min-height: 44px; }
+  .encounter-history-card-header { flex-direction: column; align-items: flex-start; gap: 0.4rem; }
 
   .encounter-participant-card { padding: 0.75rem; gap: 0.55rem; }
 
@@ -3859,9 +3903,78 @@
 .mesa-start-hint { display: grid; gap: .7rem; justify-items: start; }
 
 /* Botão de lançar o combate partilhado, dentro da tela de Encontros */
-.mesa-encounter-start { display: flex; flex-direction: column; align-items: flex-end; gap: .4rem; }
-.mesa-encounter-start .mesa-notice { margin: 0; max-width: 24rem; }
-.mesa-encounter-start-code { color: var(--muted); font: 600 .6rem var(--font-geist-mono), monospace; letter-spacing: .12em; text-transform: uppercase; }
+@keyframes encounter-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.7); } }
+/* max-width é o que segura o bloco: sem ele a frase do aviso entra no
+   cálculo de largura máxima e empurra o título do encontro para fora. */
+.mesa-encounter-start { display: flex; flex-flow: wrap; align-items: center; justify-content: flex-end; gap: .5rem; min-width: 0; max-width: 22rem; }
+/* Avisos viram uma FAIXA na própria linha, ocupando a largura toda do bloco */
+.mesa-encounter-start .mesa-notice { margin: 0; flex: 1 0 100%; max-width: 100%; padding: .55rem .7rem; border-left-width: 2px; font-size: .74rem; line-height: 1.45; text-align: left; }
+.mesa-encounter-start .mesa-hint { margin: 0; flex: 1 0 100%; font-size: .74rem; line-height: 1.45; text-align: left; }
+.mesa-encounter-start-code { display: inline-flex; align-items: center; gap: .35rem; padding: .3rem .55rem; border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent); font: 600 .6rem var(--font-geist-mono), monospace; letter-spacing: .1em; text-transform: uppercase; }
+.mesa-encounter-start-code::before { content: "▸"; }
+.mesa-encounter-start .mesa-start-primary { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; padding: .55rem 1.1rem; min-height: 2.35rem; letter-spacing: .08em; background: var(--accent); color: #111700; border-color: var(--accent); box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 22%, transparent); transition: filter .2s, box-shadow .2s, transform .1s; }
+.mesa-encounter-start .mesa-start-primary:hover:not(:disabled) { filter: brightness(1.08); box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 42%, transparent); }
+.mesa-encounter-start .mesa-start-primary:active:not(:disabled) { transform: translateY(1px); }
+.mesa-encounter-start .mesa-start-primary:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+.mesa-encounter-start .mesa-start-secondary { border-color: color-mix(in srgb, var(--muted) 55%, transparent); color: var(--muted); }
+.mesa-encounter-start .mesa-start-secondary:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: #111700; }
+.mesa-encounter-start .mesa-ghost { padding: .5rem .75rem; font-size: .68rem; letter-spacing: .06em; }
+
+/* Avisos de encontro já usado (concluído / em combate noutra mesa) */
+.mesa-encounter-start-done,
+.mesa-encounter-start-busy { margin: 0; flex: 1 0 100%; max-width: 100%; padding: .55rem .7rem; border: 1px solid var(--line); border-left-width: 2px; font-size: .74rem; line-height: 1.45; text-align: left; }
+.mesa-encounter-start-done { border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent); }
+.mesa-encounter-start-busy { border-color: #8a6d1f; background: #241d0c; color: #ffd97a; }
+
+/* Selo de vínculo do encontro com uma partida (cartões da lista) */
+.encounter-badge { padding: .08rem .35rem; border: 1px solid var(--line); color: var(--muted); font: 600 .55rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.encounter-badge-done { border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+.encounter-badge-live { border-color: #8a6d1f; background: #241d0c; color: #ffd97a; }
+
+/* --- Histórico de partidas (fim da tela de Encontros) -------------------- */
+.encounter-history { display: grid; gap: .75rem; margin-top: 1.5rem; }
+.encounter-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: .75rem .85rem;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+.encounter-history-header-left { display: flex; align-items: center; gap: .65rem; }
+.encounter-history-icon { font-size: 1.1rem; }
+.encounter-history-title { margin: 0; font: 700 .7rem var(--font-geist-mono), monospace; color: var(--accent); text-transform: uppercase; letter-spacing: .1em; }
+.encounter-history-count { color: var(--muted); font: .6rem var(--font-geist-mono), monospace; }
+.encounter-history-list { display: grid; gap: .75rem; }
+.encounter-history-card {
+  display: grid;
+  gap: .5rem;
+  padding: .75rem .85rem;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+.encounter-history-card-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.encounter-history-name { color: var(--foreground); font: 700 .8rem var(--font-geist-mono), monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.encounter-history-status { padding: .08rem .35rem; border: 1px solid var(--line); color: var(--muted); font: 600 .55rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.encounter-history-status.completed { border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+.encounter-history-status.active { border-color: #8a6d1f; background: #241d0c; color: #ffd97a; }
+.encounter-history-meta { margin: 0; color: var(--muted); font: .65rem var(--font-geist-mono), monospace; }
+.encounter-history-rows { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0; padding: 0; list-style: none; }
+.encounter-history-rows li {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .18rem .45rem;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  font-size: .72rem;
+}
+.encounter-history-rows li.is-dead { border-color: #6b3a31; background: #281815; color: #ffb19b; }
+.encounter-history-combatant { font-weight: 700; }
+.encounter-history-hp { color: var(--muted); font: .62rem var(--font-geist-mono), monospace; }
+.encounter-history-rows li.is-dead .encounter-history-hp { color: #ffb19b; }
+.encounter-history-dead { color: #ff987b; }
 
 .mesa-primary, .mesa-secondary, .mesa-ghost, .mesa-action { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; border: 1px solid var(--line); background: transparent; color: var(--foreground); cursor: pointer; padding: .6rem .8rem; font: 700 .72rem var(--font-geist-mono), monospace; letter-spacing: .04em; transition: all .15s ease; }
 .mesa-primary { border-color: var(--accent); background: var(--accent); color: #111700; }

@@ -10,6 +10,7 @@ import { getDiscordConsent, setDiscordConsent, type DiscordConsent } from "@/lib
 import { findNewRollEntry, notifyDiscordRoll } from "@/lib/discord/rollNotify";
 import { getActiveCharacter, upsertCharacter } from "@/lib/storage";
 import { maybePushSheet } from "@/lib/mesa/client";
+import { publishMesaHp } from "@/lib/mesa/hpPublish";
 import { publishMesaRoll } from "@/lib/mesa/rollPublish";
 import type { Character } from "@/types/character";
 
@@ -55,7 +56,16 @@ export default function CharacterToolkit({ initialJoinCode }: Props) {
 
   const content =
     screen === "creator" ? (
-      <CharacterCreator initialCharacter={character ?? undefined} onSaved={(saved) => { setCharacter(saved); setScreen("sheet"); }} />
+      <CharacterCreator
+        initialCharacter={character ?? undefined}
+        onSaved={(saved) => {
+          // Editar a ficha também muda vida (HP máximo, morte): espelha igual ao
+          // caminho normal, sem depender de nenhuma outra parte do salvamento.
+          publishMesaHp(character, saved);
+          setCharacter(saved);
+          setScreen("sheet");
+        }}
+      />
     ) : character ? (
       <CharacterSheet
         character={character}
@@ -70,6 +80,9 @@ export default function CharacterToolkit({ initialJoinCode }: Props) {
           // jogador acabou de rolar vira a ação dela e aparece no registro
           // compartilhado. Sem mesa ativa não faz absolutamente nada.
           publishMesaRoll(newRoll);
+          // Espelho de VIDA: HP/HP máximo/morte que mudaram na ficha baixam (ou
+          // sobem) na linha deste personagem na mesa. Fire-and-forget.
+          publishMesaHp(character, updated);
           upsertCharacter(updated);
           setCharacter(updated);
           // Modo online: mantém a cópia da ficha na servidor em dia.

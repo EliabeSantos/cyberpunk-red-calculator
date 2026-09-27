@@ -978,10 +978,6 @@ export default function CharacterSheet({
                 </div>
                 {lastInitiative && (
                   <div className="initiative-result" role="status">
-                    <div className="initiative-result-header">
-                      {lastInitiative.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
-                      {lastInitiative.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
-                    </div>
                     <span className="initiative-result-formula">
                       {lastInitiative.expression}
                     </span>

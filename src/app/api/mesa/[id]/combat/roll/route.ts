@@ -1,13 +1,16 @@
 /**
  * POST /api/mesa/[id]/combat/roll — registra um dado rolado na ficha.
  *
- * Body: { roll: { type, label, expression, total, rolls } }
+ * Body: { roll: { type, label, expression, total, rolls }, key? }
  *
  * A rolagem vira AÇÃO da mesa quando o tipo tem custo (ataque, perícia,
  * Evasion): o servidor valida com `resolveAction` — mesma regra do botão
- * ATAQUE — e debita 1 Action. Dano, dano recebido e rolagem livre só entram
- * no Registro do combate, sem custo. Fora do turno a rolagem entra marcada
- * como "não contou"; sem combate ativo, `registered: false` e nada muda.
+ * ATAQUE — e debita 1 Action de quem `planRollDebit` indicar. Com `key` (a
+ * chave do participante do encontro) o Mestre rola pelo INIMIGO e o débito
+ * sai da linha dele na mesa; sem chave a rolagem do GM é relatório puro.
+ * Dano, dano recebido e rolagem livre só entram no Registro do combate, sem
+ * custo. Fora do turno a rolagem entra marcada como "não contou"; sem combate
+ * ativo, `registered: false` e nada muda.
  *
  * A ficha rola o dado antes de chamar isto — por isso um erro aqui nunca
  * desfaz a rolagem local: o chamador é fire-and-forget.
@@ -30,6 +33,7 @@ export async function POST(request: Request, context: Context): Promise<Response
       sessionId: id,
       token: tokenFrom(request),
       roll: body.roll,
+      key: body.key,
     });
     if (result.registered) await publishMesaState(id);
     return ok(result);

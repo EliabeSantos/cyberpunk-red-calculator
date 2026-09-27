@@ -9,7 +9,7 @@
  * (`cyberpunk-red-toolkit:characters:v1`); aqui só mandamos uma CÓPIA quando
  * o jogador vincula o personagem a uma mesa.
  */
-import type { MesaParticipant, MesaSession, MesaState } from "@/lib/mesa/types";
+import type { MesaBattle, MesaParticipant, MesaSession, MesaState } from "@/lib/mesa/types";
 import type { MesaRollSummary } from "@/lib/mesa/rollPolicy";
 import {
   getActiveMembership,
@@ -129,12 +129,49 @@ export async function leaveMesa(sessionId: string, joinCode: string): Promise<vo
   removeMembership(joinCode);
 }
 
-export async function startCombat(sessionId: string, enemies: unknown[]): Promise<void> {
-  await api(`/api/mesa/${sessionId}/combat`, { method: "POST", body: { enemies } });
+/** Encontro de `/gm/encounters` que originou o combate — vira o vínculo da partida. */
+export interface MesaEncounterRef {
+  id: string;
+  name: string;
+}
+
+export interface StartCombatOptions {
+  /** Sem encontro o combate é "avulso": entra no histórico sem bloquear nada. */
+  encounter?: MesaEncounterRef;
+  /**
+   * Recomeça a MESMA partida ainda ativa nesta mesa (o encontro continua
+   * sendo de uso único — o servidor só permite quando a dele é quem está
+   * rodando).
+   */
+  restart?: boolean;
+}
+
+export async function startCombat(
+  sessionId: string,
+  enemies: unknown[],
+  options: StartCombatOptions = {},
+): Promise<void> {
+  await api(`/api/mesa/${sessionId}/combat`, {
+    method: "POST",
+    body: {
+      enemies,
+      encounter: options.encounter ?? null,
+      restart: options.restart ?? false,
+    },
+  });
 }
 
 export async function endCombat(sessionId: string): Promise<void> {
   await api(`/api/mesa/${sessionId}/combat`, { method: "DELETE" });
+}
+
+/**
+ * Histórico de partidas da mesa (somente Mestre).
+ * Sem a migração 20260927000001 o servidor responde `503 migration_pending`.
+ */
+export async function fetchMesaBattles(sessionId: string): Promise<MesaBattle[]> {
+  const result = await api<{ battles: MesaBattle[] }>(`/api/mesa/${sessionId}/battles`);
+  return Array.isArray(result.battles) ? result.battles : [];
 }
 
 export async function finishSession(sessionId: string): Promise<void> {
@@ -164,9 +201,39 @@ export async function endTurn(sessionId: string): Promise<void> {
 /**
  * Envia um dado rolado na ficha para a mesa registrar.
  * Quem decide se vira Action é o servidor — aqui só vai o resumo da rolagem.
+ *
+ * `key` é a chave do participante do encontro (só o Mestre manda): é ela que
+ * diz ao servidor QUAL inimigo da mesa paga a ação. Sem chave o servidor trata
+ * a rolagem como relatório — nenhum combatente é debitado.
  */
-export async function sendMesaRoll(sessionId: string, roll: MesaRollSummary): Promise<void> {
-  await api(`/api/mesa/${sessionId}/combat/roll`, { method: "POST", body: { roll } });
+export async function sendMesaRoll(
+  sessionId: string,
+  roll: MesaRollSummary,
+  key?: string | null,
+): Promise<void> {
+  await api(`/api/mesa/${sessionId}/combat/roll`, {
+    method: "POST",
+    body: { roll, key: key || undefined },
+  });
+}
+
+/** Atualização de vida enviada pela ORIGEM (ficha do jogador / encontro do GM). */
+export interface MesaHpUpdate {
+  hp: number;
+  /** HP máximo — só a ficha envia; o servidor ajusta a coluna junto. */
+  hpMax?: number;
+  /** Só a ficha envia: morte vem do `combat.isDead` dela. */
+  isDead?: boolean;
+  /** Chave do inimigo no encontro (só o Mestre; usa `source_key`). */
+  key?: string;
+}
+
+/**
+ * Espelha a vida nova de um combatente na mesa.
+ * Fire-and-forget como o resto do espelho: falha aqui nunca quebra a origem.
+ */
+export async function sendMesaHp(sessionId: string, update: MesaHpUpdate): Promise<void> {
+  await api(`/api/mesa/${sessionId}/combat/hp`, { method: "POST", body: update });
 }
 
 export async function addEnemies(sessionId: string, enemies: unknown[]): Promise<void> {

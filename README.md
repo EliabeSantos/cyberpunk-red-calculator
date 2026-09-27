@@ -32,7 +32,7 @@ Além do modo local (ficha, criação, combate e rolagens funcionando **sem serv
 
 ### Configuração
 
-1. Rode no SQL Editor do Supabase (junto com a migração do Discord) o arquivo `supabase/migrations/20260926000000_mesa_sessions.sql` — cria as tabelas `mesa_sessions`, `mesa_participants`, `mesa_characters`, `mesa_combats` e `mesa_combatants` (RLS habilitado sem policies: só o servidor acessa, via service role).
+1. Rode no SQL Editor do Supabase (junto com a migração do Discord) os arquivos `supabase/migrations/20260926000000_mesa_sessions.sql`, `supabase/migrations/20260927000000_mesa_combatant_source_key.sql` e `supabase/migrations/20260927000001_mesa_battles.sql` — as tabelas `mesa_sessions`, `mesa_participants`, `mesa_characters`, `mesa_combats`, `mesa_combatants` e `mesa_battles` (RLS habilitado sem policies: só o servidor acessa, via service role) e a coluna `mesa_combatants.source_key`, que identifica **qual inimigo do encontro** é cada linha da mesa (sem ela o app funciona, só não espelha a vida dos inimigos). A tabela `mesa_battles` guarda o **histórico de partidas** e torna cada encontro de uso único (sem ela o combate continua funcionando, só não há histórico nem bloqueio de encontro repetido).
 2. Adicione ao `.env.local` (as duas últimas variáveis são públicas, vão para o navegador):
 
 ```env
@@ -50,7 +50,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=   # Project Settings → API → anon public
 2. Na ficha, clique em **🌐 Mesa online** → **[CRIAR MESA]** → nome do GM → **Criar**. A sala abre como **painel sobre a própria ficha** (a URL continua sendo a tela principal); o link de convite é `http://localhost:3000/mesa/XXXXX`.
 3. No navegador B (ou uma janela anônima), abra a mesma ficha e clique em **🌐 Mesa online** → **[ENTRAR EM MESA]** → digite o código → **Entrar**. (O link direto `http://localhost:3000/mesa/XXXXX` também funciona: leva à mesma tela principal com o painel já aberto — **não** existe tela separada de mesa.)
 4. Cada um associa um personagem (**📋 Usar este personagem na Mesa** — uma cópia da ficha vai ao servidor para validação das regras).
-5. O GM abre **⚔️ Encontros**, cria o encontro (facção, nível, inimigos) e clica em **[ ⚔ Iniciar combate na Mesa ]** — os inimigos criados ali entram na mesa partilhada. Depois é só **[ ROLAR INICIATIVA ]** e **▶ Iniciar Turno**: jogadores agem só no próprio turno e com as 2 Actions do turno; o servidor rejeita qualquer ação fora disso (a UI apenas esconde os botões).
+5. O GM abre **⚔️ Encontros**, cria o encontro (facção, nível, inimigos) e clica em **[ ⚔ Iniciar combate na Mesa ]** — os inimigos criados ali entram na mesa partilhada. Depois é só **[ ROLAR INICIATIVA ]** (**1d10 + REF** — sem regra de crítico: o d10 extra não vale para Iniciativa) e **▶ Iniciar Turno**: jogadores agem só no próprio turno e com as 2 Actions do turno; o servidor rejeita qualquer ação fora disso (a UI apenas esconde os botões).
 6. **Economia de ações**: `attack/item/other` custam 1 das 2 Actions; **mover custa 0 Actions** e sai de um orçamento próprio de **MOVE × 2 metros por turno** (MOVE 10 → 20 m, com o bônus de cyberware já somado). O jogador digita os metros no campo ao lado de **[ MOVER ]** e o servidor valida o que sobrou. Inimigos usam o MOVE do bestiário (`moveStat`).
 7. Sem abrir o painel, role um ataque na ficha (**🎲 Rolar ataque**, card 03) e reabra a mesa: a rolagem já está em **Dados na mesa** e as Actions do turno foram debitadas.
 8. Repita o teste publicando em dois dispositivos (mesma LAN ou via túnel/ngrok).
@@ -77,8 +77,80 @@ Enquanto o jogador estiver conectado, **o dado rolado na CharacterSheet é a aç
 - **Dano, dano recebido e rolagem livre/iniciativa** entram no registro **sem custar Action** (pertencem ao mesmo ataque ou não são ação de combate).
 - As linhas aparecem em **Dados na mesa** (topo do painel de combate) e no **Registro do combate**, com nome, total e expressão: `Zuberi: Ataque Pistola 17 (REF 6 + 1d10 [7])`.
 - Sem combate ativo não há registro: a rolagem não é enviada (`registered: false`). Tipos sem significado na mesa (ex.: humanidade) são recusados com `400 invalid_roll`.
+- **Mestre na ⚔️ Encontros**: o ataque, a **Evasão**, o dano e a iniciativa rolados para um inimigo do encontro **vinculado à mesa** vão junto com a chave dele (`key` → coluna `source_key`) — **o ataque e a Evasão debitam 1 Action da linha do inimigo** (a Evasão é o mesmo custo da ficha) e o Registro passa a gravar com o nome do inimigo (`Militante: Ataque Fuzil 14 …`). Dano e iniciativa entram sem custo, como sempre. Sem chave (catálogo de inimigos, encontro fora da mesa) a rolagem continua sendo relatório puro.
 
 Os botões **[ ATAQUE ]**, **[ ITEM ]** e **[ MOVER ]** do painel continuam existindo como atalho (GM ou jogador sem ficha aberta) — os dois caminhos passam pela **mesma validação** do servidor. A política (quais rolagens vão e quanto custa) fica em `src/lib/mesa/rollPolicy.ts`, módulo puro compartilhado por navegador, servidor e testes.
+
+### Vida (HP) espelhada na mesa
+
+A vida de quem participa do combate **muda na origem e aparece na mesa para todo mundo**, num sentido só
+(ficha/encontro → mesa; nada volta da mesa para a ficha — decisão de 27/09/2026):
+
+- **Jogador**: HP, HP máximo ou morte que mudarem na ficha (`CharacterToolkit.onUpdate` → `publishMesaHp`)
+  atualizam a linha do próprio participante em `mesa_combatants.hp_current`. Dano recebido, cura, First Aid,
+  item de cura e edição da ficha entram pelo mesmo caminho — tudo fire-and-forget, sem mesa ativa não sai nada.
+- **Inimigos**: dano/cura aplicados na tela de **⚔️ Encontros** (`handleApplyDamage` / `handleHeal` →
+  `publishMesaEnemyHp`) atualizam a linha correspondente da mesa, identificada pela coluna nova
+  **`mesa_combatants.source_key`** (= o `id` estável do participante do encontro, enviado no início do
+  combate). É por isso que os encontros ganharam `participant.id` (`ensureEncounterIds` completa os salvos
+  antes desta feature).
+- `POST /api/mesa/[id]/combat/hp` faz a validação no servidor: sem `key` é o combatente de **quem pediu**;
+  com `key` é inimigo — **só o Mestre**. Sem combate ativo ou sem linha correspondente devolve
+  `updated: false` e nada muda. O estado novo é publicado no Realtime como qualquer outra mutação.
+- **Morte**: inimigo com 0 HP sai da ordem de turno e volta com HP > 0 (inimigo não faz death save aqui);
+  personagem só é marcado morto quando a **ficha** diz `isDead` — 0 HP com death save pendente continua em jogo.
+- **Migração obrigatória para os inimigos**: se `source_key` não existir no banco, o combate continua
+  **começando normalmente** (o servidor re-insere sem a coluna) e o espelho de vida de inimigo recusa com
+  `503 migration_pending`; o espelho dos jogadores não depende dessa coluna.
+- **Ajuste manual do GM no painel da mesa** (botões −/+) continua possível, mas é **sobrescrito** na próxima
+  mudança da origem — quem manda é a ficha do jogador e o encontro do Mestre.
+
+### Encontro vinculado à mesa e histórico de partidas
+
+Quando o Mestre clica **⚔ Iniciar combate na Mesa** na tela de **⚔️ Encontros**, o encontro viaja junto e nasce
+uma **partida** em `mesa_battles` (migração `20260927000001_mesa_battles.sql`):
+
+- **O encontro é de uso único** — `mesa_battles.encounter_id` é UNIQUE **no servidor**: quem já entrou em
+  combate não inicia luta de novo, em mesa nenhuma (`409 encounter_used`). A tela mostra o selo
+  **✅ Concluído** e o botão de início some. Combate avulso (sem encontro) grava `encounter_id = NULL` e não
+  bloqueia nada.
+- **Durante o combate quem manda é a mesa**: o encontro **puxa** de volta o HP dos inimigos (morte incluída)
+  pelo `source_key` — `useMesaState` (Realtime + polling de 4s) → `applyMesaStateToEncounter`, aparado em
+  `[0, HP máximo]` para não quebrar o invariante local. O empurrão continua nascendo **só de clique do Mestre**
+  (`publishMesaEnemyHp`), então não há loop: ida (encontro → mesa) para **ação**, volta (mesa → encontro)
+  para **estado**.
+- **A partida fecha sozinha em todo fim de combate**: GM encerrar (`endCombat`), sessão encerrar
+  (`finishSession`) ou fim automático com todos os inimigos caídos (`advanceActiveTurn`). A linha vira
+  `completed` com o snapshot final — vida de entrada, vida final, quem morreu, quem saiu e a rodada final.
+- **Histórico de partidas** vive no fim da tela de Encontros (`GET /api/mesa/[id]/battles`, só GM): lista as
+  partidas com selo ✅/⚔ e, ao abrir a tela, **reconcilia** os vínculos locais
+  (`reconcileEncountersWithBattles`) — cobre a luta que acabou com a tela fechada e a lançada noutro separador.
+- **Reiniciar sem furar a regra**: `restart: true` no `POST /combat` recomeça a **mesma** partida ainda ativa
+  nesta mesa (mesma linha no histórico); se quem está ativo é outro encontro, o servidor responde
+  `combat_already_active` e a UI encerra antes de entrar. `encounter_used` = concluído (nunca mais);
+  `encounter_restart` = recomeço disponível.
+- **Migração obrigatória para o histórico**: sem a tabela `mesa_battles` o combate continua **começando
+  normalmente** (só sem histórico e sem bloqueio) e `GET /battles` responde `503 migration_pending`.
+
+O vínculo (`EncounterData.battle` no localStorage do Mestre) é **conveniência de UI**; quem bloqueia de verdade
+é o servidor.
+
+### Encontro já nasce preenchido
+
+`createEncounterFromFaction` monta cada inimigo já com as duas camadas de papel:
+
+- **2 características de personalidade** (`getRandomTraits(2)`) — desde sempre.
+- **Implantes (cyberware), com cota por nível**: nível 1 → 2, 2 → 3, 3 → 4, 4 → 5 implantes
+  (`implantCountForLevel` em `src/data/enemyImplants.ts`). A lista **começa pelos `cyberware` que já vêm no
+  JSON do inimigo** (`Enemy.cyberware`, preenchido em `gm-enemies.ts`) e só então é completada até a cota
+  com sorteio do catálogo de cyberware (`items.json`). Base acima da cota **não é cortada** — o que o
+  catálogo do inimigo definiu manda.
+
+Implante de inimigo é **só descrição** (decisão de 27/09/2026): aparece como tag ⚙️ no card do inimigo, junto
+das personalidades, e **não mexe** em rolagem, HP, armor nem Actions — os `modifiers` do catálogo continuam
+valendo só para a ficha do jogador. O campo é opcional: encontros salvos antes desta feature ficam sem a tag
+(mesma ausência de backfill das personalidades) e inimigos criados à mão em `/gm/enemies` saem só com o
+sorteio. Fixado em `tests/enemy-implants.test.ts`.
 
 ### Limitações conhecidas (Escopo 1+2)
 
@@ -120,6 +192,8 @@ Quem lê `modifiers`/`activation` é `src/lib/cyberwareEffects.ts`, consumido po
 
 **Aproximações assumidas** (o motor não modela o contexto ainda): Targeting Scope vale para qualquer ataque à distância (não existe noção de alcance) e Reinforced Tendons soma +2 em qualquer teste de Athletics (não existe teste de salto isolado).
 
+**Inimigos da ⚔️ Encontros** também nascem com implantes sorteados por nível — mas ali é **só descrição** (uma tag no card, sem `modifiers`): ver *Encontro já nasce preenchido*.
+
 ### Ativação manual (toggle por peça)
 
 Sem sistema de rodadas de combate, os efeitos ativáveis usam um **toggle manual** no card do cyberware: o botão percorre os estágios (inativo → estágio 0 → estágio 1 → ... → inativo). Duração, "1 vez por combate" e o número de usos ficam a cargo do jogador — o toggle é a trava, não um cronômetro.
@@ -148,7 +222,7 @@ total = STAT base + perícia + d10 + Σ(modificadores)
 - `rollSkillCheck` e `rollAttack` contam a penalidade de **STAT** da lesão **uma vez só** (ela aparece como tag; o STAT exibido é o base) — antes contava em dobro nos dois.
 - `rollAttack` conta `context.modifiers` **uma vez** — antes entrava duas vezes.
 - Ataque com **arma** leva os modificadores de lesão "Distância" / "Corpo a corpo" — antes nenhum ataque com arma levava, porque a detecção olhava `context.type` (sempre `"weapon"`) em vez do tipo resolvido; a lista também passou a usar `AttackType` (incluindo `smg`).
-- **Iniciativa** saiu do componente para `src/lib/initiative.ts` e agora leva cyberware, lesões e a lesão grave.
+- **Iniciativa** saiu do componente para `src/lib/initiative.ts` e agora leva cyberware, lesões e a lesão grave. A rolagem em si é **1d10 + REF puro**: **sem regra de crítico** — natural 10 não soma um d10 extra e natural 1 não subtrai (a mesma regra vale para os inimigos, em `rollEnemyInitiative`, e para o **[ ROLAR INICIATIVA ]** da mesa).
 
 Fixado em `tests/roll-modifier-math.test.ts` e `tests/initiative.test.ts`.
 

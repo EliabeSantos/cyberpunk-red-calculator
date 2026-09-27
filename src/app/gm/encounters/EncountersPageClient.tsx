@@ -1,31 +1,58 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   saveEncounter,
   loadEncounters,
   deleteEncounter,
   getEncounter,
   createEncounterFromFaction,
+  ensureEncounterIds,
   updateParticipantHP,
   rollAttack,
   rollDamage,
+  rollEvasion,
+  getEvasionBase,
   applyDamageToParticipant,
   addParticipantCondition,
   removeParticipantCondition,
   clearEncounters,
+  type EncounterBattle,
   type EncounterData,
 } from "@/lib/gmStorage";
 import { gmEnemyCatalog, availableFactions } from "@/data/gm-enemies";
 import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjuries";
 import { rollDice } from "@/lib/dice";
-import { notifyEnemyAttack, notifyEnemyDamage, notifyEnemyInitiative } from "@/lib/discord/rollNotify";
+import { notifyEnemyAttack, notifyEnemyDamage, notifyEnemyEvasion, notifyEnemyInitiative } from "@/lib/discord/rollNotify";
 import {
   publishMesaGmAttack,
   publishMesaGmDamage,
+  publishMesaGmEvasion,
   publishMesaGmInitiative,
 } from "@/lib/mesa/gmRollPublish";
+import { publishMesaEnemyHp } from "@/lib/mesa/hpPublish";
+import { fetchMesaBattles, listMemberships, MesaApiError } from "@/lib/mesa/client";
+import { applyMesaStateToEncounter, reconcileEncountersWithBattles } from "@/lib/mesa/encounterSync";
+import { useMesaState } from "@/lib/mesa/useMesaState";
+import type { MesaBattle } from "@/lib/mesa/types";
 import MesaEncounterStart, { type MesaEnemySeed } from "@/components/mesa/MesaEncounterStart";
+
+/** Selo do vínculo do encontro com uma partida (na lista e nos cartões). */
+function battleBadge(battle: EncounterBattle | undefined) {
+  if (!battle) return null;
+  if (battle.status === "completed") {
+    const when = battle.completedAt ? new Date(battle.completedAt) : null;
+    const date = when && !Number.isNaN(when.getTime()) ? when.toLocaleDateString("pt-BR") : "";
+    return <span className="encounter-badge encounter-badge-done">✅ Concluído{date ? ` · ${date}` : ""}</span>;
+  }
+  return <span className="encounter-badge encounter-badge-live">⚔ Mesa {battle.joinCode}</span>;
+}
+
+function formatDateTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
 
 export default function EncountersPageClient() {
   const [phase, setPhase] = useState<"setup" | "combat" | "saved">("setup");
@@ -44,6 +71,16 @@ export default function EncountersPageClient() {
   const [minLevel, setMinLevel] = useState(1);
   const [maxLevel, setMaxLevel] = useState(4);
   const [previewSeed, setPreviewSeed] = useState(0);
+  const [battles, setBattles] = useState<MesaBattle[]>([]);
+  const [historyNotice, setHistoryNotice] = useState<string | null>(null);
+  // Só um contador: o ↻ do histórico reexecuta o efeito abaixo sem duplicar lógica.
+  const [historyTick, setHistoryTick] = useState(0);
+
+  // Combate vinculado a este encontro e ainda em andamento → a MANDA é da
+  // mesa: este hook traz o estado (Realtime + polling) para a volta de vida
+  // e para a marcação de fim de partida. Sem vínculo, `null` = nada é consultado.
+  const linkedSessionId = encounter?.battle?.status === "active" ? encounter.battle.sessionId : null;
+  const { state: mesaState } = useMesaState(linkedSessionId);
 
   // Simple seeded random for stable preview picks
   const seededRandom = (seed: number) => {
@@ -80,6 +117,76 @@ export default function EncountersPageClient() {
     setSavedEncounters(loadEncounters());
   }, [phase]);
 
+  /**
+   * Busca o histórico nas mesas deste navegador em que o papel é Mestre.
+   * Só LÊ: aplicar (setters + reconciliação) fica no efeito abaixo, que é quem
+   * decide se o resultado ainda importa.
+   */
+  const fetchHistory = useCallback(async (): Promise<{ list: MesaBattle[]; notice: string | null }> => {
+    const gmMesas = listMemberships().filter((entry) => entry.role === "gm");
+    let notice: string | null = null;
+    const lists = await Promise.all(
+      gmMesas.map((entry) =>
+        fetchMesaBattles(entry.sessionId).catch((caught: unknown) => {
+          // Migração pendente é o único caso que vale explicar ao Mestre.
+          if (caught instanceof MesaApiError && caught.code === "migration_pending") notice = caught.message;
+          return null;
+        }),
+      ),
+    );
+
+    const list = lists
+      .filter((result): result is MesaBattle[] => result !== null)
+      .flat()
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    return { list, notice };
+  }, []);
+
+  /**
+   * Histórico do servidor → lista da tela + RECONCILIAÇÃO do vínculo local de
+   * cada encontro: partida concluída com a tela fechada, encontro lançado
+   * noutro separador, ou lançamento feito sem o vínculo registrado aqui.
+   * Roda na montagem, quando a aba muda e quando o Mestre pede ↻ (`historyTick`).
+   */
+  useEffect(() => {
+    let disposed = false;
+    const refresh = async () => {
+      const { list, notice } = await fetchHistory();
+      if (disposed) return; // separador fechado no meio do caminho
+      setBattles(list);
+      setHistoryNotice(notice);
+
+      const stored = reconcileEncountersWithBattles(loadEncounters(), list);
+      if (stored.changed) {
+        stored.encounters.forEach((entry) => saveEncounter(entry));
+        setSavedEncounters(loadEncounters());
+      }
+      setEncounter((current) =>
+        current ? reconcileEncountersWithBattles([current], list).encounters[0] ?? current : null,
+      );
+    };
+    void refresh();
+    return () => {
+      disposed = true;
+    };
+  }, [fetchHistory, phase, historyTick]);
+
+  // Voltou da mesa: vida dos inimigos (morte inclusive) e fim da partida
+  // descem para o encontro, que é o registro permanente do Mestre. Só este
+  // efeito escreve o encontro — e `applyMesaStateToEncounter` devolve `null`
+  // quando nada mudou, então não há loop nem salvamento à toa.
+  useEffect(() => {
+    if (!mesaState || !encounter) return;
+    const apply = () => {
+      const next = applyMesaStateToEncounter(encounter, mesaState);
+      if (!next) return;
+      setEncounter(next);
+      saveEncounter(next);
+      setSavedEncounters(loadEncounters());
+    };
+    apply();
+  }, [mesaState, encounter]);
+
   const handleFactionChange = (f: string) => {
     setFaction(f);
     const count = Math.min(4, gmEnemyCatalog.filter((e) => e.identity.faction === f).length || 1);
@@ -90,6 +197,7 @@ export default function EncountersPageClient() {
    * Os inimigos deste encontro no formato que a mesa partilhada aceita.
    * HP atual é preservado (se o Mestre já aplicou dano antes de lançar o
    * combate online, o inimigo entra ferido — mas com o HP máximo intacto).
+   * O `key` carrega o id do participante para o espelho de vida futura.
    */
   const mesaEnemies: MesaEnemySeed[] = (encounter?.participants ?? [])
     .filter((p) => !p.isPlayer)
@@ -101,6 +209,7 @@ export default function EncountersPageClient() {
       ref: Math.max(1, p.refStat),
       // MOVE do bestiário (encontros salvos antes de existir este campo caem em 5).
       move: Math.max(0, Math.min(20, p.moveStat ?? 5)),
+      key: p.id,
     }));
 
   const handleStartEncounter = () => {
@@ -124,20 +233,36 @@ export default function EncountersPageClient() {
   };
 
   const handleLoadEncounter = (id: string) => {
-    const loaded = getEncounter(id);
-    if (loaded) {
-      setEncounter(loaded);
-      setPhase("combat");
-      setActiveTab("list");
-      setSelectedParticipant(null);
-      setDamageValue("");
-      setConditionName("");
-    }
+    const found = getEncounter(id);
+    if (!found) return;
+    // Encontros salvos antes do espelho de HP não têm id por participante:
+    // completa aqui e guarda, para a chave não mudar entre uma carga e outra.
+    const loaded = ensureEncounterIds(found);
+    if (loaded !== found) saveEncounter(loaded);
+    setEncounter(loaded);
+    setPhase("combat");
+    setActiveTab("list");
+    setSelectedParticipant(null);
+    setDamageValue("");
+    setConditionName("");
   };
 
   const handleSaveEncounter = () => {
     if (!encounter) return;
     saveEncounter(encounter);
+    setSavedEncounters(loadEncounters());
+  };
+
+  /**
+   * O combate subiu na mesa: grava o vínculo NO ENCONTRO (e salva ele).
+   * É o que torna o encontro de uso único — e é o que a próxima abertura da
+   * tela usa para mostrar "concluído" mesmo depois de fechar o separador.
+   */
+  const handleBattleStarted = (battle: EncounterBattle) => {
+    if (!encounter) return;
+    const next = { ...encounter, battle };
+    setEncounter(next);
+    saveEncounter(next);
     setSavedEncounters(loadEncounters());
   };
 
@@ -158,8 +283,13 @@ export default function EncountersPageClient() {
     if (!encounter) return;
     const participant = encounter.participants[participantIndex];
     const newHP = participant.hp.current + 1;
-    setEncounter(updateParticipantHP(encounter, participantIndex, Math.min(newHP, participant.hp.max)));
+    const next = updateParticipantHP(encounter, participantIndex, Math.min(newHP, participant.hp.max));
+    setEncounter(next);
     setSelectedParticipant(participantIndex);
+    // Espelho de vida: a cura feita aqui também sobe na mesa (sem mesa ativa
+    // não manda nada; ver hpPublish).
+    const healed = next.participants[participantIndex];
+    publishMesaEnemyHp(healed.id, healed.hp.current);
   };
 
   const handleRollAttack = (participantIndex: number) => {
@@ -170,12 +300,15 @@ export default function EncountersPageClient() {
     notifyEnemyAttack(next.participants[participantIndex]);
     const p = next.participants[participantIndex];
     if (p.lastAttackRoll) {
+      // `key` identifica o inimigo na mesa: o servidor debita a Action DELE
+      // (mesma economia do botão ATAQUE) e escreve o Registro com o nome dele.
       publishMesaGmAttack(
         p.name.trim() || p.archetype.trim() || "Inimigo",
         p.weaponName || "Ataque",
         "1d10",
         p.lastAttackRoll.total,
         p.lastAttackRoll.diceRolls,
+        p.id,
       );
     }
   };
@@ -187,12 +320,38 @@ export default function EncountersPageClient() {
     notifyEnemyDamage(next.participants[participantIndex]);
     const p = next.participants[participantIndex];
     if (p.lastDamageRoll) {
+      // Sem custo (dano é parte do ataque), mas com a chave o Registro mostra
+      // o nome do inimigo em vez do nome do Mestre.
       publishMesaGmDamage(
         p.name.trim() || p.archetype.trim() || "Inimigo",
         `Dano de ${p.weaponName || "ataque"}`,
         p.damageExpression,
         p.lastDamageRoll.total,
         p.lastDamageRoll.rolls,
+        p.id,
+      );
+    }
+  };
+
+  /**
+   * 💨 Evasão do inimigo: REF + nível da perícia Evasion + 1d10.
+   * Mesmos portões das outras rolagens do cartão: espelho no Discord e na mesa
+   * (com `key`, o servidor debita a Action DO inimigo).
+   */
+  const handleRollEvasion = (participantIndex: number) => {
+    if (!encounter) return;
+    const next = rollEvasion(encounter, participantIndex);
+    setEncounter(next);
+    const p = next.participants[participantIndex];
+    notifyEnemyEvasion(p);
+    if (p.lastEvasionRoll) {
+      publishMesaGmEvasion(
+        p.name.trim() || p.archetype.trim() || "Inimigo",
+        "Evasão",
+        `REF ${p.refStat} + ${p.evasionSkillName ?? "Evasão"} ${p.evasionSkillLevel ?? 0} + 1d10`,
+        p.lastEvasionRoll.total,
+        p.lastEvasionRoll.diceRolls,
+        p.id,
       );
     }
   };
@@ -201,9 +360,13 @@ export default function EncountersPageClient() {
     if (!encounter || damageValue === "") return;
     const damage = parseInt(damageValue, 10);
     if (isNaN(damage) || damage <= 0) return;
-    setEncounter(applyDamageToParticipant(encounter, participantIndex, damage, ignoreArmor, hitLocation));
+    const next = applyDamageToParticipant(encounter, participantIndex, damage, ignoreArmor, hitLocation);
+    setEncounter(next);
     setDamageValue("");
     setSelectedParticipant(participantIndex);
+    // Espelho de vida: o dano aplicado aqui baixa na linha do inimigo na mesa.
+    const hit = next.participants[participantIndex];
+    publishMesaEnemyHp(hit.id, hit.hp.current);
   };
 
   const handleAddCondition = (participantIndex: number) => {
@@ -253,7 +416,7 @@ export default function EncountersPageClient() {
     );
     rolled.forEach((r) => {
       const actor = r.participant.name.trim() || r.participant.archetype.trim() || "Inimigo";
-      publishMesaGmInitiative(actor, r.total);
+      publishMesaGmInitiative(actor, r.total, r.participant.id);
     });
   };
 
@@ -454,6 +617,7 @@ export default function EncountersPageClient() {
                             <span className="encounter-saved-detail-text">{e.participants.length} inimigos</span>
                             <span className="encounter-saved-detail-sep">·</span>
                             <span className="encounter-saved-detail-text">{new Date(e.createdAt).toLocaleDateString("pt-BR")}</span>
+                            {battleBadge(e.battle)}
                           </div>
                         </div>
                         <div className="encounter-saved-actions">
@@ -488,14 +652,24 @@ export default function EncountersPageClient() {
       {phase === "combat" && encounter && (
         <div className="encounter-combat">
           <div className="encounter-combat-header">
-            <div>
+            <div className="encounter-combat-id">
+              <span className="encounter-combat-eyebrow">Combate selecionado</span>
               <h2 className="encounter-title">{encounter.name}</h2>
-              <p className="encounter-faction">Facção: {encounter.faction} · {encounter.participants.length} participantes</p>
+              <div className="encounter-combat-meta">
+                <span className="encounter-meta-chip">Facção · {encounter.faction || "—"}</span>
+                <span className="encounter-meta-chip">{encounter.participants.length} participantes</span>
+              </div>
             </div>
             <div className="encounter-combat-actions">
-              <MesaEncounterStart enemies={mesaEnemies} />
-              <button className="gm-button gm-button-small" onClick={handleRollInitiative}>
-                🎲 Iniciativa
+              <MesaEncounterStart
+                enemies={mesaEnemies}
+                encounter={{ id: encounter.id, name: encounter.name }}
+                battle={encounter.battle ?? null}
+                onStarted={handleBattleStarted}
+              />
+              <button className="gm-button gm-button-small encounter-action-initiative" onClick={handleRollInitiative}>
+                <span className="encounter-action-icon" aria-hidden="true">🎲</span>
+                Iniciativa
               </button>
             </div>
           </div>
@@ -551,6 +725,10 @@ export default function EncountersPageClient() {
                       <span className="epc-info-label">🎯 Base</span>
                       <span className="epc-info-value">{p.weaponSkillName} ({p.skillValue}) + REF {p.refStat} = <strong>{p.attackBase}</strong></span>
                     </div>
+                    <div className="epc-info-row">
+                      <span className="epc-info-label">💨 Evasão</span>
+                      <span className="epc-info-value">REF {p.refStat} + nível {p.evasionSkillLevel ?? 0} = <strong>{getEvasionBase(p)}</strong></span>
+                    </div>
                   </div>
 
                   {/* ── Rolls ── */}
@@ -583,11 +761,39 @@ export default function EncountersPageClient() {
                         </span>
                       )}
                     </div>
+                    <div className="epc-roll-row">
+                      <button
+                        className="gm-button gm-button-small"
+                        onClick={(e) => { e.stopPropagation(); handleRollEvasion(index); }}
+                      >
+                        💨 Evasão
+                      </button>
+                      {p.lastEvasionRoll != null && (
+                        <span className={`epc-roll-result ${p.lastEvasionRoll.fumble ? "epc-roll-fumble" : p.lastEvasionRoll.critical ? "epc-roll-crit" : ""}`}>
+                          {p.lastEvasionRoll.fumble && "💀 "}
+                          {p.lastEvasionRoll.critical && "⚡ "}
+                          d10({p.lastEvasionRoll.diceRolls.join(", ")}) + {getEvasionBase(p)} = <strong>{p.lastEvasionRoll.total}</strong>
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* ── Tags ── */}
-                  {(p.conditions.length > 0 || (p.personalityTraits && p.personalityTraits.length > 0)) && (
+                  {(p.conditions.length > 0 || (p.personalityTraits && p.personalityTraits.length > 0) || (p.implants && p.implants.length > 0)) && (
                     <div className="epc-section epc-tags">
+                      {p.implants && p.implants.length > 0 && (
+                        <div className="epc-tag-group">
+                          {p.implants.map((implant) => (
+                            <span
+                              key={implant}
+                              className="epc-tag epc-tag-implant"
+                              title="Implante — só descrição, não mexe em rolagem"
+                            >
+                              ⚙️ {implant}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       {p.personalityTraits && p.personalityTraits.length > 0 && (
                         <div className="epc-tag-group">
                           {p.personalityTraits.map((trait) => (
@@ -744,6 +950,7 @@ export default function EncountersPageClient() {
                     <span className="encounter-saved-name">{e.name}</span>
                     <span className="encounter-saved-meta">
                       {e.faction} · {e.participants.length} inimigos · {new Date(e.createdAt).toLocaleDateString("pt-BR")}
+                      {battleBadge(e.battle)}
                     </span>
                   </div>
                   <div className="encounter-saved-actions">
@@ -775,6 +982,65 @@ export default function EncountersPageClient() {
             </button>
           </div>
         </div>
+      )}
+
+      {(battles.length > 0 || historyNotice) && (
+        <section className="encounter-history">
+          <div className="encounter-history-header">
+            <div className="encounter-history-header-left">
+              <span className="encounter-history-icon">📜</span>
+              <div>
+                <h2 className="encounter-history-title">Histórico de partidas</h2>
+                <span className="encounter-history-count">
+                  {battles.length} partida{battles.length !== 1 ? "s" : ""} registrada{battles.length !== 1 ? "s" : ""}
+                </span>
+              </div>
+            </div>
+            <button className="gm-button gm-button-small" onClick={() => setHistoryTick((tick) => tick + 1)}>
+              ↻ Atualizar
+            </button>
+          </div>
+
+          {historyNotice && <p className="mesa-notice error">{historyNotice}</p>}
+
+          <div className="encounter-history-list">
+            {battles.map((battle) => (
+              <article key={battle.id} className="encounter-history-card">
+                <div className="encounter-history-card-header">
+                  <span className="encounter-history-name">{battle.encounterName}</span>
+                  <span className={`encounter-history-status ${battle.status}`}>
+                    {battle.status === "completed" ? "✅ Concluída" : "⚔ Em andamento"}
+                  </span>
+                </div>
+                <p className="encounter-history-meta">
+                  Mesa {battle.joinCode} · {formatDateTime(battle.startedAt)}
+                  {battle.endedAt && <> → {formatDateTime(battle.endedAt)}</>}
+                  {battle.finalRound ? <> · {battle.finalRound}ª rodada</> : null}
+                </p>
+                {battle.combatants.length > 0 && (
+                  <ul className="encounter-history-rows">
+                    {battle.combatants.map((row) => (
+                      <li key={row.id} className={row.isDead ? "is-dead" : undefined}>
+                        <span className="encounter-history-combatant">{row.name}</span>
+                        <span className="encounter-history-hp">
+                          {row.removed
+                            ? `${row.hpStart}/${row.hpMax} · saiu`
+                            : row.hpEnd === null
+                              ? `${row.hpStart}/${row.hpMax}`
+                              : `${row.hpEnd}/${row.hpMax}`}
+                          {row.hpEnd !== null && !row.removed && row.hpEnd !== row.hpStart
+                            ? ` (${row.hpStart} no início)`
+                            : null}
+                        </span>
+                        {row.isDead && <span className="encounter-history-dead">☠</span>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </article>
+            ))}
+          </div>
+        </section>
       )}
     </div>
   );

@@ -95,6 +95,8 @@ export interface EnemyRollSource {
   damageExpression: string;
   lastAttackRoll: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
   lastDamageRoll: { rolls: number[]; total: number } | null;
+  /** Ausente nas fichas salvas antes da feature de Evasão. */
+  lastEvasionRoll?: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
 }
 
 function enemyLabel(participant: EnemyRollSource): string {
@@ -149,6 +151,36 @@ export function buildEnemyDamagePayload(participant: EnemyRollSource): DiscordRo
 export function notifyEnemyAttack(participant: EnemyRollSource): void {
   if (getDiscordConsent() !== "granted") return;
   const payload = buildEnemyAttackPayload(participant);
+  if (!payload || !payload.sessionCode) return;
+  postToDiscord(payload);
+}
+
+/**
+ * Payload da **Evasão** do inimigo; o modificador é a base já calculada
+ * (REF + nível da perícia), na mesma decomposição dos demais.
+ */
+export function buildEnemyEvasionPayload(participant: EnemyRollSource): DiscordRollPayload | null {
+  const roll = participant.lastEvasionRoll;
+  if (!roll || roll.diceRolls.length === 0) return null;
+
+  const diceTotal = roll.diceRolls.reduce((sum, value) => sum + value, 0);
+
+  return {
+    sessionCode: getSessionCode() ?? "",
+    kind: "evasion",
+    playerName: enemyLabel(participant),
+    rollType: "Evasão",
+    expression: "1d10",
+    rolls: roll.diceRolls,
+    modifier: roll.total - diceTotal,
+    total: roll.total,
+  };
+}
+
+/** Envia a Evasão do inimigo — mesmos portões: consentimento + código de mesa. */
+export function notifyEnemyEvasion(participant: EnemyRollSource): void {
+  if (getDiscordConsent() !== "granted") return;
+  const payload = buildEnemyEvasionPayload(participant);
   if (!payload || !payload.sessionCode) return;
   postToDiscord(payload);
 }

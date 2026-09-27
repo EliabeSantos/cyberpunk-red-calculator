@@ -2,6 +2,7 @@ import "client-only";
 
 import type { Enemy } from "@/types/enemy";
 import type { PersonalityTrait } from "@/data/personalityTraits";
+import { getEnemyImplants } from "@/data/enemyImplants";
 import { rollDice } from "@/lib/dice";
 
 const STORAGE_PREFIX = "cyberpunk-red-toolkit";
@@ -146,6 +147,13 @@ export function clearAllEnemies(): void {
 
 export interface EncounterParticipant {
   enemyId: string;
+  /**
+   * Identidade ESTÁVEL deste inimigo dentro do encontro — é o que vira
+   * `source_key` na mesa (`mesa_combatants`), para o HP aplicado aqui chegar
+   * à linha certa lá. Opcional só nas fichas salvas antes desta feature:
+   * `ensureEncounterIds` completa na carga.
+   */
+  id?: string;
   name: string;
   archetype: string;
   faction: string;
@@ -164,13 +172,51 @@ export interface EncounterParticipant {
   moveStat?: number;
   skillValue: number;
   attackBase: number;
+  /**
+   * Nível da perícia **Evasion** do inimigo — a base do teste é REF + nível
+   * (`REF` mora em `refStat`, ver `getEvasionBase`). Sorteado no nascimento do
+   * participante porque é o que o botão 💨 Evasão do cartão precisa mostrar.
+   * Opcional nas fichas salvas antes desta feature (mesmo molde de `moveStat`).
+   */
+  evasionSkillLevel?: number;
+  /** Nome da perícia como está no bestiário ("Evasion") — só para exibição. */
+  evasionSkillName?: string;
   damageExpression: string;
   // Last roll results
   lastAttackRoll: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
   lastDamageRoll: { rolls: number[]; total: number } | null;
+  /**
+   * Última rolagem de Evasão do cartão. `undefined` nas fichas salvas antes
+   * desta feature — a UI trata com `!= null`, igual às demais rolagens.
+   */
+  lastEvasionRoll?: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
   initiative: number | null;
   // Personality traits for roleplay
   personalityTraits: PersonalityTrait[];
+  /**
+   * Implantes (cyberware) deste inimigo — sorteados na criação do encontro,
+   * quanto maior o nível, mais implantes (`getEnemyImplants`). **Só descrição**,
+   * igual às personalidades: não mexe em rolagem, HP ou armor. Opcional nas
+   * fichas salvas antes desta feature.
+   */
+  implants?: string[];
+}
+
+/**
+ * Vínculo do encontro com uma PARTIDA da mesa — é o que torna o encontro de
+ * uso único: lançado uma vez, ele nunca mais inicia combate (decisão de
+ * 27/09/2026). Guardado junto do encontro no localStorage porque é o
+ * encontro que "sabe" que já foi usado; o servidor tem a palavra final
+ * (`mesa_battles.encounter_id` é UNIQUE).
+ */
+export interface EncounterBattle {
+  sessionId: string;
+  /** Código da mesa, para o aviso "em combate na Mesa XXXXX" sobreviver. */
+  joinCode: string;
+  status: "active" | "completed";
+  startedAt: string;
+  /** Só quando a partida é fechada (GM encerra, sessão encerra ou fim automático). */
+  completedAt?: string;
 }
 
 export interface EncounterData {
@@ -180,6 +226,8 @@ export interface EncounterData {
   enemyCount: number;
   participants: EncounterParticipant[];
   createdAt: string;
+  /** Presente desde que este encontro tenha lançado um combate online. */
+  battle?: EncounterBattle;
 }
 
 const ENCOUNTERS_KEY = `${STORAGE_PREFIX}:gm:encounters:v1`;
@@ -199,14 +247,73 @@ export function loadEncounters(): EncounterData[] {
   try {
     const value = window.localStorage.getItem(ENCOUNTERS_KEY);
     const parsed: unknown = value ? JSON.parse(value) : [];
-    return Array.isArray(parsed) ? parsed.filter(isEncounter) : [];
+    return Array.isArray(parsed) ? parsed.filter(isEncounter).map(readEncounter) : [];
   } catch {
     return [];
   }
 }
 
+/**
+ * Lê o vínculo `battle` gravado, descartando o que estiver corrompido.
+ *
+ * Um registro malformado não pode derrubar o encontro salvo inteiro nem mandar
+ * `undefined` para a UI — some o vínculo e o encontro volta a ser lançável.
+ */
+function readBattle(raw: unknown): EncounterBattle | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const sessionId = typeof value.sessionId === "string" ? value.sessionId : "";
+  const joinCode = typeof value.joinCode === "string" ? value.joinCode : "";
+  const status = value.status === "completed" ? "completed" : value.status === "active" ? "active" : null;
+  if (!sessionId || !joinCode || !status) return undefined;
+
+  const battle: EncounterBattle = {
+    sessionId,
+    joinCode,
+    status,
+    startedAt: typeof value.startedAt === "string" ? value.startedAt : "",
+  };
+  if (typeof value.completedAt === "string") battle.completedAt = value.completedAt;
+  return battle;
+}
+
+/** Normaliza um encontro salvo: mantém o objeto original quando nada muda. */
+function readEncounter(encounter: EncounterData): EncounterData {
+  const battle = readBattle(encounter.battle);
+  if (battle) {
+    const current = encounter.battle;
+    const same =
+      current &&
+      current.sessionId === battle.sessionId &&
+      current.joinCode === battle.joinCode &&
+      current.status === battle.status &&
+      current.startedAt === battle.startedAt &&
+      current.completedAt === battle.completedAt;
+    return same ? encounter : { ...encounter, battle };
+  }
+  // Sem vínculo legível: garante que a chave nem apareça no objeto carregado.
+  return "battle" in encounter ? { ...encounter, battle: undefined } : encounter;
+}
+
 export function getEncounter(id: string): EncounterData | null {
   return loadEncounters().find((e) => e.id === id) ?? null;
+}
+
+/**
+ * Garante um `id` por participante (encontros salvos antes da espelhagem de HP).
+ *
+ * Devolve o MESMO objeto quando nada falta — chamadas repetidas não geram chaves
+ * novas, então a chave que foi ao combate continua sendo a mesma depois de um
+ * reload. Quem chama deve salvar de volta para a próxima carga já vir pronta.
+ */
+export function ensureEncounterIds(encounter: EncounterData): EncounterData {
+  let changed = false;
+  const participants = encounter.participants.map((participant) => {
+    if (typeof participant.id === "string" && participant.id.length > 0) return participant;
+    changed = true;
+    return { ...participant, id: crypto.randomUUID() };
+  });
+  return changed ? { ...encounter, participants } : encounter;
 }
 
 export function deleteEncounter(id: string): void {
@@ -229,6 +336,59 @@ function isEncounter(value: unknown): value is EncounterData {
     "participants" in value &&
     Array.isArray((value as EncounterData).participants)
   );
+}
+
+/**
+ * Nível da perícia **Evasion** de um inimigo do bestiário.
+ *
+ * A chave vem do JSON como `Evasion`, mas a busca ignora maiúsculas — se o
+ * bestiário não tiver a perícia, devolve nível 0 (a base continua sendo o
+ * REF, nunca `NaN`).
+ */
+export function getEnemyEvasionSkill(enemy: Enemy): { name: string; level: number } {
+  const entry = Object.entries(enemy.skills).find(([key]) => key.toLowerCase() === "evasion");
+  if (!entry) return { name: "Evasion", level: 0 };
+  return { name: entry[1].name || "Evasion", level: entry[1].level ?? 0 };
+}
+
+/**
+ * Base do teste de Evasão de um participante: **REF + nível da perícia**.
+ * Participante de ficha antiga (sem `evasionSkillLevel`) cai em REF puro.
+ */
+export function getEvasionBase(participant: Pick<EncounterParticipant, "refStat" | "evasionSkillLevel">): number {
+  return participant.refStat + (participant.evasionSkillLevel ?? 0);
+}
+
+/**
+ * 1d10 com explosão no 10 e subtração no 1 — a mesma leitura da ficha.
+ * `critical` é o **d10 natural** ser 10: o laço só acumula dados extras, ele
+ * não decide o crítico (antes o laço regravava a flag e ela nunca sobrevivia).
+ */
+function rollD10Detail(): { diceRolls: number[]; diceTotal: number; critical: boolean; fumble: boolean } {
+  const diceRolls: number[] = [];
+  const natural = rollDice("1d10").rolls[0];
+  diceRolls.push(natural);
+
+  const critical = natural === 10;
+  const fumble = natural === 1;
+  let diceTotal = natural;
+
+  if (critical) {
+    let current = natural;
+    while (current === 10) {
+      current = rollDice("1d10").rolls[0];
+      diceRolls.push(current);
+      diceTotal += current;
+    }
+  }
+
+  if (fumble) {
+    const sub = rollDice("1d10").rolls[0];
+    diceRolls.push(-sub);
+    diceTotal -= sub;
+  }
+
+  return { diceRolls, diceTotal, critical, fumble };
 }
 
 export function createEncounterFromFaction(
@@ -267,12 +427,24 @@ export function createEncounterFromFaction(
     const weaponName = weapon?.name ?? "Desarmado";
     const damageExpression = weapon?.damage ?? "1d6";
     const attackBase = weapon?.attackBase ?? skillValue;
+    // Evasão: REF + nível da perícia — guardado aqui para o cartão não precisar
+    // do bestiário inteiro na mão (e para encontro salvo antigo continuar íntegro).
+    const evasion = getEnemyEvasionSkill(source);
+    const level =
+      source.identity.threatLevel === "extreme"
+        ? 4
+        : source.identity.threatLevel === "high"
+          ? 3
+          : source.identity.threatLevel === "medium"
+            ? 2
+            : 1;
     participants.push({
+      id: crypto.randomUUID(),
       enemyId: source.id,
       name: source.identity.name || `${source.identity.archetype} #${i + 1}`,
       archetype: source.identity.archetype || "Desconhecido",
       faction: source.identity.faction || faction,
-      level: source.identity.threatLevel === "extreme" ? 4 : source.identity.threatLevel === "high" ? 3 : source.identity.threatLevel === "medium" ? 2 : 1,
+      level,
       threatLevel: source.identity.threatLevel,
       hp: { current: combat.hp.max, max: combat.hp.max },
       armor: { ...combat.armor },
@@ -285,11 +457,16 @@ export function createEncounterFromFaction(
       moveStat: source.stats.MOVE,
       skillValue,
       attackBase,
+      evasionSkillName: evasion.name,
+      evasionSkillLevel: evasion.level,
       damageExpression,
       lastAttackRoll: null,
       lastDamageRoll: null,
+      lastEvasionRoll: null,
       initiative: null,
       personalityTraits: getRandomTraits(2),
+      // Implantes: os do JSON do inimigo + sorteio até a cota do nível.
+      implants: getEnemyImplants(source.cyberware, level),
     });
   }
 
@@ -310,37 +487,41 @@ export function rollAttack(
   const participants = [...encounter.participants];
   const p = participants[participantIndex];
 
-  // Roll 1d10
-  const diceRolls: number[] = [];
-  let diceTotal = rollDice("1d10").rolls[0];
-  diceRolls.push(diceTotal);
-
-  let critical = diceTotal === 10;
-  let fumble = diceTotal === 1;
-
-  // Exploding dice on critical
-  if (critical) {
-    let current = diceTotal;
-    while (current === 10) {
-      current = rollDice("1d10").rolls[0];
-      diceRolls.push(current);
-      diceTotal += current;
-      critical = current === 10; // keep tracking
-    }
-  }
-
-  // Fumble: subtract a d10
-  if (fumble) {
-    const sub = rollDice("1d10").rolls[0];
-    diceRolls.push(-sub);
-    diceTotal -= sub;
-  }
-
+  const { diceRolls, diceTotal, critical, fumble } = rollD10Detail();
   const total = p.attackBase + diceTotal;
 
   participants[participantIndex] = {
     ...p,
     lastAttackRoll: {
+      diceRolls,
+      diceTotal,
+      total,
+      critical,
+      fumble,
+    },
+  };
+  return { ...encounter, participants };
+}
+
+/**
+ * Teste de **Evasão** do inimigo: REF + nível da perícia + 1d10.
+ *
+ * Mesma economia da ficha do jogador (1 Action, quando publicada na mesa) e
+ * mesmo tratamento de crítico/falha do ataque — só muda a base.
+ */
+export function rollEvasion(
+  encounter: EncounterData,
+  participantIndex: number
+): EncounterData {
+  const participants = [...encounter.participants];
+  const p = participants[participantIndex];
+
+  const { diceRolls, diceTotal, critical, fumble } = rollD10Detail();
+  const total = getEvasionBase(p) + diceTotal;
+
+  participants[participantIndex] = {
+    ...p,
+    lastEvasionRoll: {
       diceRolls,
       diceTotal,
       total,

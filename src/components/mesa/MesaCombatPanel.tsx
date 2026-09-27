@@ -177,6 +177,7 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
             type="button"
             className="mesa-primary"
             disabled={busy}
+            title="1d10 + REF de cada um — Iniciativa não tem regra de crítico"
             onClick={() => run(() => rollInitiative(sessionId), "Iniciativa rolada.")}
           >
             [ ROLAR INICIATIVA ]

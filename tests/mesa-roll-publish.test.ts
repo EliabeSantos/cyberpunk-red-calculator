@@ -90,6 +90,8 @@ test("com mesa ativa, manda um POST para /combat/roll com o resumo do dado", () 
   assert.equal(body.roll.type, "attack");
   assert.equal(body.roll.total, 17);
   assert.deepEqual(body.roll.rolls, [7]);
+  // Ficha de jogador nunca manda chave: o servidor debita o combatente DELA.
+  assert.equal("key" in body, false);
 });
 
 test("rolagem que não tem significado na mesa nem é enviada", () => {

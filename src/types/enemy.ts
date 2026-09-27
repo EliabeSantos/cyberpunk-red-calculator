@@ -56,6 +56,12 @@ export interface Enemy {
   skills: EnemySkills;
   weapons: EnemyWeapon[];
   combat: EnemyCombatStats;
+  /**
+   * Implantes (cyberware) vindos do catálogo JSON — só leitura/flavour na tela
+   * do encontro (ver `src/data/enemyImplants.ts`). Opcional nas fichas salvas
+   * antes desta feature.
+   */
+  cyberware?: string[];
   // GM notes, only visible to GM
   gmNotes?: string;
   // Conditions/Status effects
@@ -115,6 +121,7 @@ export function createEmptyEnemy(id = crypto.randomUUID()): Enemy {
       armor: { head: 0, body: 0 },
       criticalInjuries: [],
     },
+    cyberware: [],
     gmNotes: "",
     conditions: [],
   };

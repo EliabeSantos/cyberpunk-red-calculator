@@ -36,6 +36,13 @@ export interface MesaCombatant {
   characterId: string | null;
   participantId: string | null;
   name: string;
+  /**
+   * Chave do participante do encontro que originou este INIMIGO
+   * (`mesa_combatants.source_key`). É por aqui que o HP aplicado na tela de
+   * Encontros chega à linha certa; `null` em personagens e em inimigos
+   * criados sem chave.
+   */
+  sourceKey: string | null;
   initiative: number | null;
   initiativeDetail: { expression?: string; refBonus?: number; total?: number } | null;
   actionsMax: number;
@@ -78,6 +85,48 @@ export interface MesaCombat {
   initiativeStarted: boolean;
   eventLog: MesaEvent[];
   createdAt: string;
+}
+
+export type BattleStatus = "active" | "completed";
+
+/**
+ * Linha do HISTÓRICO de uma partida (`mesa_battles.combatants`).
+ *
+ * Nasce no início do combate com a vida de ENTRADA e é enriquecida quando a
+ * partida é fechada com a vida FINAL — por isso `hpEnd` é `null` enquanto a
+ * luta roda.
+ */
+export interface MesaBattleCombatant {
+  id: string;
+  kind: CombatantKind;
+  name: string;
+  hpStart: number;
+  hpMax: number;
+  /** `null` enquanto o combate está ativo ou quando saiu antes do fim. */
+  hpEnd: number | null;
+  isDead: boolean;
+  /** Saiu da luta (removido pelo Mestre) antes de a partida ser fechada. */
+  removed: boolean;
+  initiative: number | null;
+  sourceKey: string | null;
+}
+
+/**
+ * Uma partida já registrada — é o que sustenta o "histórico de partidas" da
+ * tela de Encontros e o bloqueio de encontro repetido (`encounterId`).
+ */
+export interface MesaBattle {
+  id: string;
+  sessionId: string;
+  joinCode: string;
+  /** `null` quando o combate foi lançado sem encontro (avulso). */
+  encounterId: string | null;
+  encounterName: string;
+  status: BattleStatus;
+  startedAt: string;
+  endedAt: string | null;
+  finalRound: number | null;
+  combatants: MesaBattleCombatant[];
 }
 
 /** Estado completo devolvido ao cliente (é o que o Realtime publica). */

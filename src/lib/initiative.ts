@@ -32,15 +32,13 @@ export function getInitiativeModifiers(character: Pick<Character, "cyberware" | 
 
 export type InitiativeRollResult = {
   initiativeId: string;
-  /** Primeiro d10 (é o que a ficha mostra durante a rolagem). */
+  /** O único d10 da rolagem (é o que a ficha mostra durante o lançamento). */
   diceRoll: number;
-  /** Soma dos d10 com o exploding (crítico soma, falha crítica subtrai). */
+  /** Soma dos d10 — em Iniciativa há UM d10, então é sempre igual a `diceRoll`. */
   diceTotal: number;
   refBonus: number;
   modifiers: AttackModifier[];
   total: number;
-  critical: boolean;
-  fumble: boolean;
   diceRolls: RollDetail[];
   /** Fórmula legível para a ficha e o histórico. */
   expression: string;
@@ -50,45 +48,31 @@ function formatExpression(
   refBonus: number,
   modifiers: AttackModifier[],
   diceRoll: number,
-  critical: boolean,
-  fumble: boolean,
 ): string {
   const parts = modifiers.map((modifier) => ` ${modifier.value >= 0 ? "+" : ""}${modifier.value} ${modifier.source}`).join("");
-  const diceNote = critical ? " (crítico!)" : fumble ? " (falha crítica!)" : "";
-  return `REF ${refBonus}${parts} + 1d10 [${diceRoll}]${diceNote}`;
+  return `REF ${refBonus}${parts} + 1d10 [${diceRoll}]`;
 }
 
-/** Rola Iniciativa: REF + modificadores (cyberware, lesões, lesão grave) + 1d10 explodindo.
- * Antes esse cálculo vivia dentro do componente; agora a ficha e os testes usam o mesmo caminho. */
+/**
+ * Rola Iniciativa: **1d10 + REF** + modificadores (cyberware, lesões, lesão grave).
+ *
+ * A regra de crítico **não vale aqui** (decisão de 27/09/2026): um natural 10
+ * não puxa um d10 extra e um natural 1 não subtrai — a Iniciativa é sempre UM
+ * d10, igual na tela do encontro e nos inimigos (`rollEnemyInitiative`).
+ * Antes esse cálculo vivia dentro do componente; agora a ficha e os testes
+ * usam o mesmo caminho.
+ */
 export function rollInitiative(character: Character): { character: Character; result: InitiativeRollResult } {
   const dice = rollDice("1d10");
   const rollValue = dice.rolls[0];
-  const isCritical = rollValue === 10;
-  const isFumble = rollValue === 1;
-
-  let diceTotal = rollValue;
+  const diceTotal = rollValue;
   const diceRolls: RollDetail[] = [{ value: rollValue, type: "normal" }];
-  let extraRoll = 0;
-
-  if (isCritical) {
-    const extra = rollDice("1d10");
-    extraRoll = extra.rolls[0];
-    diceTotal += extraRoll;
-    diceRolls[0].type = "crit";
-    diceRolls.push({ value: extraRoll, type: "crit_add" });
-  } else if (isFumble) {
-    const extra = rollDice("1d10");
-    extraRoll = extra.rolls[0];
-    diceTotal -= extraRoll;
-    diceRolls[0].type = "fumble";
-    diceRolls.push({ value: extraRoll, type: "fumble_sub" });
-  }
 
   const refBonus = character.stats.REF;
   const modifiers = getInitiativeModifiers(character);
   const modifierTotal = modifiers.reduce((sum, modifier) => sum + modifier.value, 0);
   const total = refBonus + diceTotal + modifierTotal;
-  const expression = formatExpression(refBonus, modifiers, rollValue, isCritical, isFumble);
+  const expression = formatExpression(refBonus, modifiers, rollValue);
 
   const result: InitiativeRollResult = {
     initiativeId: crypto.randomUUID(),
@@ -97,8 +81,6 @@ export function rollInitiative(character: Character): { character: Character; re
     refBonus,
     modifiers,
     total,
-    critical: isCritical,
-    fumble: isFumble,
     diceRolls,
     expression,
   };

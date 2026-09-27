@@ -31,6 +31,7 @@ const { rememberMembership, getActiveMembership, removeMembership, clearActiveMe
 const {
   publishMesaGmAttack,
   publishMesaGmSkill,
+  publishMesaGmEvasion,
   publishMesaGmDamage,
   publishMesaGmInitiative,
 } = await import("../src/lib/mesa/gmRollPublish.ts");
@@ -65,6 +66,27 @@ test("ataque do GM entra no POST correto com actor=inimigo", () => {
   assert.equal(body.roll.expression, "1d10");
   assert.equal(body.roll.total, 14);
   assert.deepEqual(body.roll.rolls, [7]);
+  // Catálogo de inimigos / GM de fora: relatório puro, sem chave de inimigo.
+  assert.equal("key" in body, false);
+});
+
+test("ataque do encontro vinculado manda a chave do inimigo que paga", () => {
+  seed("sessao-gm-1");
+  publishMesaGmAttack("Militante", "Fuzil", "1d10", 14, [7], "part-9");
+  const body = calls[0].body as { roll: { type: string }; key?: string };
+  assert.equal(body.roll.type, "attack");
+  assert.equal(body.key, "part-9");
+});
+
+test("dano e iniciativa do encontro também levam a chave (só o ataque debita)", () => {
+  seed("sessao-gm-1");
+  publishMesaGmDamage("Militante", "Dano de Fuzil", "2d6", 9, [4, 5], "part-9");
+  assert.equal((calls[0].body as { roll: { type: string }; key?: string }).key, "part-9");
+  publishMesaGmInitiative("Militante", 17, "part-9");
+  assert.equal((calls[1].body as { roll: { type: string }; key?: string }).key, "part-9");
+  // Chave vazia/antiga não vai no corpo: o servidor trataria como "sem chave".
+  publishMesaGmAttack("Militante", "Fuzil", "1d10", 14, [7], undefined);
+  assert.equal("key" in (calls[2].body as Record<string, unknown>), false);
 });
 
 test("perícia do GM vai como skill_check", () => {
@@ -73,6 +95,21 @@ test("perícia do GM vai como skill_check", () => {
   const body = calls[0].body as { roll: { type: string; total: number } };
   assert.equal(body.roll.type, "skill_check");
   assert.equal(body.roll.total, 13);
+});
+
+test("evasão do inimigo vai como evasion e leva a chave (paga 1 Action)", () => {
+  seed("sessao-gm-1");
+  publishMesaGmEvasion("Militante", "Evasão", "REF 7 + Evasion 5 + 1d10", 17, [8], "part-9");
+  const body = calls[0].body as {
+    roll: { type: string; label: string; expression: string; total: number; rolls: number[] };
+    key?: string;
+  };
+  assert.equal(body.roll.type, "evasion");
+  assert.equal(body.roll.label, "Evasão");
+  assert.equal(body.roll.expression, "REF 7 + Evasion 5 + 1d10");
+  assert.equal(body.roll.total, 17);
+  assert.deepEqual(body.roll.rolls, [8]);
+  assert.equal(body.key, "part-9");
 });
 
 test("dano do GM vai como damage (custo zero)", () => {

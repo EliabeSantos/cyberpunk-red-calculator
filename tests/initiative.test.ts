@@ -60,13 +60,41 @@ test("Iniciativa = REF + modificadores + d10, cada componente uma única vez", (
 
     assert.strictEqual(result.refBonus, base.stats.REF, "a base é o REF puro");
     assert.strictEqual(result.total, result.refBonus + result.diceTotal + modifierSum, "cada modificador conta uma vez");
-    assert.ok(result.diceRolls.length >= 1 && result.diceRolls.length <= 2, "d10 com exploding");
+    assert.strictEqual(result.diceRolls.length, 1, "Iniciativa é UM d10, sem exploding");
+    assert.strictEqual(result.diceTotal, result.diceRoll, "um d10 só: soma = face do dado");
     assert.strictEqual(
       outcome.character.rollHistory[0].label,
       "Iniciativa",
       "a rolagem entra no histórico",
     );
     assert.strictEqual(outcome.character.rollHistory[0].total, result.total, "histórico e resultado batem");
+  });
+});
+
+test("natural 10 na Iniciativa não puxa d10 extra (a regra de crítico não vale)", () => {
+  withSeededRandom(0.95, () => {
+    const base = createEmptyCharacter("init-crit");
+    const result = rollInitiative(base).result;
+    const modifierSum = result.modifiers.reduce((sum, modifier) => sum + modifier.value, 0);
+
+    assert.strictEqual(result.diceRoll, 10, "saiu 10 natural");
+    assert.strictEqual(result.diceRolls.length, 1, "só um d10 — sem exploding de crítico");
+    assert.strictEqual(result.diceTotal, 10, "o 10 vale como está");
+    assert.strictEqual(result.total, result.refBonus + 10 + modifierSum, "REF + 1d10 (e mods)");
+    assert.doesNotMatch(result.expression, /crítico/i, "a fórmula não anuncia mais crítico");
+    assert.match(result.expression, /\+ 1d10 \[10\]$/, "a expressão mostra o dado único");
+  });
+});
+
+test("natural 1 na Iniciativa não é falha crítica (não subtrai d10)", () => {
+  withSeededRandom(0.0, () => {
+    const result = rollInitiative(createEmptyCharacter("init-fumble")).result;
+
+    assert.strictEqual(result.diceRoll, 1, "saiu 1 natural");
+    assert.strictEqual(result.diceRolls.length, 1, "sem d10 de falha crítica");
+    assert.strictEqual(result.diceTotal, 1, "o 1 não subtrai nada");
+    assert.strictEqual(result.total, result.refBonus + 1, "REF + 1");
+    assert.doesNotMatch(result.expression, /falha/i);
   });
 });
 

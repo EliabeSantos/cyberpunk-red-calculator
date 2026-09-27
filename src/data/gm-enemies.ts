@@ -116,6 +116,8 @@ function mapJsonToEnemy(json: {
       },
       criticalInjuries: [],
     },
+    // Guarda a lista do JSON: é daqui que saem os implantes do encontro.
+    cyberware: json.cyberware,
     gmNotes: gmNotesParts.join("\n"),
     conditions: [],
   };

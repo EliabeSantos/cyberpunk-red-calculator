@@ -9,6 +9,7 @@ import {
 import {
   buildEnemyAttackPayload,
   buildEnemyDamagePayload,
+  buildEnemyEvasionPayload,
   type EnemyRollSource,
 } from "../src/lib/discord/rollNotify.ts";
 
@@ -160,6 +161,24 @@ test("payload do dano usa a expressão da arma e modificador zero", () => {
 test("sem rolagem salva não há payload (nada é enviado)", () => {
   assert.equal(buildEnemyAttackPayload(participant()), null);
   assert.equal(buildEnemyDamagePayload(participant()), null);
+  assert.equal(buildEnemyEvasionPayload(participant()), null, "evasão ainda não rolada");
+});
+
+test("payload da Evasão carrega REF + nível como modificador", () => {
+  // Cartão do GM: REF 7 + Evasão 5 = base 12, d10 tirou 9 → total 21.
+  const built = buildEnemyEvasionPayload(
+    participant({ lastEvasionRoll: { diceRolls: [9], diceTotal: 9, total: 21, critical: false, fumble: false } }),
+  );
+  assert.ok(built);
+  assert.equal(built.kind, "evasion");
+  assert.equal(built.rollType, "Evasão");
+  assert.equal(built.expression, "1d10");
+  assert.deepEqual(built.rolls, [9]);
+  assert.equal(built.modifier, 12, "o modificador É a base REF + nível da perícia");
+  assert.equal(built.total, 21);
+  assert.equal(isDiscordMessagePayload({ ...built, sessionCode: "mesa-teste" }), true);
+  // Mesma invariante das demais rolagens: soma(dados) + modificador === total.
+  assert.equal(built.rolls.reduce((sum, value) => sum + value, 0) + built.modifier, built.total);
 });
 
 test("nome vazio cai para o arquétipo, depois para 'Inimigo'", () => {

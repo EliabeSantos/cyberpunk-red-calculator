@@ -70,8 +70,6 @@
 - Instalar o **mesmo cyberware duas vezes** é permitido (não há checagem de duplicata). Correto ou não?
 - Efeitos ativáveis usam **toggle manual** por peça (sem contador de rodada). Se um sistema de rodadas
   de combate aparecer, migrar para duração automática.
-- **Iniciativa: base `REF + 1d10`** — é a fórmula que a ficha já usava. O manual do CPR pode mandar
-  `REF + DEX + 1d10`; mudar isso altera toda Iniciativa da mesa, então ficou como está e fica a pergunta.
 - **Inimigos do GM** (`src/lib/enemyRolls.ts`) também não têm penalidade de HP nas rolagens deles.
   Fora do escopo das correções, que eram sobre a ficha do jogador.
 
@@ -81,6 +79,15 @@
   (`skill: brawling`); Martial Arts é outra perícia. O **+1d6 de dano vale para os dois**, porque é
   efeito de *ataque desarmado* e não de perícia. Comportamento fixado em
   `tests/cyberware-combat-matrix.test.ts` — se um dia mudar, esse teste é o que avisa.
+- **Iniciativa é `1d10 + REF`, sem regra de crítico** (decisão de 27/09/2026, encerrando a pergunta em
+  aberto sobre `REF + DEX + 1d10`): a base continua **só `REF`** e o dado é **UM d10** — natural 10
+  **não puxa** um d10 extra e natural 1 **não subtrai** (o exploding de crítico/falha não vale para
+  Iniciativa). Vale nos três caminhos, que são a mesma regra: `rollInitiative` (botão 🎲 da ficha **e**
+  o servidor da mesa, que usa essa função para os personagens), `rollEnemyInitiative` (inimigos na
+  mesa) e a rolagem local da tela de ⚔️ Encontros (que já era `1d10 + REF`). Modificadores de
+  cyberware, lesão de REF, "todas as ações" e lesão grave **continuam entrando**. Os campos
+  `critical`/`fumble` saíram de `InitiativeRollResult` (e os selos ⚡ CRÍTICO / 💥 FALHA CRÍTICA saíram
+  do card da Iniciativa). Fixado em `tests/initiative.test.ts` e `tests/mesa-combat-engine.test.ts`.
 
 ## Notas da fase 2 (ativação por toggle)
 
@@ -244,8 +251,81 @@ Decisões que valem revisão:
   turno`, `· sem Actions sobrando`) — a rolagem já aconteceu e não pode ser desfeita. Sem combate ativo nada é
   enviado (`registered: false`); tipos sem significado na mesa (ex.: `humanity_loss`) dão `400 invalid_roll`.
   A política fica em `src/lib/mesa/rollPolicy.ts`, módulo puro compartilhado por navegador, servidor e testes.
-- **Limitações do espelho de rolagens**: só passa por ele o que passa por `CharacterToolkit.onUpdate` —
-  rolagens das telas do GM (`enemyRolls`, `/gm/encounters`) **não** vão para a mesa; e o espelho é ida
-  (`ficha → mesa`): o orçamento debitado e a linha em **Dados na mesa** aparecem no painel, não como feedback
-  dentro da ficha. `event_log` continua append-only em jsonb (dois rolls simultâneos podem se sobrescrever,
+- **Limitações do espelho de rolagens**: as rolagens das telas do GM (`/gm/enemies`, `/gm/encounters`) vão
+  para a mesa pelo `gmRollPublish` (mesmo `POST /combat/roll`), mas o espelho é ida
+  (`origem → mesa`): o orçamento debitado e a linha em **Dados na mesa** aparecem no painel, não como feedback
+  dentro da ficha/encontro. `event_log` continua append-only em jsonb (dois rolls simultâneos podem se sobrescrever,
   mesma limitação dos demais eventos do combate).
+- **Vida (HP) espelhada da origem para a mesa** (decisão de 27/09/2026): **um sentindo só** — a ficha do
+  jogador manda o próprio HP (`publishMesaHp`, gatilho do `CharacterToolkit.onUpdate` e do `onSaved`) e o
+  encontro do Mestre manda o HP dos inimigos (`publishMesaEnemyHp`, gatilho de aplicar dano/cura em
+  `/gm/encounters`); ambos por `POST /api/mesa/[id]/combat/hp` (`syncCombatHp`), fire-and-forget como o
+  espelho de rolagens. **Nada volta da mesa para a ficha**: um −/+ manual do GM no painel é sobrescrito na
+  próxima mudança da origem, e o localStorage do jogador segue sendo a fonte da verdade do personagem
+  (escrito de volta daria loop e exigiria regra de desempate). Sem combate ativo ou sem linha correspondente
+  a rota devolve `updated: false` em vez de erro.
+- **`source_key` em `mesa_combatants`** (migração `20260927000000`): sem um id compartilhado não dá para saber
+  "qual inimigo do encontro é esta linha da mesa" — nome se repete em clones do bestiário e `sort_order` muda
+  quando a iniciativa é rolada. Por isso `EncounterParticipant` ganhou `id` (`ensureEncounterIds` completa
+  encontros salvos antes da feature e **grava de volta**, para a chave não virar outra num reload) e o valor
+  viaja como `key` no seed (`MesaEnemySeed`). **Retrocompatível**: coluna nullable; linhas antigas ficam `null`
+  e não espelham vida. **Se a migração não for aplicada**, `insertCombatantRows` re-insere sem a coluna (o
+  combate continua começando), `sourceKeySupport` guarda o resultado por processo e o espelho de inimigo
+  recusa com `503 migration_pending` — o dos jogadores não depende dela.
+- **Ação de inimigo debitada na mesa** (decisão de 27/09/2026): o ataque (e a perícia) que o Mestre rola em
+  `/gm/encounters` para um inimigo do encontro vinculado agora **debita 1 Action da linha do inimigo**. O
+  `POST /combat/roll` ganhou `key` (= `participant.id` → coluna `source_key`), travado por `requireGM` — quem
+  pode debitar é `planRollDebit` (puro, em `rollPolicy.ts`): GM **só com chave e linha encontrada**; sem chave
+  (catálogo `/gm/enemies`, GM rolando de fora), inimigo fora deste combate ou migração pendente continua
+  relatório puro (entra no Registro, sem débito e sem nota); dano, dano recebido e iniciativa (custo 0) nunca
+  debitem. A validação é a mesma `resolveAction` do botão ATAQUE com `actorRole: "gm"` — ou seja, **vale
+  inclusive fora do turno** (regra do motor), desde que a iniciativa já tenha sido rolada, o inimigo não
+  esteja caído e sobre Action; do contrário a linha entra marcada com o motivo (`· sem Actions sobrando`,
+  `· fora do combate`, `· iniciativa não rolada`). Bônus do `key`: o Registro passa a gravar o **nome do
+  inimigo** em vez do nome do Mestre. `findEnemyForRoll` converte `migration_pending` em "não encontrado",
+  então sem a migração do `source_key` a tela do Mestre segue rolando normalmente (só não debita).
+- **Inimigo morre a 0 HP, personagem não**: inimigo não faz death save nesta aplicação, então o espelho marca
+  `is_dead = hp <= 0` (e devolve a combater com HP > 0). Personagem só é marcado morto quando a ficha manda
+  `combat.isDead` — 0 HP com death save pendente continua agindo, igual ao modo local. O GM continua podendo
+  ajustar à mão pelo painel (botões −/+, `updateCombatant`), que não muda essa regra.
+- **Encontro vinculado à mesa ao iniciar combate** (decisões de 27/09/2026, tabela `mesa_battles` / migração
+  `20260927000001`): o `POST /combat` passa a receber `encounter: { id, name }` e **reserva a partida antes de
+  mexer no combate** — o UNIQUE de `mesa_battles.encounter_id` é a autoridade contra encontro repetido; se
+  qualquer passo seguinte falhar, a reserva é apagada (`discardBattle`) e nada mudou. Combate avulso grava
+  `encounter_id = NULL` (o UNIQUE deixa passar vários NULLs).
+- **Encontro é de uso único, para sempre** (decisão do Mestre): depois de usado/concluído ele **nunca mais**
+  inicia combate, em mesa nenhuma. Dois códigos distintos, para a UI reagir certo:
+  `encounter_used` (partida concluída → selo ✅ Concluído, botão some) e `encounter_in_use` (em combate noutra
+  mesa → aviso com o código da Mesa) — e um terceiro, `encounter_restart`, para "já está em combate **nesta**
+  mesa, reinicie". `combat_already_active` continua valendo para o encontro estar **limpo** e a mesa com luta
+  de outro encontro.
+- **Durante o combate, quem manda é a MESA** (decisão de 27/09/2026): o encontro **puxa** o HP dos inimigos de
+  volta pelo `source_key` (`useMesaState` → `applyMesaStateToEncounter`, Realtime + polling de 4s), aparado em
+  `[0, HP máximo]`, e marca o vínculo `completed` quando `combat.status === "finished"` (ou a sessão fecha).
+  O espelho **ida** continua sendo só clique do Mestre (`publishMesaEnemyHp`) — nenhum efeito dispara push,
+  então não há loop. `applyMesaStateToEncounter` devolve `null` quando nada mudou: sem re-render e sem
+  `saveEncounter` à toa.
+- **Partida fecha em todo fim de combate**: `endCombat` (GM), `finishSession` (sessão) e o fim automático de
+  `advanceActiveTurn` (`advance.kind === "finished"`, todos os inimigos caídos) chamam `completeActiveBattle`,
+  que mescla o snapshot de entrada com o estado final (`mergeBattleRoster`): `hpEnd`/`isDead`/`initiative` de
+  quem ficou, `removed: true` de quem saiu antes, e quem entrou no meio com a vida do momento como `hpStart`.
+- **Histórico fica na tela de ⚔️ Encontros** (decisão de 27/09/2026), não no painel da mesa: `GET
+  /api/mesa/[id]/battles` (authenticate + **requireGM**, 50 mais recentes) alimenta o card "Histórico de
+  partidas" e a **reconciliação** dos vínculos locais (`reconcileEncountersWithBattles`) — cobre luta
+  terminada com a tela fechada, lançada noutro separador (localStorage é compartilhado) e vínculo ausente.
+  Vínculo local (`EncounterData.battle`) é só UI; o bloqueio é do servidor.
+- **Reinício sem furar a regra**: `restart: true` reaproveita a **mesma** linha da partida (um encontro =
+  uma partida no histórico, mesmo reiniciada) em vez de fechar a luta; a UI tenta esse caminho primeiro e só
+  chama `endCombat` se o servidor responder `combat_already_active` (luta de outro encontro).
+- **Migração pendente não regride o combate** (mesmo padrão do `source_key`): `battleSupport` cacheia
+  `unknown | yes | no` por processo; sem a tabela, `startCombat` segue **sem histórico e sem bloqueio**,
+  `completeActiveBattle` vira no-op e `GET /battles` responde `503 migration_pending` (a tela mostra o aviso em
+  vez de fingir histórico vazio).
+- **Implantes dos inimigos: descrição, com cota por nível** (decisão do Mestre, 27/09/2026): ao criar o
+  encontro cada inimigo recebe as 2 personalidades **e** implantes — nível 1 → 2, 2 → 3, 3 → 4, 4 → 5
+  (`implantCountForLevel` em `src/data/enemyImplants.ts`). A lista começa pelos `cyberware` que já vêm no JSON
+  do catálogo (`Enemy.cyberware`, novo campo opcional preenchido em `gm-enemies.ts`) e só então completa a
+  cota sorteando do catálogo de `items.json`, sem repetição; base acima da cota **não é cortada**. **Não mexe**
+  em rolagem, HP, armor nem Actions — os `modifiers` continuam valendo só para a ficha do jogador. Encontros
+  salvos antes da feature não ganham implantes retroativos e inimigos criados em `/gm/enemies` não têm tela
+  para editar (campo começa vazio → só o sorteio). Fixado em `tests/enemy-implants.test.ts`.

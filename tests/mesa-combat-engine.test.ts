@@ -224,10 +224,11 @@ test("sem ninguém vivo o combate termina", () => {
 // Iniciativa de inimigo
 // ---------------------------------------------------------------------------
 
-test("iniciativa de inimigo usa REF + d10 explodindo", () => {
-  // REF 5 + d10 (1..10); 10 soma outro d10, 1 subtrai outro d10.
-  const minPossible = 5 + 1 - 10;
-  const maxPossible = 5 + 10 + 10;
+test("iniciativa de inimigo é REF + 1d10 puro (sem crítico, sem falha crítica)", () => {
+  // REF 5 + d10 (1..10): o d10 NÃO explode — natural 10 não soma outro d10
+  // e natural 1 não subtrai (regra de 27/09/2026, igual à ficha).
+  const minPossible = 5 + 1;
+  const maxPossible = 5 + 10;
   for (let i = 0; i < 200; i += 1) {
     const total = rollEnemyInitiative(5);
     assert.ok(total >= minPossible, `valor abaixo do mínimo: ${total}`);

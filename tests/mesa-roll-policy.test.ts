@@ -13,6 +13,7 @@ import {
   formatRollEvent,
   isMesaRollKind,
   parseMesaRoll,
+  planRollDebit,
   rollDenialNote,
   summarizeRoll,
   type MesaRollSummary,
@@ -150,6 +151,78 @@ test("fora do turno a rolagem não debita, mas o motivo fica registrado", () => 
   assert.equal(result.ok, false);
   assert.equal(result.ok === false ? result.reason : "", "not_your_turn");
   assert.equal(rollDenialNote("not_your_turn"), "fora do seu turno");
+});
+
+test("quem paga a rolagem: jogador, Mestre com chave e Mestre de fora", () => {
+  // Jogador com combatente vinculado → ele mesmo paga.
+  assert.deepEqual(
+    planRollDebit({ role: "player", actionType: "attack", hasKey: false, targetFound: true }),
+    { canDebit: true, denial: null },
+  );
+  // Mestre com a chave do encontro vinculado → o INIMIGO da mesa paga.
+  assert.deepEqual(
+    planRollDebit({ role: "gm", actionType: "attack", hasKey: true, targetFound: true }),
+    { canDebit: true, denial: null },
+  );
+  // Mestre sem chave (catálogo / rolagem de fora) → relatório puro.
+  assert.deepEqual(
+    planRollDebit({ role: "gm", actionType: "attack", hasKey: false, targetFound: false }),
+    { canDebit: false, denial: null },
+  );
+  // Chave enviada, mas o inimigo não está neste combate (ou migração
+  // `source_key` pendente): também é relatório, sem nota no Registro.
+  assert.deepEqual(
+    planRollDebit({ role: "gm", actionType: "attack", hasKey: true, targetFound: false }),
+    { canDebit: false, denial: null },
+  );
+  // Jogador sem linha própria na mesa: o dado entra sem custo (ficha local
+  // nunca é bloqueada por isso).
+  assert.deepEqual(
+    planRollDebit({ role: "player", actionType: "attack", hasKey: false, targetFound: false }),
+    { canDebit: false, denial: null },
+  );
+});
+
+test("dano e rolagem livre nunca planejam débito, nem com chave de inimigo", () => {
+  for (const role of ["gm", "player"] as const) {
+    for (const kind of ["damage", "received_damage", "free_roll"] as const) {
+      assert.deepEqual(
+        planRollDebit({ role, actionType: MESA_ROLL_ACTION[kind], hasKey: true, targetFound: true }),
+        { canDebit: false, denial: null },
+        `${role}/${kind}`,
+      );
+    }
+  }
+});
+
+test("Mestre rolando pelo inimigo fora do turno continua valendo (regra do motor)", () => {
+  const result = resolveAction({
+    combatStatus: "active",
+    initiativeStarted: true,
+    activeCombatantId: "outro-combatente",
+    actorRole: "gm",
+    actorOwnsCombatant: false,
+    combatant: { id: "inimigo-1", isDead: false, ...economy() },
+    actionType: MESA_ROLL_ACTION.attack!,
+    meters: 0,
+  });
+  assert.deepEqual(result, { ok: true, cost: 1 });
+});
+
+test("inimigo fora do combate não paga ação — e o registro diz por quê", () => {
+  const result = resolveAction({
+    combatStatus: "active",
+    initiativeStarted: true,
+    activeCombatantId: "inimigo-1",
+    actorRole: "gm",
+    actorOwnsCombatant: false,
+    combatant: { id: "inimigo-1", isDead: true, ...economy() },
+    actionType: MESA_ROLL_ACTION.attack!,
+    meters: 0,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.ok === false ? result.reason : "", "combatant_defeated");
+  assert.equal(rollDenialNote("combatant_defeated"), "fora do combate");
 });
 
 test("o motivo vira um sufixo curto no registro", () => {

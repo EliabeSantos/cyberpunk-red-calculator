@@ -255,13 +255,11 @@ export function isTurnOf(combatantId: string, activeCombatantId: string | null):
 }
 
 /**
- * Iniciativa de inimigo/NPC: REF + 1d10 explodindo.
- * Mantém a mesma fórmula da ficha (base REF) sem depender de uma ficha de jogador.
+ * Iniciativa de inimigo/NPC: **REF + 1d10**.
+ * Mantém a mesma fórmula da ficha (base REF) sem depender de uma ficha de
+ * jogador — e a mesma regra de 27/09/2026: **sem crítico e sem falha crítica**
+ * aqui, o d10 nunca explode para cima nem para baixo.
  */
 export function rollEnemyInitiative(ref: number): number {
-  const dice = rollDice("1d10");
-  let total = ref + dice.rolls[0];
-  if (dice.rolls[0] === 10) total += rollDice("1d10").rolls[0];
-  if (dice.rolls[0] === 1) total -= rollDice("1d10").rolls[0];
-  return total;
+  return ref + rollDice("1d10").rolls[0];
 }

@@ -112,6 +112,48 @@ export function parseMesaRoll(raw: unknown): ParseMesaRollResult {
   return { ok: true, roll };
 }
 
+/** O que ESTA rolagem pode mexer na economia da mesa. */
+export interface RollDebitPlan {
+  /** Passa pela validação do servidor (`resolveAction`) e consome Action. */
+  canDebit: boolean;
+  /** Motivo de "não contou" quando a rolagem era uma ação e ficou por isso mesmo. */
+  denial: string | null;
+}
+
+/**
+ * Quem paga por esta rolagem (decisão de 27/09/2026).
+ *
+ * O encontro do Mestre agora manda as ações dos INIMIGOS para a mesa: quando
+ * ele rola o ataque em `/gm/encounters` com a chave do participante (`key` →
+ * `source_key`), o débito sai da linha do inimigo na mesa. Sem chave — tela de
+ * catálogo de inimigos, GM rolando de fora — a rolagem continua sendo
+ * RELATÓRIO: entra no Registro e não mexe em Action de ninguém (na CPR o Mestre
+ * comanda inimigos livremente). Dano, dano recebido e rolagem livre nunca
+ * custam: já são parte do mesmo ataque.
+ */
+export function planRollDebit(input: {
+  role: "gm" | "player";
+  actionType: CombatActionType | null;
+  /** A rolagem veio identificando um inimigo do encontro (`key`)? */
+  hasKey: boolean;
+  /** Existe a linha correspondente neste combate? */
+  targetFound: boolean;
+}): RollDebitPlan {
+  // Sem custo não há o que debitar nem o que justificar no Registro.
+  if (input.actionType === null) return { canDebit: false, denial: null };
+
+  if (input.role === "gm") {
+    // Com chave e linha encontrada o inimigo paga; nos outros casos (sem
+    // chave, inimigo fora deste combate ou migração pendente) é relatório —
+    // sem débito e sem nota, como era antes do vínculo encontro↔mesa.
+    return { canDebit: input.hasKey && input.targetFound, denial: null };
+  }
+
+  // Jogador: só o combatente dele é debitado. Sem linha vinculada o dado
+  // entra no Registro sem custo (a ficha local nunca é bloqueada por isso).
+  return { canDebit: input.targetFound, denial: null };
+}
+
 /**
  * Sufixo honesto no registro quando a rolagem ERA uma ação e o servidor não
  * deixou debitá-la. A rolagem aconteceu na ficha e não pode ser desfeita aqui —
