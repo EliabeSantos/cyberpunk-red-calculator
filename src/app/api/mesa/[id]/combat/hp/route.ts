@@ -2,8 +2,9 @@
  * POST /api/mesa/[id]/combat/hp — espelho de VIDA (HP) da ORIGEM para a mesa.
  *
  * Body:
- *   { hp, hpMax?, isDead? } → o combatente de QUEM pediu (ficha do jogador);
- *   { key, hp }             → inimigo pelo `source_key` do encontro (só Mestre).
+ *   { hp, hpMax?, isDead? }    → o combatente de QUEM pediu (ficha do jogador);
+ *   { key, hp, supplies? }     → inimigo pelo `source_key` do encontro (só Mestre).
+ *                                `supplies` espelha a mochila (pente + reserva).
  *
  * Um sentindo só: a ficha do jogador e o encontro do Mestre mandam; a mesa só
  * exibe (decisão de 27/09/2026). Quem chama é fire-and-forget, igual ao espelho
@@ -31,6 +32,7 @@ export async function POST(request: Request, context: Context): Promise<Response
       hpMax: body.hpMax,
       isDead: body.isDead,
       key: body.key,
+      supplies: body.supplies,
     });
     if (result.updated) await publishMesaState(id);
     return ok(result);

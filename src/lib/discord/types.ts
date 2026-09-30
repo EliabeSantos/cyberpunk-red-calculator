@@ -68,7 +68,12 @@ export interface DiscordInitiativeRow {
   roll: number;
   /** Bônus de REF somado pelo site. */
   ref: number;
-  /** Total final (roll + ref), igual ao exibido na tela. */
+  /**
+   * Bônus de implantes (cyberware) somado pelo site — Sandevistan, Kerenzikov.
+   * Opcional; quando ausente ou 0 a mensagem omite o trecho.
+   */
+  bonus?: number;
+  /** Total final (roll + ref + bonus), igual ao exibido na tela. */
   total: number;
 }
 
@@ -96,6 +101,7 @@ export function isDiscordInitiativeRow(value: unknown): value is DiscordInitiati
     row.name.length > 0 &&
     Number.isInteger(row.roll) &&
     Number.isInteger(row.ref) &&
+    (row.bonus === undefined || Number.isInteger(row.bonus)) &&
     Number.isInteger(row.total)
   );
 }

@@ -38,6 +38,7 @@ import type {
   MesaParticipant,
   MesaSession,
   MesaState,
+  MesaSupplies,
 } from "@/lib/mesa/types";
 import { DatabaseQueryError, getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { ACTION_LABELS, DENIAL_MESSAGES } from "@/lib/mesa/messages";
@@ -133,23 +134,65 @@ function withoutSourceKey(rows: Array<Record<string, unknown>>): Array<Record<st
 }
 
 /**
- * Cria as linhas de combatente guardando `source_key`.
+ * `supplies` é a mochila do inimigo espelhada da tela de Encontros (migração
+ * `20260930000000_mesa_combatant_supplies.sql`). Mesmo molde de `source_key`:
+ * sem a migração o combate continua começando, só a linha da mesa não mostra
+ * pente nem cura.
+ */
+let suppliesSupport: "unknown" | "yes" | "no" = "unknown";
+
+function mentionsSupplies(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("supplies");
+}
+
+function withoutSupplies(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return rows.map((row) => {
+    const copy = { ...row };
+    delete copy.supplies;
+    return copy;
+  });
+}
+
+/** Linhas sem as colunas de migração já sabidas como ausentes. */
+function withOptionalColumns(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  let next = rows;
+  if (sourceKeySupport === "no") next = withoutSourceKey(next);
+  if (suppliesSupport === "no") next = withoutSupplies(next);
+  return next;
+}
+
+/**
+ * Cria as linhas de combatente guardando `source_key` e `supplies`.
  *
- * Se a migração ainda não tiver sido aplicada, re-insere SEM a coluna em vez
- * de derrubar o início do combate: o que se perde é só o espelho de HP dos
- * inimigos — pessoas, turno e economia de ações continuam funcionando.
+ * Se uma migração ainda não tiver sido aplicada, re-insere SEM a coluna em
+ * vez de derrubar o início do combate: o que se perde é o espelho de HP (ou a
+ * mochila) dos inimigos — pessoas, turno e economia de ações seguem.
  */
 async function insertCombatantRows(rows: Array<Record<string, unknown>>, context: string): Promise<void> {
   // Só um insert que LEVA a coluna serve de teste: payload só de personagens
   // não prova nada sobre a migração.
-  const testsColumn = rows.some((row) => "source_key" in row);
-  try {
-    await query(db().from("mesa_combatants").insert(sourceKeySupport === "no" ? withoutSourceKey(rows) : rows), context);
-    if (testsColumn) sourceKeySupport = "yes";
-  } catch (error) {
-    if (sourceKeySupport === "no" || !mentionsSourceKey(error)) throw error;
-    sourceKeySupport = "no";
-    await query(db().from("mesa_combatants").insert(withoutSourceKey(rows)), context);
+  const testsSourceKey = rows.some((row) => "source_key" in row);
+  const testsSupplies = rows.some((row) => "supplies" in row);
+
+  let attempt = rows;
+  for (;;) {
+    try {
+      await query(db().from("mesa_combatants").insert(attempt), context);
+      if (testsSourceKey && "source_key" in attempt[0]) sourceKeySupport = "yes";
+      if (testsSupplies && "supplies" in attempt[0]) suppliesSupport = "yes";
+      return;
+    } catch (error) {
+      const pending =
+        sourceKeySupport !== "no" && mentionsSourceKey(error)
+          ? "source_key"
+          : suppliesSupport !== "no" && mentionsSupplies(error)
+            ? "supplies"
+            : null;
+      if (!pending) throw error;
+      if (pending === "source_key") sourceKeySupport = "no";
+      else suppliesSupport = "no";
+      attempt = withOptionalColumns(rows);
+    }
   }
 }
 
@@ -410,6 +453,7 @@ interface CombatantRow {
   participant_id: string | null;
   name: string;
   source_key?: string | null;
+  supplies?: MesaSupplies | null;
   initiative: number | null;
   initiative_detail: MesaCombatant["initiativeDetail"];
   actions_max: number;
@@ -469,6 +513,7 @@ function toCombatant(row: CombatantRow): MesaCombatant {
     participantId: row.participant_id,
     name: row.name,
     sourceKey: row.source_key ?? null,
+    supplies: row.supplies ?? null,
     initiative: row.initiative,
     initiativeDetail: row.initiative_detail ?? null,
     actionsMax: row.actions_max,
@@ -1031,7 +1076,8 @@ export async function startCombat(input: {
         // Chave do participante do encontro: é por ela que o HP aplicado lá em
         // Encontros acha esta linha aqui (ver `syncCombatHp`).
         source_key: enemy.key,
-        initiative_detail: { refBonus: enemy.ref },
+        initiative_detail: enemyInitiativeDetail(enemy),
+        supplies: enemy.supplies ?? null,
         actions_max: ACTIONS_PER_TURN,
         actions_remaining: ACTIONS_PER_TURN,
         movement_max: movement,
@@ -1069,13 +1115,71 @@ interface EnemyInput {
   ref: number;
   /** STAT MOVE do inimigo; `null` quando o cliente não informou (fallback 6 m). */
   move: number | null;
+  /**
+   * Bônus de Iniciativa dos implantes do inimigo (0 quando não há) — a mesa
+   * rola `1d10 + REF + bônus`, igual à tela de Encontros.
+   */
+  initiativeBonus: number;
   /** Chave estável do participante do encontro (vira `source_key`). */
   key: string | null;
+  /** Mochila do inimigo (pente + reserva); `null` quando não há o que mostrar. */
+  supplies: MesaSupplies | null;
 }
 
 /** MOVE × 2 metros quando o encontro informa o MOVE; senão o fallback do motor. */
 function enemyMovementBudget(move: number | null): number {
   return move === null ? MOVEMENT_PER_TURN : movementMetersPerTurn(move);
+}
+
+/**
+ * Detalhe da iniciativa de um inimigo seed: sempre o REF, e o bônus de
+ * implantes quando houver (`rollInitiativeForAll` lê os dois).
+ */
+function enemyInitiativeDetail(enemy: EnemyInput): { refBonus: number; bonus?: number } {
+  return enemy.initiativeBonus
+    ? { refBonus: enemy.ref, bonus: enemy.initiativeBonus }
+    : { refBonus: enemy.ref };
+}
+
+/**
+ * Mochila vinda do cliente → só o que a coluna `supplies` guarda.
+ *
+ * Valores aparados para intervalos seguros e itens duplicados removidos.
+ * `null` quando não sobra nada (arma corpo a corpo sem cura): a coluna fica
+ * vazia em vez de gravar `{}`.
+ */
+function sanitizeSupplies(raw: unknown): MesaSupplies | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const input = raw as Record<string, unknown>;
+
+  const inventory: Array<{ item: string; quantity: number }> = [];
+  if (Array.isArray(input.inventory)) {
+    for (const entry of input.inventory) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+      const item = (entry as Record<string, unknown>).item;
+      const quantity = Number((entry as Record<string, unknown>).quantity);
+      if (typeof item !== "string") continue;
+      const name = item.trim().slice(0, 60);
+      const qty = Number.isFinite(quantity) ? Math.max(0, Math.min(999, Math.floor(quantity))) : 0;
+      if (name.length === 0 || qty === 0) continue;
+      if (inventory.some((existing) => existing.item === name)) continue;
+      inventory.push({ item: name, quantity: qty });
+    }
+  }
+
+  const int = (value: unknown): number | null => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(0, Math.min(999, Math.floor(parsed))) : null;
+  };
+  const magazine = int(input.magazine);
+  const rawAmmo = int(input.ammo);
+  const ammo = rawAmmo === null ? null : magazine === null ? rawAmmo : Math.min(rawAmmo, magazine);
+
+  const supplies: MesaSupplies = { inventory };
+  if (magazine !== null) supplies.magazine = magazine;
+  if (ammo !== null) supplies.ammo = ammo;
+  if (supplies.magazine === undefined && supplies.ammo === undefined && inventory.length === 0) return null;
+  return supplies;
 }
 
 function sanitizeEnemies(raw: unknown): EnemyInput[] {
@@ -1101,7 +1205,13 @@ function sanitizeEnemies(raw: unknown): EnemyInput[] {
     // este inimigo, para o HP aplicado lá chegar a esta linha.
     const rawKey = typeof enemy.key === "string" ? enemy.key.trim() : "";
     const key = rawKey.length > 0 ? rawKey.slice(0, 80) : null;
-    return { name, hp, hpMax, ref, move, key };
+    // Bônus de Iniciativa dos implantes (opcional): ausente/inválido → 0.
+    const rawBonus = Number(enemy.initiativeBonus);
+    const initiativeBonus =
+      enemy.initiativeBonus === undefined || enemy.initiativeBonus === null || !Number.isFinite(rawBonus)
+        ? 0
+        : Math.max(-20, Math.min(20, Math.floor(rawBonus)));
+    return { name, hp, hpMax, ref, move, key, initiativeBonus, supplies: sanitizeSupplies(enemy.supplies) };
   });
 }
 
@@ -1136,7 +1246,8 @@ export async function addEnemies(input: {
       source_key: enemy.key,
       // Já em combate: entra no fim da ordem com iniciativa 0.
       initiative: combat.initiative_started ? 0 : null,
-      initiative_detail: { refBonus: enemy.ref },
+      initiative_detail: enemyInitiativeDetail(enemy),
+      supplies: enemy.supplies,
       actions_max: ACTIONS_PER_TURN,
       actions_remaining: ACTIONS_PER_TURN,
       movement_max: movement,
@@ -1313,6 +1424,8 @@ export async function syncCombatHp(input: {
   hpMax?: unknown;
   isDead?: unknown;
   key?: unknown;
+  /** Mochila do inimigo (só Mestre, junto do `key`) — mesma rota do espelho de HP. */
+  supplies?: unknown;
 }): Promise<{ updated: boolean }> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   if (session.status === "finished") return { updated: false };
@@ -1336,6 +1449,10 @@ export async function syncCombatHp(input: {
   const update: Record<string, unknown> = { hp_current: clamped };
   if (hpMax !== null) update.hp_max = hpMax;
 
+  // Mochila do inimigo (migração pendente → simplesmente não entra no update).
+  const supplies = key ? sanitizeSupplies(input.supplies) : null;
+  if (supplies && suppliesSupport !== "no") update.supplies = supplies;
+
   if (key) {
     // Inimigo não faz death save nesta aplicação: 0 HP = fora da ordem de turno,
     // cura acima de 0 = volta a agir. Regra determinística, sem estado próprio.
@@ -1351,6 +1468,15 @@ export async function syncCombatHp(input: {
   try {
     await query(db().from("mesa_combatants").update(update).eq("id", row.id), "Falha ao atualizar o HP");
   } catch (error) {
+    if (suppliesSupport !== "no" && mentionsSupplies(error)) {
+      // Migração da mochila pendente: a vida é o que importa, então refaz o
+      // update sem a coluna e deixa a linha da mesa sem pente/cura.
+      suppliesSupport = "no";
+      const retry = { ...update };
+      delete retry.supplies;
+      await query(db().from("mesa_combatants").update(retry).eq("id", row.id), "Falha ao atualizar o HP");
+      return { updated: true };
+    }
     if (mentionsSourceKey(error)) {
       sourceKeySupport = "no";
       throw new MesaError(SOURCE_KEY_MIGRATION, 503, "migration_pending");
@@ -1380,7 +1506,7 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
     kind: "character" | "enemy";
     name: string;
     initiative: number;
-    initiativeDetail: { expression: string; refBonus: number; total: number };
+    initiativeDetail: { expression: string; refBonus: number; total: number; bonus?: number };
     isDead: boolean;
     sortOrder: number;
   }> = [];
@@ -1389,6 +1515,7 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
     let total = 0;
     let expression = "";
     let refBonus = 0;
+    let bonus = 0;
 
     if (row.kind === "character" && row.character_id) {
       const sheet = await loadSheet(row.character_id);
@@ -1404,10 +1531,13 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
         expression = `REF ${refBonus} (ficha indisponível)`;
       }
     } else {
-      const detail = row.initiative_detail as { refBonus?: number } | null;
+      const detail = row.initiative_detail as { refBonus?: number; bonus?: number } | null;
       refBonus = Math.floor(detail?.refBonus ?? 5);
-      total = rollEnemyInitiative(refBonus);
-      expression = `REF ${refBonus} + 1d10`;
+      bonus = Math.floor(detail?.bonus ?? 0);
+      total = rollEnemyInitiative(refBonus, bonus);
+      expression = bonus
+        ? `REF ${refBonus} + ${bonus} (implantes) + 1d10`
+        : `REF ${refBonus} + 1d10`;
     }
 
     rolled.push({
@@ -1415,7 +1545,9 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
       kind: row.kind,
       name: row.name,
       initiative: total,
-      initiativeDetail: { expression, refBonus, total },
+      // O bônus precisa sobreviver a uma segunda rolagem: ele vem do
+      // `initiative_detail` gravado no seed e não é recalculado aqui.
+      initiativeDetail: { expression, refBonus, total, ...(bonus ? { bonus } : {}) },
       isDead: row.is_dead,
       sortOrder: row.sort_order,
     });

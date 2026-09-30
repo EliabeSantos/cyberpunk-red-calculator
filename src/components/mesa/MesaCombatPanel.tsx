@@ -22,6 +22,7 @@ import {
   MesaApiError,
 } from "@/lib/mesa/client";
 import { denialMessage } from "@/lib/mesa/messages";
+import { isHealingSupply } from "@/data/enemySupplies";
 import type { MesaCombatant, MesaState } from "@/lib/mesa/types";
 
 interface Props {
@@ -274,6 +275,7 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
                 <span className="mesa-hp">
                   {combatant.hpCurrent}/{combatant.hpMax} HP
                 </span>
+                <EnemySupplyChips combatant={combatant} />
               </div>
 
               <div className="mesa-combatant-conditions">
@@ -436,5 +438,36 @@ function ActionButton({ label, enabled, title, busy, onClick }: ActionButtonProp
     >
       [ {label} ]
     </button>
+  );
+}
+
+/**
+ * Mochila do INIMIGO espelhada da mesa: pente (balas/capacidade) e quantas
+ * unidades de cura ainda restam.
+ *
+ * A mesa não calcula nada aqui — só lê `mesa_combatants.supplies`, que a tela
+ * de Encontros reenvia a cada tiro, recarregamento ou cura. Sem mochila (ou
+ * sem a migração da coluna) não desenha nada.
+ */
+function EnemySupplyChips({ combatant }: { combatant: MesaCombatant }) {
+  if (combatant.kind !== "enemy") return null;
+  const supplies = combatant.supplies;
+  if (!supplies) return null;
+
+  const healUnits = (supplies.inventory ?? [])
+    .filter((entry) => isHealingSupply(entry.item))
+    .reduce((total, entry) => total + entry.quantity, 0);
+
+  const chips: string[] = [];
+  if (typeof supplies.magazine === "number") {
+    chips.push(`🔫 ${supplies.ammo ?? 0}/${supplies.magazine}`);
+  }
+  if (healUnits > 0) chips.push(`✚ ${healUnits}`);
+  if (chips.length === 0) return null;
+
+  return (
+    <span className="mesa-supplies" title="Mochila do inimigo — munição do pente e itens de cura">
+      {chips.join(" · ")}
+    </span>
   );
 }

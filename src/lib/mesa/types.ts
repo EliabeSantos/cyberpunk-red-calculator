@@ -28,6 +28,21 @@ export interface MesaParticipant {
   connectedAt: string;
 }
 
+/**
+ * Mochila de um inimigo espelhada na mesa (`mesa_combatants.supplies`).
+ *
+ * A mesa só EXPOE o estado — quem rola ataque, gasta bala, recarrega e usa
+ * cura é a tela de Encontros (`src/lib/gmStorage.ts`), dona da mochila.
+ */
+export interface MesaSupplies {
+  /** Balas no pente agora; ausente quando a arma não tem pente. */
+  ammo?: number;
+  /** Capacidade do pente. */
+  magazine?: number;
+  /** Reserva na mochila: munição para recarregar e itens de cura. */
+  inventory?: Array<{ item: string; quantity: number }>;
+}
+
 export interface MesaCombatant {
   id: string;
   combatId: string;
@@ -43,8 +58,14 @@ export interface MesaCombatant {
    * criados sem chave.
    */
   sourceKey: string | null;
+  /** `null` em personagens e em inimigos sem mochila (`mesa_combatants.supplies`). */
+  supplies: MesaSupplies | null;
   initiative: number | null;
-  initiativeDetail: { expression?: string; refBonus?: number; total?: number } | null;
+  /**
+   * Como a iniciativa foi calculada. `bonus` é o bônus de implantes do inimigo
+   * (`1d10 + refBonus + bonus`) — presente só quando ≠ 0.
+   */
+  initiativeDetail: { expression?: string; refBonus?: number; total?: number; bonus?: number } | null;
   actionsMax: number;
   actionsRemaining: number;
   movementMax: number;

@@ -36,11 +36,29 @@ export interface MesaEnemySeed {
   /** STAT MOVE do inimigo → o servidor calcula MOVE × 2 metros de orçamento. */
   move: number;
   /**
+   * Bônus de Iniciativa vindo dos implantes do inimigo (Sandevistan, Kerenzikov).
+   * A mesa rola `1d10 + REF + bônus` para ele — mesma conta da tela de Encontros.
+   */
+  initiativeBonus?: number;
+  /**
    * Identidade estável do participante do encontro — vira `source_key` na mesa
    * e é por ela que o HP aplicado em Encontros acha a linha certa aqui.
    * Opcional: sem ela o inimigo entra normalmente, só não espelha vida.
    */
   key?: string;
+  /**
+   * Mochila do inimigo — pente e reserva (munição + itens de cura), tal como
+   * estão no encontro. A mesa só EXPOE o estado (`mesa_combatants.supplies`);
+   * quem rola ataque, recarrega e cura continua sendo a tela de Encontros.
+   */
+  supplies?: {
+    /** Balas no pente agora; ausente quando a arma não tem pente. */
+    ammo?: number;
+    /** Capacidade do pente. */
+    magazine?: number;
+    /** Reserva na mochila: munição para recarregar e itens de cura. */
+    inventory?: Array<{ item: string; quantity: number }>;
+  };
 }
 
 interface Props {

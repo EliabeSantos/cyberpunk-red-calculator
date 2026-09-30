@@ -226,6 +226,16 @@ export interface MesaHpUpdate {
   isDead?: boolean;
   /** Chave do inimigo no encontro (só o Mestre; usa `source_key`). */
   key?: string;
+  /**
+   * Mochila do INIMIGO (pente + reserva), enviada junto porque o dono dela é a
+   * tela de Encontros: tiro, recarregamento e cura acontecem lá e a linha da
+   * mesa precisa mostrar o estado novo. Só o Mestre envia.
+   */
+  supplies?: {
+    ammo?: number;
+    magazine?: number;
+    inventory?: Array<{ item: string; quantity: number }>;
+  };
 }
 
 /**

@@ -32,7 +32,7 @@ Além do modo local (ficha, criação, combate e rolagens funcionando **sem serv
 
 ### Configuração
 
-1. Rode no SQL Editor do Supabase (junto com a migração do Discord) os arquivos `supabase/migrations/20260926000000_mesa_sessions.sql`, `supabase/migrations/20260927000000_mesa_combatant_source_key.sql` e `supabase/migrations/20260927000001_mesa_battles.sql` — as tabelas `mesa_sessions`, `mesa_participants`, `mesa_characters`, `mesa_combats`, `mesa_combatants` e `mesa_battles` (RLS habilitado sem policies: só o servidor acessa, via service role) e a coluna `mesa_combatants.source_key`, que identifica **qual inimigo do encontro** é cada linha da mesa (sem ela o app funciona, só não espelha a vida dos inimigos). A tabela `mesa_battles` guarda o **histórico de partidas** e torna cada encontro de uso único (sem ela o combate continua funcionando, só não há histórico nem bloqueio de encontro repetido).
+1. Rode no SQL Editor do Supabase (junto com a migração do Discord) os arquivos `supabase/migrations/20260926000000_mesa_sessions.sql`, `supabase/migrations/20260927000000_mesa_combatant_source_key.sql`, `supabase/migrations/20260927000001_mesa_battles.sql` e `supabase/migrations/20260930000000_mesa_combatant_supplies.sql` — as tabelas `mesa_sessions`, `mesa_participants`, `mesa_characters`, `mesa_combats`, `mesa_combatants` e `mesa_battles` (RLS habilitado sem policies: só o servidor acessa, via service role) e as colunas `mesa_combatants.source_key` (identifica **qual inimigo do encontro** é cada linha da mesa; sem ela o app funciona, só não espelha a vida dos inimigos) e `mesa_combatants.supplies` (a **mochila do inimigo** — pente, reserva e cura; sem ela a linha da mesa não mostra munição nem item de cura). A tabela `mesa_battles` guarda o **histórico de partidas** e torna cada encontro de uso único (sem ela o combate continua funcionando, só não há histórico nem bloqueio de encontro repetido). As duas colunas são opcionais: o servidor detecta a ausência, regrava sem elas e o combate começa do mesmo jeito.
 2. Adicione ao `.env.local` (as duas últimas variáveis são públicas, vão para o navegador):
 
 ```env
@@ -95,13 +95,18 @@ A vida de quem participa do combate **muda na origem e aparece na mesa para todo
   combate). É por isso que os encontros ganharam `participant.id` (`ensureEncounterIds` completa os salvos
   antes desta feature).
 - `POST /api/mesa/[id]/combat/hp` faz a validação no servidor: sem `key` é o combatente de **quem pediu**;
-  com `key` é inimigo — **só o Mestre**. Sem combate ativo ou sem linha correspondente devolve
+  com `key` é inimigo — **só o Mestre**. Ele também aceita `supplies` (a mochila do inimigo: pente, reserva
+  e cura), que é a mesma rota usada quando o Mestre atira, recarrega ou cura em ⚔️ Encontros.
+  Sem combate ativo ou sem linha correspondente devolve
   `updated: false` e nada muda. O estado novo é publicado no Realtime como qualquer outra mutação.
 - **Morte**: inimigo com 0 HP sai da ordem de turno e volta com HP > 0 (inimigo não faz death save aqui);
   personagem só é marcado morto quando a **ficha** diz `isDead` — 0 HP com death save pendente continua em jogo.
 - **Migração obrigatória para os inimigos**: se `source_key` não existir no banco, o combate continua
   **começando normalmente** (o servidor re-insere sem a coluna) e o espelho de vida de inimigo recusa com
   `503 migration_pending`; o espelho dos jogadores não depende dessa coluna.
+- **Migração opcional da mochila**: `mesa_combatants.supplies` (migração `20260930000000`) segue o mesmo
+  molde (`suppliesSupport` em `src/lib/mesa/store.ts`) — sem ela o insert e o update do HP simplesmente
+  **regravam sem a coluna** e a linha do inimigo fica sem os chips `🔫 3/8 · ✚ 2`. Nada mais muda.
 - **Ajuste manual do GM no painel da mesa** (botões −/+) continua possível, mas é **sobrescrito** na próxima
   mudança da origem — quem manda é a ficha do jogador e o encontro do Mestre.
 
@@ -145,12 +150,47 @@ O vínculo (`EncounterData.battle` no localStorage do Mestre) é **conveniência
   JSON do inimigo** (`Enemy.cyberware`, preenchido em `gm-enemies.ts`) e só então é completada até a cota
   com sorteio do catálogo de cyberware (`items.json`). Base acima da cota **não é cortada** — o que o
   catálogo do inimigo definiu manda.
+- **Mochila: munição garantida e cura só como possibilidade** (`src/data/enemySupplies.ts`). A mochila começa
+  pelo `inventory` do JSON do bestiário (`Enemy.inventory`, campo **novo** em `gm-enemies.ts`; nas fichas
+  pré-mapeadas ele é relido do texto da nota de GM com `parseInventoryFromNotes`) e aí:
+  - **munição**: se o inimigo tem arma de pente **e não trouxe munição compatível**, entra o equivalente a
+    **2 cargas cheias** (o que os autores do JSON já fazem à mão). Munição de **outra** qualidade nunca é
+    consumida — escopeta não abre caixa de cartuchos de pistola.
+  - **cura**: **50% de chance** de ganhar **1 ou 2 unidades** de um item que restaure HP
+    (Stim 5, Trauma Injector 2, MaxDoc 10, Bounce Back 6 — `healingSupplyPool()`). Quem já trouxe
+    `Trauma Patch` (ou `Combat Stim`/`Protein Pack`) no JSON **não rola nada**.
+  Sorteio injetável (`rng`), então o teste fixa o resultado. Fixado em `tests/enemy-supplies.test.ts`.
 
-Implante de inimigo é **só descrição** (decisão de 27/09/2026): aparece como tag ⚙️ no card do inimigo, junto
-das personalidades, e **não mexe** em rolagem, HP, armor nem Actions — os `modifiers` do catálogo continuam
-valendo só para a ficha do jogador. O campo é opcional: encontros salvos antes desta feature ficam sem a tag
-(mesma ausência de backfill das personalidades) e inimigos criados à mão em `/gm/enemies` saem só com o
-sorteio. Fixado em `tests/enemy-implants.test.ts`.
+### Munição e cura do inimigo funcionam como as do jogador
+
+A economia é a mesma da ficha, com a mesma regra escrita uma vez só
+(`src/data/enemySupplies.ts` → `planReload`/`applyReload`, `src/lib/gmStorage.ts`):
+
+- **Ataque gasta 1 bala** do pente (`rollAttack`); o pente nunca fica negativo — quem decide se pode atirar
+  é a UI, igual ao botão 🔫 desabilitado do jogador.
+- **↻ Recarregar** enche o pente e desconta da reserva da mochila (item que zera some), recusando pente
+  cheio, munição incompatível e reserva curta com o motivo no `title` do botão.
+- **✚ Usar** no item de cura restaura HP **até o teto** e consome 1 unidade.
+
+Onde cada coisa vive:
+
+- **Cartão do participante (⚔️ Encontros)** — é o painel de controle do inimigo: botão 🎲 Atacar que vira
+  `🔫 Sem munição` com o pente vazio, linha `↻ Recarregar · pente 3/8 · reserva 13` e seção **🎒 Mochila**.
+- **Melhoriário (`/gm`)** — rolagens consomem bala e a seção **🎒 Mochila** recarrega (o pente nasce cheio a
+  cada abertura; a cura não tem botão aqui porque a vida do inimigo é gerida em ⚔️ Encontros).
+- **Mesa online** — só **espelha** o estado: o seed leva `supplies` para `mesa_combatants.supplies`
+  (migração `20260930000000`) e cada tiro, recarregamento e cura reenviam pela mesma rota do HP
+  (`publishMesaEnemySupplies`). A linha do inimigo mostra `🔫 3/8 · ✚ 2`; a mesa não rola ataque de inimigo
+  nem aplica cura. Sem a migração a coluna simplesmente não entra e a linha fica sem os chips.
+
+Implante de inimigo **entra nos dados que ele rola** (decisão de 30/09/2026): aparece como tag ⚙️ no card do
+inimigo e soma em **ataque, Evasão, Iniciativa, dano desarmado e SP do corpo**, exatamente como na ficha do
+jogador — a resolução é a mesma (`src/lib/enemyCyberware.ts` monta uma "visão de ficha" e delega para
+`src/lib/cyberwareEffects.ts`). Como o inimigo **não tem botão de ativação**, o **primeiro estágio** de cada
+peça conta como ligado (é o que faz Sandevistan/Kerenzikov somarem). Fora do escopo: bônus de MOVE. O campo é
+opcional: encontros salvos antes desta feature ficam sem a tag (mesma ausência de backfill das personalidades)
+e inimigos criados à mão em `/gm/enemies` saem só com o sorteio. Fixado em `tests/enemy-implants.test.ts` e
+`tests/enemy-cyberware-rolls.test.ts`.
 
 ### Limitações conhecidas (Escopo 1+2)
 
@@ -192,7 +232,9 @@ Quem lê `modifiers`/`activation` é `src/lib/cyberwareEffects.ts`, consumido po
 
 **Aproximações assumidas** (o motor não modela o contexto ainda): Targeting Scope vale para qualquer ataque à distância (não existe noção de alcance) e Reinforced Tendons soma +2 em qualquer teste de Athletics (não existe teste de salto isolado).
 
-**Inimigos da ⚔️ Encontros** também nascem com implantes sorteados por nível — mas ali é **só descrição** (uma tag no card, sem `modifiers`): ver *Encontro já nasce preenchido*.
+**Inimigos da ⚔️ Encontros** também nascem com implantes sorteados por nível — e eles **contam nas rolagens
+do inimigo** (ataque, Evasão, Iniciativa, dano desarmado, SP do corpo), com o primeiro estágio de ativação
+sempre ligado: ver *Encontro já nasce preenchido*.
 
 ### Ativação manual (toggle por peça)
 

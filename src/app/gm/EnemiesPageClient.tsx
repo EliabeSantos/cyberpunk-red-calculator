@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import EnemyList from "@/components/gm/EnemyList";
-import type { Enemy } from "@/types/enemy";
+import type { Enemy, EnemySupply } from "@/types/enemy";
 import type { EnemyRollContext } from "@/lib/enemyRolls";
+import { applyReload, getSupplyHealAmount, isHealingSupply, planReload } from "@/data/enemySupplies";
+import { mergeCatalogSupplies } from "@/data/gm-enemies";
 import { publishMesaGmAttack, publishMesaGmDamage, publishMesaGmSkill } from "@/lib/mesa/gmRollPublish";
 
 export default function EnemiesPageClient() {
@@ -58,6 +60,7 @@ export default function EnemiesPageClient() {
 
       {viewMode === "dice" && selectedEnemy && (
         <EnemyDiceView
+          key={selectedEnemy.id}
           enemy={selectedEnemy}
           onClose={handleBackToList}
         />
@@ -218,7 +221,7 @@ function EnemyDetailView({
 }
 
 function EnemyDiceView({
-  enemy,
+  enemy: enemyProp,
   onClose,
 }: {
   enemy: Enemy;
@@ -230,21 +233,58 @@ function EnemyDiceView({
   const [selectedSkill, setSelectedSkill] = useState<string>("");
   const [modifier, setModifier] = useState(0);
 
+  /**
+   * Inimigos daqui vêm do `localStorage` e podem ter sido importados antes da
+   * mochila existir: `mergeCatalogSupplies` completa `inventory` e `magazine`
+   * a partir do catálogo em código, sem sobrescrever o que o Mestre editou.
+   */
+  const enemy = useMemo(() => mergeCatalogSupplies(enemyProp), [enemyProp]);
+
+  /** Pente de cada arma com pente (só arma à distância tem; corpo a corpo fica de fora). */
+  const [ammoByWeapon, setAmmoByWeapon] = useState<Record<string, number>>(() => {
+    const map: Record<string, number> = {};
+    for (const weapon of enemy.weapons) {
+      if (typeof weapon.magazine === "number") map[weapon.id] = weapon.ammo ?? weapon.magazine;
+    }
+    return map;
+  });
+  const [inventory, setInventory] = useState<EnemySupply[]>(() => [...(enemy.inventory ?? [])]);
+
+  /** ↻ Recarregar: mesma regra da ficha do jogador (`planReload`/`applyReload`). */
+  const reload = (weaponId: string) => {
+    const weapon = enemy.weapons.find((entry) => entry.id === weaponId);
+    if (!weapon || typeof weapon.magazine !== "number") return;
+    const plan = planReload(weapon, ammoByWeapon[weaponId] ?? weapon.magazine, weapon.magazine, inventory);
+    const next = applyReload(plan, inventory);
+    if (!next) return;
+    setInventory(next);
+    setAmmoByWeapon((prev) => ({ ...prev, [weaponId]: plan.magazine }));
+  };
+
   // Import enemyRolls dynamically to avoid SSR issues
   const rollAttack = async (weaponId?: string) => {
     const { rollEnemyAttack, getAvailableEnemyAttacks } = await import("@/lib/enemyRolls");
     const attacks: Array<{ id: string; label: string; detail: string; context: EnemyRollContext }> = getAvailableEnemyAttacks(enemy);
     const attack = attacks.find((a) => a.id === weaponId) || attacks[0];
     if (!attack) return;
-    
+
     const result = rollEnemyAttack(enemy, {
       ...attack.context,
       modifiers: modifier !== 0 ? [{ source: "Modificador GM", value: modifier }] : undefined,
     });
-    
+
     if ("result" in result) {
       setLastAttackResult(result.result);
       setLastDamageResult(null);
+      // Gasta 1 bala — mesma economia da ficha do jogador.
+      const firedId = result.result.weaponId;
+      const firedWeapon = firedId ? enemy.weapons.find((entry) => entry.id === firedId) : undefined;
+      if (firedId && typeof firedWeapon?.magazine === "number") {
+        setAmmoByWeapon((prev) => ({
+          ...prev,
+          [firedId]: Math.max(0, (prev[firedId] ?? firedWeapon.magazine ?? 0) - 1),
+        }));
+      }
       publishMesaGmAttack(
         result.result.enemyName,
         result.result.label,
@@ -296,6 +336,19 @@ function EnemyDiceView({
 
   const { getAvailableEnemyAttacks } = require("@/lib/enemyRolls");
   const attacks = getAvailableEnemyAttacks(enemy) as Array<{ id: string; label: string; detail: string }>;
+  /** Alguma arma daqui tem pente (corpo a corpo não tem munição nenhuma). */
+  const hasMagazine = enemy.weapons.some((weapon) => typeof weapon.magazine === "number");
+  /**
+   * Mochila sem a munição da reserva — ela já aparece na linha de cada arma.
+   * Nome por nome, então uma pilha que alimenta duas pistolas some uma vez só.
+   */
+  const reserveNames = new Set<string>();
+  for (const weapon of enemy.weapons) {
+    if (typeof weapon.magazine !== "number") continue;
+    const plan = planReload(weapon, ammoByWeapon[weapon.id] ?? weapon.magazine, weapon.magazine, inventory);
+    if (plan.itemName) reserveNames.add(plan.itemName);
+  }
+  const backpack = inventory.filter((entry) => !reserveNames.has(entry.item));
   const skills = Object.entries(enemy.skills).map(([id, skill]) => ({
     id,
     name: skill.name,
@@ -335,16 +388,29 @@ function EnemyDiceView({
         <section className="enemy-dice-section">
           <h3>🎯 Ataques</h3>
           <div className="enemy-attacks-grid">
-            {attacks.map((attack) => (
-              <button
-                key={attack.id}
-                className="enemy-attack-button"
-                onClick={() => rollAttack(attack.id)}
-              >
-                <strong>{attack.label}</strong>
-                <span>{attack.detail}</span>
-              </button>
-            ))}
+            {attacks.map((attack) => {
+              const weapon = enemy.weapons.find((entry) => entry.id === attack.id);
+              const magazine = weapon?.magazine;
+              const hasPente = typeof magazine === "number";
+              const current = hasPente ? ammoByWeapon[attack.id] ?? magazine ?? 0 : null;
+              const outOfAmmo = hasPente && (current ?? 0) <= 0;
+              return (
+                <button
+                  key={attack.id}
+                  className={`enemy-attack-button ${outOfAmmo ? "is-out" : ""}`}
+                  disabled={outOfAmmo}
+                  title={outOfAmmo ? "Sem munição no pente — recarregue antes de atirar." : undefined}
+                  onClick={() => rollAttack(attack.id)}
+                >
+                  <strong>{attack.label}</strong>
+                  <span>
+                    {attack.detail}
+                    {hasPente ? ` · ${current}/${magazine}` : ""}
+                    {outOfAmmo ? " · 🔒 sem munição" : ""}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           {lastAttackResult && (
@@ -389,6 +455,59 @@ function EnemyDiceView({
               <div className="enemy-roll-total">= <strong>{lastDamageResult.total}</strong></div>
             </div>
           )}
+        </section>
+
+        {/* Supplies: pente, reserva de munição e itens da mochila */}
+        <section className="enemy-dice-section">
+          <h3>🎒 Mochila</h3>
+          {hasMagazine || backpack.length > 0 ? (
+            <div className="enemy-supplies">
+              {enemy.weapons.map((weapon) => {
+                const magazine = weapon.magazine;
+                if (typeof magazine !== "number") return null;
+                const plan = planReload(weapon, ammoByWeapon[weapon.id] ?? magazine, magazine, inventory);
+                return (
+                  <div key={weapon.id} className="enemy-supply-row">
+                    <span className="enemy-supply-info">
+                      🔫 {weapon.name}
+                      <b className={plan.ammo <= 0 ? "is-empty" : ""}> {plan.ammo}/{plan.magazine}</b>
+                      {plan.itemName ? ` · reserva ${plan.reserve}` : " · sem munição compatível"}
+                    </span>
+                    <button
+                      type="button"
+                      className="gm-button gm-button-small"
+                      disabled={!plan.canReload}
+                      title={plan.reason ?? undefined}
+                      onClick={() => reload(weapon.id)}
+                    >
+                      ↻ Recarregar
+                    </button>
+                  </div>
+                );
+              })}
+
+              {backpack.map((entry) => (
+                <div key={entry.item} className="enemy-supply-row">
+                  <span className="enemy-supply-info">
+                    {entry.quantity}× {entry.item}
+                    {isHealingSupply(entry.item)
+                      ? ` · recupera ${getSupplyHealAmount(entry.item)} HP`
+                      : ""}
+                  </span>
+                  {isHealingSupply(entry.item) && (
+                    <span className="enemy-supply-note" title="A cura acontece na tela de ⚔️ Encontros, onde a vida do inimigo é gerida.">
+                      ✚ em Encontros
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="gm-page-subtitle">Sem pente nem itens na mochila.</p>
+          )}
+          <p className="gm-page-subtitle enemy-supply-hint">
+            Munição é gastada por tiro e recarregada daqui; a cura é aplicada na tela de ⚔️ Encontros.
+          </p>
         </section>
 
         {/* Skill Checks */}

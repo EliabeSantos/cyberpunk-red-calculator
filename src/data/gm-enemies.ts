@@ -3,7 +3,7 @@
  * Mapeia os dados do JSON para a estrutura Enemy já existente no sistema GM.
  */
 
-import type { Enemy, EnemySkill } from "@/types/enemy";
+import type { Enemy, EnemySkill, EnemySupply } from "@/types/enemy";
 
 // Mapeamento de nomes de perícia para atributo primário (base do cálculo de base do GM)
 const skillStatMap: Record<string, string> = {
@@ -64,6 +64,7 @@ function mapJsonToEnemy(json: {
   }
 
   // Mapear armas do JSON para EnemyWeapon[]
+  // `w.ammo` do JSON é a CAPACIDADE do pente: vira `magazine` e `ammo` (pente cheio).
   const weapons = json.weapons.map((w) => ({
     id: w.id,
     name: w.name,
@@ -72,6 +73,7 @@ function mapJsonToEnemy(json: {
     skill: w.skill,
     attackBase: w.attackBase,
     rateOfFire: w.rof,
+    magazine: w.ammo || undefined,
     ammo: w.ammo || undefined,
   }));
 
@@ -116,8 +118,12 @@ function mapJsonToEnemy(json: {
       },
       criticalInjuries: [],
     },
-    // Guarda a lista do JSON: é daqui que saem os implantes do encontro.
+    // Guarda a lista do JSON: é daqui que saem os implantes do encontro
+    // (`getEnemyImplants`), que depois entram nas rolagens do inimigo.
     cyberware: json.cyberware,
+    // Mochila do JSON: munição e cura do encontro vêm daqui
+    // (`getEnemySupplies` completa o que faltar).
+    inventory: json.inventory,
     gmNotes: gmNotesParts.join("\n"),
     conditions: [],
   };
@@ -1258,7 +1264,83 @@ const preMappedEnemies: Enemy[] = [
 export const gmEnemyCatalog: Enemy[] = [
   ...(catalogEnemies as unknown as Array<Parameters<typeof mapJsonToEnemy>[0]>).map(mapJsonToEnemy),
   ...preMappedEnemies,
-];
+].map(withDerivedSupplies);
+
+/**
+ * Lê de volta a mochila escrita na nota de GM no formato
+ * `Inventory: Heavy Pistol Ammo (16), Agent (1)`.
+ *
+ * Os `preMappedEnemies` já vêm prontos como `Enemy` e guardam a lista só como
+ * texto (é assim desde o início), então sem este parser eles ficariam sem
+ * munição nem cura no encontro.
+ */
+export function parseInventoryFromNotes(notes: string | undefined | null): EnemySupply[] {
+  const line = (notes ?? "").split("\n").find((entry) => entry.trim().startsWith("Inventory:"));
+  if (!line) return [];
+
+  const body = line.slice(line.indexOf("Inventory:") + "Inventory:".length);
+  const items: EnemySupply[] = [];
+  for (const chunk of body.split(",")) {
+    const match = chunk.trim().match(/^(.*\S)\s*\((\d+)\)$/);
+    if (!match) continue;
+    const name = match[1].trim();
+    const quantity = Number(match[2]);
+    if (name.length === 0 || !Number.isFinite(quantity) || quantity <= 0) continue;
+    items.push({ item: name, quantity });
+  }
+  return items;
+}
+
+/**
+ * Preenche os campos que só o JSON traz e que um `Enemy` pré-mapeado (ou uma
+ * ficha salva antiga) não tem: a mochila (`inventory`) e a CAPACIDADE do pente
+ * (`magazine`, que nos inimigos antigos estava só em `ammo`).
+ *
+ * Nunca sobrescreve o que já existe — cyberware e o que o Mestre editou
+ * continuam mandando.
+ */
+export function withDerivedSupplies(enemy: Enemy): Enemy {
+  const inventory = enemy.inventory ?? parseInventoryFromNotes(enemy.gmNotes);
+  const weapons = enemy.weapons.map((weapon) => {
+    if (weapon.magazine !== undefined) return weapon;
+    // `ammo` sem `magazine` = ficha antiga: aquele número é a capacidade.
+    if (typeof weapon.ammo !== "number" || weapon.ammo <= 0) return weapon;
+    return { ...weapon, magazine: weapon.ammo };
+  });
+
+  return { ...enemy, inventory, weapons };
+}
+
+/**
+ * Mescla num inimigo vindo do `localStorage` os campos derivados do JSON que a
+ * cópia salva pode não ter (`inventory` e `magazine`), quando ele existe no
+ * catálogo em código.
+ *
+ * Usado pela tela de melhoriário: os inimigos de lá vêm de uma importação que
+ * pode ser anterior a esta feature. Só preenche o que FALTA.
+ */
+export function mergeCatalogSupplies(enemy: Enemy): Enemy {
+  const source = getEnemyById(enemy.id);
+  const derived = withDerivedSupplies({
+    ...enemy,
+    inventory: enemy.inventory ?? source?.inventory,
+  });
+  if (source) {
+    // Arma ausente nesta cópia mas presente no catálogo → aproveita o pente.
+    const known = new Map(source.weapons.map((weapon) => [weapon.id, weapon]));
+    derived.weapons = derived.weapons.map((weapon) => {
+      const catalogWeapon = known.get(weapon.id);
+      if (!catalogWeapon) return weapon;
+      if (weapon.magazine !== undefined && weapon.ammo !== undefined) return weapon;
+      return {
+        ...weapon,
+        magazine: weapon.magazine ?? catalogWeapon.magazine,
+        ammo: weapon.ammo ?? catalogWeapon.ammo,
+      };
+    });
+  }
+  return derived;
+}
 
 /** Dados brutos do catálogo para referência de facções (todos os inimigos). */
 const catalogFactions: Record<string, string> = Object.fromEntries(

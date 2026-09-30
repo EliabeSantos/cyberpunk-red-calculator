@@ -1,4 +1,5 @@
 import { rollDice, type DiceResult } from "@/lib/dice";
+import { getEnemyAttackModifiers, getEnemySkillModifiers, getEnemyUnarmedDamageDice, isSmartWeaponByName } from "@/lib/enemyCyberware";
 import type { Enemy, EnemyAttributeName, EnemySkill } from "@/types/enemy";
 
 /** Context for an enemy attack or skill check */
@@ -105,11 +106,12 @@ export function getAvailableEnemyAttacks(enemy: Enemy): {
   // Unarmed attack (always available)
   const brawlSkill = enemy.skills["brawling"];
   const brawlValue = brawlSkill ? enemy.stats[brawlSkill.stat] + brawlSkill.level : enemy.stats.REF;
+  const implantDice = getEnemyUnarmedDamageDice(enemy.cyberware);
   
   attacks.push({
     id: "unarmed",
     label: "Desarmado",
-    detail: `1d6+${Math.floor(enemy.stats.BODY / 2)} · Corpo a corpo · Perícia: Brawling (${brawlValue})`,
+    detail: `1d6+${Math.floor(enemy.stats.BODY / 2)}${implantDice > 0 ? `+${implantDice}d6 (implante)` : ""} · Corpo a corpo · Perícia: Brawling (${brawlValue})`,
     context: {
       type: "attack",
       enemyId: enemy.id,
@@ -172,8 +174,17 @@ export function rollEnemyAttack(enemy: Enemy, context: EnemyRollContext): { resu
     diceTotal -= subValue;
   }
 
-  // Calculate modifiers
-  const modifiers = context.modifiers ?? [];
+  // Calculate modifiers: implantes do inimigo primeiro (mesma regra da ficha
+  // do jogador), depois o que a tela pediu (ex.: "Modificador GM").
+  const modifiers = [
+    ...getEnemyAttackModifiers(enemy.cyberware, {
+      skillId,
+      ranged: weapon ? weapon.attackType === "ranged" : false,
+      // Sem arma não há Smart Link a valer; com arma, o nome decide.
+      smart: weapon ? isSmartWeaponByName(weapon.name) : false,
+    }),
+    ...(context.modifiers ?? []),
+  ];
   const totalModifier = modifiers.reduce((sum, m) => sum + m.value, 0);
   
   const total = statValue + skill.level + diceTotal + totalModifier;
@@ -183,9 +194,10 @@ export function rollEnemyAttack(enemy: Enemy, context: EnemyRollContext): { resu
   if (weapon) {
     damageDice = weapon.damage;
   } else {
-    // Unarmed damage: 1d6 + BODY/2
+    // Unarmed damage: 1d6 + BODY/2 + dados extras do implante (Gorilla Arms)
     const bodyBonus = Math.floor(enemy.stats.BODY / 2);
-    damageDice = `1d6${bodyBonus > 0 ? `+${bodyBonus}` : ""}`;
+    const implantDice = getEnemyUnarmedDamageDice(enemy.cyberware);
+    damageDice = `1d6${bodyBonus > 0 ? `+${bodyBonus}` : ""}${implantDice > 0 ? `+${implantDice}d6` : ""}`;
   }
 
   const result: EnemyAttackRollResult = {
@@ -257,7 +269,11 @@ export function rollEnemySkillCheck(enemy: Enemy, context: EnemyRollContext): { 
     diceTotal -= subValue;
   }
 
-  const modifiers = context.modifiers ?? [];
+  // Bônus de perícia dos implantes (Audio Filter → Percepção) + o pedido na tela.
+  const modifiers = [
+    ...getEnemySkillModifiers(enemy.cyberware, skillId),
+    ...(context.modifiers ?? []),
+  ];
   const totalModifier = modifiers.reduce((sum, m) => sum + m.value, 0);
   
   const total = skillValue + diceTotal + totalModifier;
@@ -285,10 +301,35 @@ export function rollEnemySkillCheck(enemy: Enemy, context: EnemyRollContext): { 
   return { result };
 }
 
+/**
+ * Rola uma expressão de dano no formato `NdM`, com termos `+` separados:
+ * `1d6`, `1d6+3` (Bônus de BODY) e `1d6+1d6` (dado extra do implante).
+ * `rollDice` de src/lib/dice.ts só aceita `NdM` puro — daí o parser local.
+ */
+function rollDamageExpression(expression: string): DiceResult {
+  const terms = expression.split("+").map((term) => term.trim()).filter((term) => term.length > 0);
+  if (terms.length === 0) throw new Error(`Expressão de dano inválida: ${expression}`);
+
+  const rolls: number[] = [];
+  let total = 0;
+  for (const term of terms) {
+    if (/^\d+d\d+$/i.test(term)) {
+      const dice = rollDice(term);
+      rolls.push(...dice.rolls);
+      total += dice.total;
+      continue;
+    }
+    const flat = Number(term);
+    if (!Number.isFinite(flat)) throw new Error(`Expressão de dano inválida: ${expression}`);
+    total += flat;
+  }
+  return { expression, rolls, total };
+}
+
 /** Roll enemy damage */
 export function rollEnemyDamage(enemy: Enemy, damageDice: string, attackName: string, weaponId?: string): { result: EnemyDamageRollResult } | { error: string } {
   try {
-    const rollResult = rollDice(damageDice);
+    const rollResult = rollDamageExpression(damageDice);
     const result: EnemyDamageRollResult = {
       enemyId: enemy.id,
       enemyName: enemy.identity.name,

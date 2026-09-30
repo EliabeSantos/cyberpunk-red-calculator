@@ -325,7 +325,34 @@ Decisões que valem revisão:
   encontro cada inimigo recebe as 2 personalidades **e** implantes — nível 1 → 2, 2 → 3, 3 → 4, 4 → 5
   (`implantCountForLevel` em `src/data/enemyImplants.ts`). A lista começa pelos `cyberware` que já vêm no JSON
   do catálogo (`Enemy.cyberware`, novo campo opcional preenchido em `gm-enemies.ts`) e só então completa a
-  cota sorteando do catálogo de `items.json`, sem repetição; base acima da cota **não é cortada**. **Não mexe**
-  em rolagem, HP, armor nem Actions — os `modifiers` continuam valendo só para a ficha do jogador. Encontros
+  cota sorteando do catálogo de `items.json`, sem repetição; base acima da cota **não é cortada**. Encontros
   salvos antes da feature não ganham implantes retroativos e inimigos criados em `/gm/enemies` não têm tela
   para editar (campo começa vazio → só o sorteio). Fixado em `tests/enemy-implants.test.ts`.
+- **Implantes dos inimigos valem nos dados que ele rola** (decisão do Mestre, 30/09/2026): ataque, Evasão,
+  Iniciativa, dano desarmado e SP do corpo passam a somar o `modifiers` do catálogo — **a mesma regra da
+  ficha**, sem lógica duplicada: `src/lib/enemyCyberware.ts` só monta uma "visão de ficha" a partir dos nomes
+  (`activeStage: 0`) e delega para `src/lib/cyberwareEffects.ts`. Como o inimigo não tem toggle, **o primeiro
+  estágio de cada peça conta como ligado** (é o que faz Sandevistan/Kerenzikov somarem); estágio 2+ continua
+  sendo decisão do jogador. Aplicado em três lugares: tela de ⚔️ Encontros (`rollAttack`, `rollEvasion`,
+  `rollDamage`, `handleRollInitiative`, `applyDamageToParticipant`), melhoriário (`rollEnemyAttack`,
+  `rollEnemySkillCheck`, `rollEnemyDamage`) e a Mesa online — o seed leva `initiativeBonus`, gravado em
+  `mesa_combatants.initiative_detail.bonus` (jsonb, **sem migração**) e lido por `rollInitiativeForAll`.
+  A degradação de armadura continua **só na armadura do bestiário**: o SP de cyberware é constante, igual a
+  `src/lib/damage.ts`. **Fora do escopo**: bônus de MOVE (Adrenaline Booster) — mexe no orçamento de
+  movimento, não em rolagem. Fixado em `tests/enemy-cyberware-rolls.test.ts`.
+
+- **Mochila dos inimigos: munição garantida, cura só como possibilidade** (decisão do Mestre, 30/09/2026):
+  os inimigos passaram a ter **a mesma economia de munição e de itens de cura da ficha do jogador**. A mochila
+  nasce na criação do encontro (`getEnemySupplies` em `src/data/enemySupplies.ts`): começa pelo `inventory`
+  do JSON do bestiário (palavra final — nas fichas pré-mapeadas o campo é relido de `gmNotes` via
+  `parseInventoryFromNotes`) e acrescenta **2 cargas cheias** só quando há arma de pente **e nenhuma munição
+  compatível**; a **cura é 50% de chance de 1 ou 2 unidades** (`healingSupplyPool()`), nunca garantida, e quem
+  já trouxe `Trauma Patch`/`Combat Stim`/`Protein Pack` no JSON não rola nada. Depois de pronta, a regra é a
+  mesma do jogador, escrita uma vez e reutilizada: `planReload`/`applyReload`/`consumeSupply` são usados pelo
+  cartão do encontro **e** pelo melhoriário; `rollAttack` debita 1 bala (piso em 0, a UI é quem bloqueia com
+  `🔫 Sem munição`). **Mesa online só espelha**: `mesaEnemySeed.supplies` → migração
+  `20260930000000_mesa_combatant_supplies.sql` → coluna `mesa_combatants.supplies`, reenviada pela mesma rota
+  do HP (`publishMesaEnemySupplies`); com o mesmo molde de degradação do `source_key` (`suppliesSupport`), a
+  migração atrasada só tira os chips da linha. **Limitação assumida**: no melhoriário o item de cura aparece
+  lido só — aquela tela não gerencia HP de inimigo, a cura acontece em ⚔️ Encontros. Fixado em
+  `tests/enemy-supplies.test.ts`.

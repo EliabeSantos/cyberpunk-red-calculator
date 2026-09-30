@@ -31,8 +31,19 @@ export interface EnemyWeapon {
   skill: string; // skill ID used for this weapon
   attackBase: number; // pre-calculated STAT + WeaponSkill
   rateOfFire?: number;
+  /** Capacidade do pente. Ausente em arma corpo a corpo e em fichas antigas. */
   magazine?: number;
+  /** Balas no pente AGORA — começa igual a `magazine` e desce a cada tiro. */
   ammo?: number;
+}
+
+/**
+ * Item da mochila de um inimigo: munição para recarregar, cura e utilidades.
+ * O formato é o mesmo do `inventory` do JSON do bestiário.
+ */
+export interface EnemySupply {
+  item: string;
+  quantity: number;
 }
 
 export interface EnemyArmor {
@@ -57,11 +68,19 @@ export interface Enemy {
   weapons: EnemyWeapon[];
   combat: EnemyCombatStats;
   /**
-   * Implantes (cyberware) vindos do catálogo JSON — só leitura/flavour na tela
-   * do encontro (ver `src/data/enemyImplants.ts`). Opcional nas fichas salvas
-   * antes desta feature.
+   * Implantes (cyberware) vindos do catálogo JSON — lista de nomes que serve de
+   * base aos implantes do encontro (`src/data/enemyImplants.ts`) e que **entra
+   * nas rolagens** de quem os tem (`src/lib/enemyCyberware.ts`). Opcional nas
+   * fichas salvas antes desta feature.
    */
   cyberware?: string[];
+  /**
+   * Mochila vinda do JSON do bestiário (munição, cura, utilidades) — é a base
+   * da mochila do encontro (`getEnemySupplies`), que garante munição e sorteia
+   * cura. Opcional nas fichas salvas antes desta feature e em inimigo criado
+   * à mão no editor.
+   */
+  inventory?: EnemySupply[];
   // GM notes, only visible to GM
   gmNotes?: string;
   // Conditions/Status effects
@@ -122,6 +141,7 @@ export function createEmptyEnemy(id = crypto.randomUUID()): Enemy {
       criticalInjuries: [],
     },
     cyberware: [],
+    inventory: [],
     gmNotes: "",
     conditions: [],
   };

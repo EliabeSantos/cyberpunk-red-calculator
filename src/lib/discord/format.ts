@@ -38,13 +38,16 @@ export function formatRollMessage(payload: DiscordRollPayload): string {
 /**
  * Resumo de iniciativa do encontro: UMA única mensagem com a tabela completa,
  * na mesma ordem (decrescente) exibida na tela do GM. Cada linha reproduz
- * exatamente o que o site calculou: d10 + REF = total.
+ * exatamente o que o site calculou: d10 + REF + bônus de implante = total.
  */
 export function formatInitiativeMessage(payload: DiscordInitiativePayload): string {
   const header = `🎲 **INICIATIVA — ${payload.encounterName.toUpperCase()}**`;
   const rows = payload.rows.map((row) => {
-    const ref = row.ref !== 0 ? ` + ${row.ref} REF` : "";
-    return `**${row.name}**: d10(${row.roll})${ref} = **${row.total}**`;
+    const parts: string[] = [];
+    if (row.ref !== 0) parts.push(`${row.ref} REF`);
+    if (row.bonus) parts.push(`${row.bonus} implantes`);
+    const modifier = parts.length > 0 ? ` + ${parts.join(" + ")}` : "";
+    return `**${row.name}**: d10(${row.roll})${modifier} = **${row.total}**`;
   });
   return [header, "", ...rows].join("\n");
 }

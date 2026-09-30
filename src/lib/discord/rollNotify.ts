@@ -94,7 +94,8 @@ export interface EnemyRollSource {
   attackBase: number;
   damageExpression: string;
   lastAttackRoll: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
-  lastDamageRoll: { rolls: number[]; total: number } | null;
+  /** `expression` é a usada na rolagem (com dados extras de implante, ex.: `1d6+1d6`). */
+  lastDamageRoll: { rolls: number[]; total: number; expression?: string } | null;
   /** Ausente nas fichas salvas antes da feature de Evasão. */
   lastEvasionRoll?: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
 }
@@ -106,7 +107,7 @@ function enemyLabel(participant: EnemyRollSource): string {
 /**
  * Payload do ataque do inimigo a partir do último resultado já calculado.
  * Mesma decomposição do lado do jogador: modificador = total - soma(dados),
- * que aqui equivale exatamente ao ataqueBase.
+ * que aqui equivale ao ataqueBase **+ bônus dos implantes** do inimigo.
  */
 export function buildEnemyAttackPayload(participant: EnemyRollSource): DiscordRollPayload | null {
   const roll = participant.lastAttackRoll;
@@ -140,7 +141,7 @@ export function buildEnemyDamagePayload(participant: EnemyRollSource): DiscordRo
     kind: "damage",
     playerName: enemyLabel(participant),
     rollType: weapon ? `Dano de ${weapon}` : "Dano",
-    expression: participant.damageExpression,
+    expression: roll.expression ?? participant.damageExpression,
     rolls: roll.rolls,
     modifier: roll.total - diceTotal,
     total: roll.total,

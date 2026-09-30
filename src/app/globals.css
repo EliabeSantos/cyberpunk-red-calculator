@@ -4123,3 +4123,92 @@
   .mesa-end-turn { margin-left: 0; }
   .mesa-budget { gap: .7rem; }
 }
+
+/* ==========================================================================
+   SUPRIMENTOS DO INIMIGO — munição e itens de cura
+   Encontro do Mestre (cartão), melhoriário (/gm) e linha da Mesa online.
+   ========================================================================== */
+
+/* Botões de ação que não estão disponíveis (pente cheio, sem munição, HP no
+   máximo): sem este estado `.gm-button` continua "aceso" no hover. */
+.epc-rolls .gm-button:disabled,
+.epc-supplies .gm-button:disabled,
+.enemy-supplies .gm-button:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+  background: transparent;
+  cursor: not-allowed;
+  opacity: .55;
+}
+.epc-rolls .gm-button:disabled:hover,
+.epc-supplies .gm-button:disabled:hover,
+.enemy-supplies .gm-button:disabled:hover {
+  background: transparent;
+  color: var(--muted);
+}
+
+/* ── Cartão do participante: linha do pente ── */
+.epc-ammo-result { font-family: var(--font-geist-mono), monospace; letter-spacing: .02em; }
+.epc-ammo-result.epc-ammo-empty { color: #ff6b6b; }
+
+/* ── Cartão do participante: seção 🎒 Mochila ── */
+.epc-supplies { gap: .4rem; }
+.epc-supplies-label {
+  font: 600 .58rem var(--font-geist-mono), monospace;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+}
+.epc-supplies-list { display: flex; flex-wrap: wrap; gap: .3rem; }
+.epc-supply {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .2rem .45rem;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  color: var(--muted);
+  font: 600 .62rem var(--font-geist-mono), monospace;
+}
+.epc-supply-qty { color: var(--accent); font-weight: 700; }
+.epc-supply-heal { border-color: #3a5a3d; color: var(--foreground); }
+.epc-supply-use {
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font: 700 .6rem var(--font-geist-mono), monospace;
+  padding: .08rem .32rem;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.epc-supply-use:hover:not(:disabled) { background: var(--accent); color: #111700; }
+.epc-supply-use:disabled { border-color: var(--line); color: var(--muted); cursor: not-allowed; opacity: .55; }
+
+/* ── Mesa online: chips de munição/cura na linha do inimigo ── */
+.mesa-supplies {
+  font: 600 .62rem var(--font-geist-mono), monospace;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ── Melhoriário: botão de ataque sem munição ── */
+.enemy-attack-button.is-out { border-color: #4a3a3d; color: var(--muted); cursor: not-allowed; }
+.enemy-attack-button.is-out:hover { background: transparent; border-color: #4a3a3d; }
+.enemy-attack-button.is-out strong { color: var(--muted); }
+
+/* ── Melhoriário: seção 🎒 Mochila ── */
+.enemy-supplies { display: flex; flex-direction: column; gap: .4rem; }
+.enemy-supply-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .4rem .6rem;
+  border: 1px solid var(--line);
+  background: #0f1512;
+}
+.enemy-supply-info { font: 600 .68rem var(--font-geist-mono), monospace; color: var(--muted); }
+.enemy-supply-info b { color: var(--accent); font-weight: 700; }
+.enemy-supply-info b.is-empty { color: #ff6b6b; }
+.enemy-supply-note { font: 600 .6rem var(--font-geist-mono), monospace; color: #d5ac5a; white-space: nowrap; }
+.enemy-supply-hint { margin-top: .5rem; }

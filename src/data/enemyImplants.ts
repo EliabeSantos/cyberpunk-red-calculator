@@ -1,13 +1,14 @@
 /**
- * Implantes (cyberware) dos inimigos no encontro — FLAVOUR puro.
+ * Implantes (cyberware) dos inimigos no encontro.
  *
  * Mesmo espírito das características de personalidade (`getRandomTraits(2)`):
  * quando o encontro é criado, cada inimigo **já vem com implantes**, e quanto
  * maior o nível dele, mais implantes ele tem (nível 1 → 2 … nível 4 → 5).
  *
- * Decisão de 27/09/2026: **só descrição** — nada aqui mexe em rolagem, HP,
- * armor ou economia de ações. É o que o Mestre lê e interpreta, exatamente
- * como as tags de personalidade; efeito mecânico fica para uma próxima.
+ * Efeito mecânico desde 30/09/2026: os implantes **somam nos dados que o
+ * inimigo rola** (ataque, Evasão, Iniciativa, dano desarmado) e no SP do corpo,
+ * com a mesma regra da ficha do jogador — ver `src/lib/enemyCyberware.ts`.
+ * Aqui continua sendo só a LISTA de nomes; quem aplica é o motor de rolagem.
  *
  * A lista começa pelos cyberware que já vêm no JSON do inimigo (quando o
  * catálogo trouxe) e só então é completada até a cota com sorteio do catálogo

@@ -37,6 +37,7 @@ function combatant(overrides: Partial<MesaCombatant> = {}): MesaCombatant {
     participantId: null,
     name: "Militante",
     sourceKey: "participante-1",
+    supplies: null,
     initiative: 12,
     initiativeDetail: null,
     actionsMax: 2,

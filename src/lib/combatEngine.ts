@@ -255,11 +255,13 @@ export function isTurnOf(combatantId: string, activeCombatantId: string | null):
 }
 
 /**
- * Iniciativa de inimigo/NPC: **REF + 1d10**.
+ * Iniciativa de inimigo/NPC: **REF + bônus de implantes + 1d10**.
  * Mantém a mesma fórmula da ficha (base REF) sem depender de uma ficha de
  * jogador — e a mesma regra de 27/09/2026: **sem crítico e sem falha crítica**
  * aqui, o d10 nunca explode para cima nem para baixo.
+ * `bonus` é o bônus de cyberware do inimigo (Sandevistan, Kerenzikov...), 0
+ * quando o seed não informou — ver `src/lib/enemyCyberware.ts`.
  */
-export function rollEnemyInitiative(ref: number): number {
-  return ref + rollDice("1d10").rolls[0];
+export function rollEnemyInitiative(ref: number, bonus = 0): number {
+  return ref + bonus + rollDice("1d10").rolls[0];
 }

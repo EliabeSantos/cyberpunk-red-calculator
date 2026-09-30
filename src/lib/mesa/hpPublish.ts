@@ -67,3 +67,20 @@ export function publishMesaEnemyHp(key: string | null | undefined, hp: number): 
   if (!key || !Number.isFinite(hp)) return;
   send({ key, hp: Math.floor(hp) });
 }
+
+/**
+ * Mochila do INIMIGO mudou na tela de Encontros (tiro, recarregamento ou cura
+ * usado) → mesma linha da mesa do espelho de vida.
+ *
+ * Mesmos portões de `publishMesaEnemyHp`: sem chave não há como achar a linha,
+ * e falha de rede/migração pendente nunca quebra a origem. O HP vai junto só
+ * porque é o mesmo caminho de escrita do servidor — ele é reenviado como está.
+ */
+export function publishMesaEnemySupplies(
+  key: string | null | undefined,
+  hp: number,
+  supplies: MesaHpUpdate["supplies"],
+): void {
+  if (!key || !supplies || !Number.isFinite(hp)) return;
+  send({ key, hp: Math.floor(hp), supplies });
+}

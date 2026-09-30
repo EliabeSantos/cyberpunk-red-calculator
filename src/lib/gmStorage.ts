@@ -1,9 +1,27 @@
 import "client-only";
 
-import type { Enemy } from "@/types/enemy";
+import type { Enemy, EnemySupply } from "@/types/enemy";
+import type { AttackModifier } from "@/types/attack";
 import type { PersonalityTrait } from "@/data/personalityTraits";
 import { getEnemyImplants } from "@/data/enemyImplants";
+import {
+  applyReload,
+  consumeSupply,
+  getEnemySupplies,
+  getSupplyHealAmount,
+  planReload,
+} from "@/data/enemySupplies";
 import { rollDice } from "@/lib/dice";
+import {
+  getEnemyAttackModifiers,
+  getEnemyBodySP,
+  getEnemyEvasionModifiers,
+  getEnemyInitiativeBonus,
+  getEnemyInitiativeModifiers,
+  getEnemyUnarmedDamageDice,
+  isRangedSkillId,
+  isSmartWeaponByName,
+} from "@/lib/enemyCyberware";
 
 const STORAGE_PREFIX = "cyberpunk-red-toolkit";
 const ENEMIES_KEY = `${STORAGE_PREFIX}:gm:enemies:v1`;
@@ -183,23 +201,56 @@ export interface EncounterParticipant {
   evasionSkillName?: string;
   damageExpression: string;
   // Last roll results
-  lastAttackRoll: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
-  lastDamageRoll: { rolls: number[]; total: number } | null;
+  /**
+   * Último ataque. `modifiers` carrega o bônus dos implantes que entrou no
+   * total (ausente nas fichas salvas antigas) — é ele que o cartão mostra.
+   */
+  lastAttackRoll: {
+    diceRolls: number[];
+    diceTotal: number;
+    total: number;
+    critical: boolean;
+    fumble: boolean;
+    modifiers?: AttackModifier[];
+  } | null;
+  /** `expression` é a usada na rolagem (com dados extras de implante, ex.: `1d6+1d6`). */
+  lastDamageRoll: { rolls: number[]; total: number; expression?: string } | null;
   /**
    * Última rolagem de Evasão do cartão. `undefined` nas fichas salvas antes
    * desta feature — a UI trata com `!= null`, igual às demais rolagens.
    */
-  lastEvasionRoll?: { diceRolls: number[]; diceTotal: number; total: number; critical: boolean; fumble: boolean } | null;
+  lastEvasionRoll?: {
+    diceRolls: number[];
+    diceTotal: number;
+    total: number;
+    critical: boolean;
+    fumble: boolean;
+    modifiers?: AttackModifier[];
+  } | null;
   initiative: number | null;
   // Personality traits for roleplay
   personalityTraits: PersonalityTrait[];
   /**
    * Implantes (cyberware) deste inimigo — sorteados na criação do encontro,
-   * quanto maior o nível, mais implantes (`getEnemyImplants`). **Só descrição**,
-   * igual às personalidades: não mexe em rolagem, HP ou armor. Opcional nas
-   * fichas salvas antes desta feature.
+   * quanto maior o nível, mais implantes (`getEnemyImplants`). Contam nos
+   * dados que ele rola (ataque, Evasão, Iniciativa, dano desarmado) e no SP do
+   * corpo, exatamente como na ficha do jogador (`src/lib/enemyCyberware.ts`).
+   * Opcional nas fichas salvas antes desta feature.
    */
   implants?: string[];
+  /**
+   * Capacidade do pente e balas no pente AGORA — só em arma à distância do
+   * bestiário (corpo a corpo fica sem os dois). Ausente nas fichas salvas
+   * antes desta feature: a UI trata com `!= null` como nas demais rolagens.
+   */
+  magazine?: number;
+  ammo?: number;
+  /**
+   * Mochila do inimigo no encontro: munição da reserva e itens de cura.
+   * Montada na criação (`getEnemySupplies`), que garante 2 cargas e sorteia
+   * cura; ausente nas fichas salvas antes desta feature.
+   */
+  inventory?: EnemySupply[];
 }
 
 /**
@@ -359,6 +410,250 @@ export function getEvasionBase(participant: Pick<EncounterParticipant, "refStat"
   return participant.refStat + (participant.evasionSkillLevel ?? 0);
 }
 
+/* -------------------------------------------------------------------------- *
+ * Implantes do participante → mesmos efeitos da ficha do jogador.
+ * Tudo passa por `src/lib/enemyCyberware.ts`, que delega para `cyberwareEffects`.
+ * -------------------------------------------------------------------------- */
+
+type ImplantBearer = Pick<EncounterParticipant, "implants">;
+
+/** Bônus de ATAQUE dos implantes (Targeting Scope, Gorilla Arms, arma smart...). */
+export function getParticipantAttackModifiers(
+  participant: Pick<EncounterParticipant, "implants" | "weaponSkillId" | "weaponName">,
+): AttackModifier[] {
+  return getEnemyAttackModifiers(participant.implants, {
+    skillId: participant.weaponSkillId,
+    ranged: isRangedSkillId(participant.weaponSkillId),
+    smart: isSmartWeaponByName(participant.weaponName),
+  });
+}
+
+/** Bônus de EVASÃO dos implantes (Kerenzikov/Sandevistan com o estágio ligado). */
+export function getParticipantEvasionModifiers(participant: ImplantBearer): AttackModifier[] {
+  return getEnemyEvasionModifiers(participant.implants);
+}
+
+/** Bônus de INICIATIVA dos implantes, item a item (para mostrar a fonte). */
+export function getParticipantInitiativeModifiers(participant: ImplantBearer): AttackModifier[] {
+  return getEnemyInitiativeModifiers(participant.implants);
+}
+
+/** Bônus de INICIATIVA agregado — entra na conta `1d10 + REF + bônus`. */
+export function getParticipantInitiativeBonus(participant: ImplantBearer): number {
+  return getEnemyInitiativeBonus(participant.implants);
+}
+
+/**
+ * `true` quando o participante está de mãos livias — é a condição do bônus de
+ * dano desarmado (Gorilla Arms: +1d6), a mesma que a ficha do jogador usa.
+ */
+export function isUnarmedParticipant(participant: Pick<EncounterParticipant, "weaponName">): boolean {
+  const name = participant.weaponName.trim();
+  return name === "" || name === "Desarmado";
+}
+
+/** Dados extras de dano desarmado vindos dos implantes (0 quando armado). */
+function getParticipantUnarmedDamageDice(participant: ImplantBearer & Pick<EncounterParticipant, "weaponName">): number {
+  return isUnarmedParticipant(participant) ? getEnemyUnarmedDamageDice(participant.implants) : 0;
+}
+
+/**
+ * Expressão de dano efetiva, já com os dados extras do implante.
+ * `rollDice` só aceita `NdM`, então os dados a mais entram como rolagem
+ * separada em `rollDamage` — aqui fica só o rótulo mostrado ao Mestre.
+ */
+export function getParticipantDamageExpression(
+  participant: ImplantBearer & Pick<EncounterParticipant, "weaponName" | "damageExpression">,
+): string {
+  const extra = getParticipantUnarmedDamageDice(participant);
+  return extra > 0 ? `${participant.damageExpression}+${extra}d6` : participant.damageExpression;
+}
+
+/**
+ * SP efetivo de um local de impacto: armadura do bestiário e cyberware não
+ * acumulam, vale o maior — mesmo predicado de `getEffectiveArmorSP` da ficha.
+ * Só o corpo tem SP de cyberware (Subdermal Armor / Skin Weave).
+ */
+export function getParticipantArmorSP(
+  participant: Pick<EncounterParticipant, "armor" | "implants">,
+  slot: "head" | "body",
+): number {
+  const worn = slot === "head" ? participant.armor.head : participant.armor.body;
+  const cyberwareSP = slot === "body" ? getEnemyBodySP(participant.implants) : 0;
+  return Math.max(worn, cyberwareSP);
+}
+
+/* -------------------------------------------------------------------------- *
+ * Munição e itens de cura do participante — mesma economia da ficha do jogador.
+ * -------------------------------------------------------------------------- */
+
+/** Mochila do participante (`[]` em ficha salva anterior a esta feature). */
+export function getParticipantInventory(
+  participant: Pick<EncounterParticipant, "inventory">,
+): EnemySupply[] {
+  return participant.inventory ?? [];
+}
+
+/**
+ * Estado do pente: `null` quando não há pente para gerenciar (corpo a corpo
+ * ou ficha salva anterior a esta feature).
+ */
+export function getParticipantAmmoState(
+  participant: Pick<EncounterParticipant, "ammo" | "magazine">,
+): { ammo: number; magazine: number } | null {
+  if (typeof participant.magazine !== "number" || participant.magazine <= 0) return null;
+  const ammo = typeof participant.ammo === "number" ? participant.ammo : participant.magazine;
+  return { ammo: Math.max(0, Math.min(participant.magazine, ammo)), magazine: participant.magazine };
+}
+
+export interface ParticipantReloadState {
+  /** Pente agora / capacidade do pente. */
+  ammo: number;
+  magazine: number;
+  /** Item da mochila que alimenta esta arma (`null` = nenhuma munição compatível). */
+  item: EnemySupply | null;
+  /** Balas ainda na reserva do item acima. */
+  reserve: number;
+  /** `true` quando há o que recarregar. */
+  canReload: boolean;
+  /** Motivo quando `canReload` é `false` — é o `title` do botão. */
+  reason: string | null;
+}
+
+/**
+ * Tudo que o botão ↻ Recarregar precisa saber, já resolvido.
+ * `null` quando o participante não tem pente (a UI esconde o botão).
+ */
+export function getParticipantReloadState(
+  participant: Pick<EncounterParticipant, "inventory" | "weaponName" | "weaponSkillId" | "ammo" | "magazine">,
+): ParticipantReloadState | null {
+  const state = getParticipantAmmoState(participant);
+  if (!state) return null;
+
+  // Mesma regra pura do melhoriário (`planReload`), com o nome da arma do
+  // bestiário no lugar do objeto Weapon da ficha do jogador.
+  const plan = planReload(
+    { name: participant.weaponName, skill: participant.weaponSkillId },
+    state.ammo,
+    state.magazine,
+    getParticipantInventory(participant),
+  );
+  return {
+    ammo: plan.ammo,
+    magazine: plan.magazine,
+    item: plan.itemIndex >= 0 ? getParticipantInventory(participant)[plan.itemIndex] : null,
+    reserve: plan.reserve,
+    canReload: plan.canReload,
+    reason: plan.reason,
+  };
+}
+
+export interface ParticipantHealingItem {
+  name: string;
+  quantity: number;
+  /** HP que o item restaura ao ser usado. */
+  amount: number;
+}
+
+/** Itens de cura da mochila, prontos para virar botão no cartão. */
+export function getParticipantHealingItems(
+  participant: Pick<EncounterParticipant, "inventory">,
+): ParticipantHealingItem[] {
+  return getParticipantInventory(participant)
+    .map((entry) => ({ name: entry.item, quantity: entry.quantity, amount: getSupplyHealAmount(entry.item) }))
+    .filter((entry): entry is ParticipantHealingItem => entry.amount !== null && entry.quantity > 0);
+}
+
+/**
+ * Mochila do participante no formato que a mesa guarda
+ * (`mesa_combatants.supplies`): pente agora + reserva inteira.
+ */
+export function getParticipantSupplies(
+  participant: Pick<EncounterParticipant, "ammo" | "magazine" | "inventory">,
+): { ammo?: number; magazine?: number; inventory: EnemySupply[] } {
+  const state = getParticipantAmmoState(participant);
+  return {
+    ammo: state?.ammo,
+    magazine: state?.magazine,
+    inventory: getParticipantInventory(participant),
+  };
+}
+
+/** Aplica a mudança de mochila num participante, preservando o resto. */
+function withParticipant(
+  encounter: EncounterData,
+  participantIndex: number,
+  patch: Partial<EncounterParticipant>,
+): EncounterData {
+  const participants = [...encounter.participants];
+  participants[participantIndex] = { ...participants[participantIndex], ...patch };
+  return { ...encounter, participants };
+}
+
+/**
+ * Recarrega o pente consumindo a reserva da mochila — mesma regra da ficha do
+ * jogador (`reloadWeapon`): só entra o que falta, e a reserva diminui junto.
+ */
+export function reloadParticipantWeapon(
+  encounter: EncounterData,
+  participantIndex: number,
+): { encounter: EncounterData } | { error: string } {
+  const participant = encounter.participants[participantIndex];
+  if (!participant) return { error: "Participante não encontrado." };
+
+  const state = getParticipantAmmoState(participant);
+  if (!state) return { error: `${participant.weaponName} não possui magazine.` };
+
+  const inventory = getParticipantInventory(participant);
+  const plan = planReload(
+    { name: participant.weaponName, skill: participant.weaponSkillId },
+    state.ammo,
+    state.magazine,
+    inventory,
+  );
+  const next = applyReload(plan, inventory);
+  if (!next) return { error: plan.reason ?? "Recarregamento indisponível." };
+
+  return {
+    encounter: withParticipant(encounter, participantIndex, { ammo: plan.magazine, inventory: next }),
+  };
+}
+
+/**
+ * Usa um item de cura da mochila: consome 1 unidade e restaura HP até o máximo
+ * (mesmo enquadro de `applyHealingItem` da ficha — nada de cura negativa nem
+ * de passar do teto).
+ *
+ * A chamadora é quem espelha o HP novo na mesa (`publishMesaEnemyHp`).
+ */
+export function applyParticipantHealingItem(
+  encounter: EncounterData,
+  participantIndex: number,
+  itemName: string,
+): { encounter: EncounterData; healed: number } | { error: string } {
+  const participant = encounter.participants[participantIndex];
+  if (!participant) return { error: "Participante não encontrado." };
+
+  const healing = getParticipantHealingItems(participant).find(
+    (entry) => entry.name.toLowerCase() === itemName.trim().toLowerCase(),
+  );
+  if (!healing) return { error: `Sem ${itemName} na mochila.` };
+
+  const maxHP = participant.hp.max;
+  const before = Math.max(0, participant.hp.current);
+  const after = Math.min(maxHP, before + healing.amount);
+  if (after === before) return { error: `${participant.name} já está com HP máximo.` };
+
+  const inventory = consumeSupply(getParticipantInventory(participant), healing.name);
+  return {
+    encounter: withParticipant(encounter, participantIndex, {
+      hp: { current: after, max: maxHP },
+      inventory,
+    }),
+    healed: after - before,
+  };
+}
+
 /**
  * 1d10 com explosão no 10 e subtração no 1 — a mesma leitura da ficha.
  * `critical` é o **d10 natural** ser 10: o laço só acumula dados extras, ele
@@ -430,6 +725,9 @@ export function createEncounterFromFaction(
     // Evasão: REF + nível da perícia — guardado aqui para o cartão não precisar
     // do bestiário inteiro na mão (e para encontro salvo antigo continuar íntegro).
     const evasion = getEnemyEvasionSkill(source);
+    // Mochila: munição garantida (2 cargas) + cura só como possibilidade —
+    // ver `getEnemySupplies` (o JSON do inimigo é a palavra final).
+    const inventory = getEnemySupplies(source.inventory, weapon);
     const level =
       source.identity.threatLevel === "extreme"
         ? 4
@@ -467,6 +765,10 @@ export function createEncounterFromFaction(
       personalityTraits: getRandomTraits(2),
       // Implantes: os do JSON do inimigo + sorteio até a cota do nível.
       implants: getEnemyImplants(source.cyberware, level),
+      // Pente e mochila: só arma à distância tem (o resto fica sem os campos).
+      magazine: weapon?.magazine,
+      ammo: getParticipantAmmoState({ ammo: weapon?.ammo, magazine: weapon?.magazine })?.ammo,
+      inventory,
     });
   }
 
@@ -488,23 +790,30 @@ export function rollAttack(
   const p = participants[participantIndex];
 
   const { diceRolls, diceTotal, critical, fumble } = rollD10Detail();
-  const total = p.attackBase + diceTotal;
+  const modifiers = getParticipantAttackModifiers(p);
+  const total = p.attackBase + diceTotal + modifiers.reduce((sum, m) => sum + m.value, 0);
+
+  // Consome 1 bala do pente (só arma à distância tem `ammo`) — mesma economia
+  // da ficha do jogador: o valor só desce, quem decide se pode atirar é a UI.
+  const ammo = typeof p.ammo === "number" ? Math.max(0, p.ammo - 1) : p.ammo;
 
   participants[participantIndex] = {
     ...p,
+    ammo,
     lastAttackRoll: {
       diceRolls,
       diceTotal,
       total,
       critical,
       fumble,
+      modifiers,
     },
   };
   return { ...encounter, participants };
 }
 
 /**
- * Teste de **Evasão** do inimigo: REF + nível da perícia + 1d10.
+ * Teste de **Evasão** do inimigo: REF + nível da perícia + implantes + 1d10.
  *
  * Mesma economia da ficha do jogador (1 Action, quando publicada na mesa) e
  * mesmo tratamento de crítico/falha do ataque — só muda a base.
@@ -517,7 +826,8 @@ export function rollEvasion(
   const p = participants[participantIndex];
 
   const { diceRolls, diceTotal, critical, fumble } = rollD10Detail();
-  const total = getEvasionBase(p) + diceTotal;
+  const modifiers = getParticipantEvasionModifiers(p);
+  const total = getEvasionBase(p) + diceTotal + modifiers.reduce((sum, m) => sum + m.value, 0);
 
   participants[participantIndex] = {
     ...p,
@@ -527,6 +837,7 @@ export function rollEvasion(
       total,
       critical,
       fumble,
+      modifiers,
     },
   };
   return { ...encounter, participants };
@@ -539,9 +850,22 @@ export function rollDamage(
   const participants = [...encounter.participants];
   const p = participants[participantIndex];
   const result = rollDice(p.damageExpression);
+  const rolls = [...result.rolls];
+  let total = result.total;
+
+  // Gorilla Arms & cia.: dado extra do ataque desarmado, rolado à parte porque
+  // `rollDice` só entende `NdM` (a expressão mostrada é a de
+  // `getParticipantDamageExpression`, ex.: `1d6+1d6`).
+  const extraDice = getParticipantUnarmedDamageDice(p);
+  if (extraDice > 0) {
+    const bonus = rollDice(`${extraDice}d6`);
+    rolls.push(...bonus.rolls);
+    total += bonus.total;
+  }
+
   participants[participantIndex] = {
     ...p,
-    lastDamageRoll: { rolls: result.rolls, total: result.total },
+    lastDamageRoll: { rolls, total, expression: getParticipantDamageExpression(p) },
   };
   return { ...encounter, participants };
 }
@@ -556,7 +880,10 @@ export function applyDamageToParticipant(
   const participants = [...encounter.participants];
   const p = participants[participantIndex];
   const armor = { ...p.armor };
-  const armorSP = hitLocation === "head" ? armor.head : armor.body;
+  // SP efetivo: armadura do bestiário e cyberware não acumulam (vale o maior);
+  // só a armadura do bestiário degrada — o SP de cyberware é constante,
+  // exatamente como em `src/lib/damage.ts` para a ficha do jogador.
+  const armorSP = getParticipantArmorSP(p, hitLocation);
 
   let damage: number;
   if (ignoreArmor) {

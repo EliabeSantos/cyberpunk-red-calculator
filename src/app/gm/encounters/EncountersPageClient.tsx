@@ -13,6 +13,19 @@ import {
   rollDamage,
   rollEvasion,
   getEvasionBase,
+  getParticipantArmorSP,
+  getParticipantAttackModifiers,
+  getParticipantDamageExpression,
+  getParticipantEvasionModifiers,
+  getParticipantInitiativeBonus,
+  getParticipantInitiativeModifiers,
+  getParticipantAmmoState,
+  getParticipantReloadState,
+  getParticipantHealingItems,
+  getParticipantInventory,
+  getParticipantSupplies,
+  reloadParticipantWeapon,
+  applyParticipantHealingItem,
   applyDamageToParticipant,
   addParticipantCondition,
   removeParticipantCondition,
@@ -30,12 +43,29 @@ import {
   publishMesaGmEvasion,
   publishMesaGmInitiative,
 } from "@/lib/mesa/gmRollPublish";
-import { publishMesaEnemyHp } from "@/lib/mesa/hpPublish";
+import { publishMesaEnemyHp, publishMesaEnemySupplies } from "@/lib/mesa/hpPublish";
 import { fetchMesaBattles, listMemberships, MesaApiError } from "@/lib/mesa/client";
 import { applyMesaStateToEncounter, reconcileEncountersWithBattles } from "@/lib/mesa/encounterSync";
 import { useMesaState } from "@/lib/mesa/useMesaState";
 import type { MesaBattle } from "@/lib/mesa/types";
 import MesaEncounterStart, { type MesaEnemySeed } from "@/components/mesa/MesaEncounterStart";
+
+/**
+ * Trecho de bônus de implante para a linha de resultado, com o sinal certo
+ * (` + 2`, ` - 1`, ou nada) — a conta mostrada continua sendo
+ * `d10 + base + bônus = total`, igual à ficha do jogador.
+ */
+function implantBonusText(modifiers: readonly { value: number }[] | undefined): string {
+  const bonus = (modifiers ?? []).reduce((sum, modifier) => sum + modifier.value, 0);
+  if (bonus === 0) return "";
+  return bonus > 0 ? ` + ${bonus}` : ` - ${Math.abs(bonus)}`;
+}
+
+/** Lista "Fonte +2 · Outra fonte -1" para o `title` da linha de resultado. */
+function implantSourcesText(modifiers: readonly { source: string; value: number }[] | undefined): string {
+  if (!modifiers || modifiers.length === 0) return "";
+  return modifiers.map((m) => `${m.source} ${m.value >= 0 ? "+" : ""}${m.value}`).join(" · ");
+}
 
 /** Selo do vínculo do encontro com uma partida (na lista e nos cartões). */
 function battleBadge(battle: EncounterBattle | undefined) {
@@ -209,7 +239,16 @@ export default function EncountersPageClient() {
       ref: Math.max(1, p.refStat),
       // MOVE do bestiário (encontros salvos antes de existir este campo caem em 5).
       move: Math.max(0, Math.min(20, p.moveStat ?? 5)),
+      // Bônus de Iniciativa dos implantes (Sandevistan, Kerenzikov...): a mesa
+      // rola `1d10 + REF + bônus` para o inimigo com a mesma regra daqui.
+      initiativeBonus: getParticipantInitiativeBonus(p),
       key: p.id,
+      // Mochila (pente + reserva) para a linha do inimigo na mesa mostrar.
+      supplies: {
+        ammo: getParticipantAmmoState(p)?.ammo,
+        magazine: getParticipantAmmoState(p)?.magazine,
+        inventory: getParticipantInventory(p),
+      },
     }));
 
   const handleStartEncounter = () => {
@@ -310,6 +349,8 @@ export default function EncountersPageClient() {
         p.lastAttackRoll.diceRolls,
         p.id,
       );
+      // O tiro gastou uma bala: a mesa espelha o pente novo.
+      publishMesaEnemySupplies(p.id, p.hp.current, getParticipantSupplies(p));
     }
   };
 
@@ -325,7 +366,7 @@ export default function EncountersPageClient() {
       publishMesaGmDamage(
         p.name.trim() || p.archetype.trim() || "Inimigo",
         `Dano de ${p.weaponName || "ataque"}`,
-        p.damageExpression,
+        p.lastDamageRoll.expression ?? p.damageExpression,
         p.lastDamageRoll.total,
         p.lastDamageRoll.rolls,
         p.id,
@@ -354,6 +395,35 @@ export default function EncountersPageClient() {
         p.id,
       );
     }
+  };
+
+  /**
+   * ↻ Recarregar o pente do inimigo: consome a reserva da mochila.
+   * O botão já vem desabilitado quando não há o que fazer (`getParticipantReloadState`).
+   */
+  const handleReloadWeapon = (participantIndex: number) => {
+    if (!encounter) return;
+    const result = reloadParticipantWeapon(encounter, participantIndex);
+    if ("error" in result) return;
+    setEncounter(result.encounter);
+    // A reserva mudou de lugar (pente ← mochila): a mesa acompanha o estado.
+    const p = result.encounter.participants[participantIndex];
+    publishMesaEnemySupplies(p.id, p.hp.current, getParticipantSupplies(p));
+  };
+
+  /**
+   * ✚ Usar item de cura da mochila: restaura HP (limitado ao máximo), consome a
+   * unidade e espelha a vida na mesa — mesmo caminho do dano aplicado aqui.
+   */
+  const handleUseHealingItem = (participantIndex: number, itemName: string) => {
+    if (!encounter) return;
+    const result = applyParticipantHealingItem(encounter, participantIndex, itemName);
+    if ("error" in result) return;
+    setEncounter(result.encounter);
+    const p = result.encounter.participants[participantIndex];
+    publishMesaEnemyHp(p.id, p.hp.current);
+    publishMesaEnemySupplies(p.id, p.hp.current, getParticipantSupplies(p));
+    setSelectedParticipant(participantIndex);
   };
 
   const handleApplyDamage = (participantIndex: number) => {
@@ -396,7 +466,11 @@ export default function EncountersPageClient() {
     if (!encounter) return;
     const rolled = encounter.participants.map((p) => {
       const roll = rollDice("1d10").rolls[0];
-      return { participant: p, roll, ref: p.refStat, total: roll + p.refStat };
+      const ref = p.refStat;
+      // Implantes entram aqui (Sandevistan +4, Kerenzikov +2...) — mesma soma
+      // que a ficha do jogador faz em `getInitiativeModifiers`.
+      const bonus = getParticipantInitiativeBonus(p);
+      return { participant: p, roll, ref, bonus, total: roll + ref + bonus };
     });
     rolled.sort((a, b) => b.total - a.total);
     setEncounter({
@@ -411,6 +485,7 @@ export default function EncountersPageClient() {
         name: r.participant.name.trim() || r.participant.archetype.trim() || "Inimigo",
         roll: r.roll,
         ref: r.ref,
+        bonus: r.bonus,
         total: r.total,
       })),
     );
@@ -680,6 +755,35 @@ export default function EncountersPageClient() {
               const isDown = p.hp.current <= 0;
               const hpPercent = (p.hp.current / p.hp.max) * 100;
               const hpColor = hpPercent > 50 ? "#2e7d32" : hpPercent > 25 ? "#f57f17" : "#c62828";
+              // Bônus dos implantes que já entram em cada total mostrado abaixo.
+              const attackModifiers = getParticipantAttackModifiers(p);
+              const evasionModifiers = getParticipantEvasionModifiers(p);
+              const initiativeModifiers = getParticipantInitiativeModifiers(p);
+              const effectiveBodySP = getParticipantArmorSP(p, "body");
+              // Resumo com só o que de fato soma — linha aparece se algum for ≠ 0.
+              const implantSummary = (
+                [
+                  ["Ataque", implantBonusText(attackModifiers)],
+                  ["Evasão", implantBonusText(evasionModifiers)],
+                  ["Iniciativa", implantBonusText(initiativeModifiers)],
+                  ...(effectiveBodySP > p.armor.body
+                    ? [["Corpo SP", ` + ${effectiveBodySP - p.armor.body}`]]
+                    : []),
+                ] as Array<[string, string]>
+              )
+                .filter(([, text]) => text !== "")
+                .map(([label, text]) => `${label}${text}`);
+              // Mochila: pente, reserva e curativos (só arma à distância tem pente).
+              const ammoState = getParticipantAmmoState(p);
+              const reloadState = getParticipantReloadState(p);
+              const healingItems = getParticipantHealingItems(p);
+              // A munição da reserva já aparece na linha "↻ Recarregar", então a
+              // mochila mostra só o que sobra (cura e utilidades).
+              const backpack = getParticipantInventory(p).filter(
+                (entry) => reloadState?.item?.item !== entry.item,
+              );
+              const isOutOfAmmo = ammoState !== null && ammoState.ammo <= 0;
+              const isFullHP = p.hp.current >= p.hp.max;
               return (
                 <div
                   key={index}
@@ -715,7 +819,9 @@ export default function EncountersPageClient() {
                   <div className="epc-section epc-combat-info">
                     <div className="epc-info-row">
                       <span className="epc-info-label">🛡️ Armadura</span>
-                      <span className="epc-info-value">C {p.armor.body} · H {p.armor.head}</span>
+                      <span className="epc-info-value">
+                        C {effectiveBodySP}{effectiveBodySP > p.armor.body ? ` (+${effectiveBodySP - p.armor.body}⚙️)` : ""} · H {p.armor.head}
+                      </span>
                     </div>
                     <div className="epc-info-row">
                       <span className="epc-info-label">⚔️ Arma</span>
@@ -729,6 +835,12 @@ export default function EncountersPageClient() {
                       <span className="epc-info-label">💨 Evasão</span>
                       <span className="epc-info-value">REF {p.refStat} + nível {p.evasionSkillLevel ?? 0} = <strong>{getEvasionBase(p)}</strong></span>
                     </div>
+                    {implantSummary.length > 0 && (
+                      <div className="epc-info-row" title="Efeito numérico dos implantes instalados (soma em cada rolagem)">
+                        <span className="epc-info-label">⚙️ Implantes</span>
+                        <span className="epc-info-value">{implantSummary.join(" · ")}</span>
+                      </div>
+                    )}
                   </div>
 
                   {/* ── Rolls ── */}
@@ -737,26 +849,53 @@ export default function EncountersPageClient() {
                       <button
                         className="gm-button gm-button-small"
                         onClick={(e) => { e.stopPropagation(); handleRollAttack(index); }}
+                        disabled={isOutOfAmmo}
+                        title={isOutOfAmmo ? "Sem munição no pente — recarregue antes de atirar." : undefined}
                       >
-                        🎲 Atacar
+                        {isOutOfAmmo ? "🔫 Sem munição" : "🎲 Atacar"}
                       </button>
                       {p.lastAttackRoll != null && (
-                        <span className={`epc-roll-result ${p.lastAttackRoll.fumble ? "epc-roll-fumble" : p.lastAttackRoll.critical ? "epc-roll-crit" : ""}`}>
+                        <span
+                          className={`epc-roll-result ${p.lastAttackRoll.fumble ? "epc-roll-fumble" : p.lastAttackRoll.critical ? "epc-roll-crit" : ""}`}
+                          title={implantSourcesText(p.lastAttackRoll.modifiers) || undefined}
+                        >
                           {p.lastAttackRoll.fumble && "💀 "}
                           {p.lastAttackRoll.critical && "⚡ "}
-                          d10({p.lastAttackRoll.diceRolls.join(", ")}) + {p.attackBase} = <strong>{p.lastAttackRoll.total}</strong>
+                          d10({p.lastAttackRoll.diceRolls.join(", ")}) + {p.attackBase}{implantBonusText(p.lastAttackRoll.modifiers)} = <strong>{p.lastAttackRoll.total}</strong>
                         </span>
                       )}
                     </div>
+                    {reloadState && (
+                      <div className="epc-roll-row">
+                        <button
+                          className="gm-button gm-button-small"
+                          onClick={(e) => { e.stopPropagation(); handleReloadWeapon(index); }}
+                          disabled={!reloadState.canReload}
+                          title={reloadState.reason ?? undefined}
+                        >
+                          ↻ Recarregar
+                        </button>
+                        <span
+                          className={`epc-roll-result epc-ammo-result ${reloadState.ammo <= 0 ? "epc-ammo-empty" : ""}`}
+                          title={reloadState.item ? `Reserva: ${reloadState.item.item}` : "Sem munição compatível na mochila"}
+                        >
+                          pente {reloadState.ammo}/{reloadState.magazine}
+                          {reloadState.item && ` · reserva ${reloadState.reserve}`}
+                        </span>
+                      </div>
+                    )}
                     <div className="epc-roll-row">
                       <button
                         className="gm-button gm-button-small"
                         onClick={(e) => { e.stopPropagation(); handleRollDamage(index); }}
                       >
-                        🔥 Dano ({p.damageExpression})
+                        🔥 Dano ({getParticipantDamageExpression(p)})
                       </button>
                       {p.lastDamageRoll != null && (
                         <span className="epc-roll-result epc-damage-result">
+                          {p.lastDamageRoll.expression && p.lastDamageRoll.expression !== p.damageExpression
+                            ? `${p.lastDamageRoll.expression}: `
+                            : ""}
                           {p.lastDamageRoll.rolls.join(" + ")} = <strong>{p.lastDamageRoll.total}</strong> dmg
                         </span>
                       )}
@@ -769,14 +908,53 @@ export default function EncountersPageClient() {
                         💨 Evasão
                       </button>
                       {p.lastEvasionRoll != null && (
-                        <span className={`epc-roll-result ${p.lastEvasionRoll.fumble ? "epc-roll-fumble" : p.lastEvasionRoll.critical ? "epc-roll-crit" : ""}`}>
+                        <span
+                          className={`epc-roll-result ${p.lastEvasionRoll.fumble ? "epc-roll-fumble" : p.lastEvasionRoll.critical ? "epc-roll-crit" : ""}`}
+                          title={implantSourcesText(p.lastEvasionRoll.modifiers) || undefined}
+                        >
                           {p.lastEvasionRoll.fumble && "💀 "}
                           {p.lastEvasionRoll.critical && "⚡ "}
-                          d10({p.lastEvasionRoll.diceRolls.join(", ")}) + {getEvasionBase(p)} = <strong>{p.lastEvasionRoll.total}</strong>
+                          d10({p.lastEvasionRoll.diceRolls.join(", ")}) + {getEvasionBase(p)}{implantBonusText(p.lastEvasionRoll.modifiers)} = <strong>{p.lastEvasionRoll.total}</strong>
                         </span>
                       )}
                     </div>
                   </div>
+
+                  {/* ── Mochila ── */}
+                  {backpack.length > 0 && (
+                    <div className="epc-section epc-supplies">
+                      <div className="epc-supplies-label">🎒 Mochila</div>
+                      <div className="epc-supplies-list">
+                        {backpack.map((entry) => {
+                          const healAmount = healingItems.find((h) => h.name === entry.item)?.amount ?? null;
+                          const canUse = healAmount !== null && !isFullHP && entry.quantity > 0;
+                          return (
+                            <span
+                              key={entry.item}
+                              className={`epc-supply ${healAmount !== null ? "epc-supply-heal" : ""}`}
+                            >
+                              <span className="epc-supply-qty">{entry.quantity}×</span>
+                              {entry.item}
+                              {healAmount !== null && (
+                                <button
+                                  className="epc-supply-use"
+                                  disabled={!canUse}
+                                  title={
+                                    isFullHP
+                                      ? "HP já está no máximo."
+                                      : `Usar ${entry.item} — recupera ${healAmount} HP`
+                                  }
+                                  onClick={(e) => { e.stopPropagation(); handleUseHealingItem(index, entry.item); }}
+                                >
+                                  ✚ {healAmount}
+                                </button>
+                              )}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   {/* ── Tags ── */}
                   {(p.conditions.length > 0 || (p.personalityTraits && p.personalityTraits.length > 0) || (p.implants && p.implants.length > 0)) && (
@@ -787,7 +965,7 @@ export default function EncountersPageClient() {
                             <span
                               key={implant}
                               className="epc-tag epc-tag-implant"
-                              title="Implante — só descrição, não mexe em rolagem"
+                              title="Implante — soma nos dados que o inimigo rola (passe o mouse nas rolagens para ver a fonte)"
                             >
                               ⚙️ {implant}
                             </span>
@@ -875,7 +1053,7 @@ export default function EncountersPageClient() {
                             <span className="epc-zone-icon">🫁</span>
                             <span className="epc-zone-info">
                               <span className="epc-zone-name">Corpo</span>
-                              <span className="epc-zone-sp">SP {p.armor.body}</span>
+                              <span className="epc-zone-sp">SP {effectiveBodySP}</span>
                             </span>
                           </button>
                         </div>
