@@ -784,6 +784,10 @@ export default function EncountersPageClient() {
               );
               const isOutOfAmmo = ammoState !== null && ammoState.ammo <= 0;
               const isFullHP = p.hp.current >= p.hp.max;
+              // Barra de munição (logo abaixo da de HP) — mesmos patamares,
+              // mas em latão para não se confundir com a vida.
+              const ammoPercent = ammoState ? (ammoState.ammo / ammoState.magazine) * 100 : 0;
+              const ammoColor = ammoPercent > 50 ? "#c9a227" : ammoPercent > 25 ? "#f57f17" : "#c62828";
               return (
                 <div
                   key={index}
@@ -813,6 +817,26 @@ export default function EncountersPageClient() {
                         style={{ width: `${hpPercent}%`, backgroundColor: hpColor }}
                       />
                     </div>
+
+                    {/* Barra de munição do pente — só arma à distância tem. */}
+                    {ammoState && (
+                      <>
+                        <div className="epc-ammo-row">
+                          <span className="epc-ammo-label" title={p.weaponName}>
+                            MUNIÇÃO
+                          </span>
+                          <span className="epc-ammo-value">
+                            {ammoState.ammo}<small> / {ammoState.magazine}</small>
+                          </span>
+                        </div>
+                        <div className="epc-ammo-bar">
+                          <div
+                            className="epc-ammo-fill"
+                            style={{ width: `${ammoPercent}%`, backgroundColor: ammoColor }}
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {/* ── Combat Info ── */}
@@ -876,11 +900,10 @@ export default function EncountersPageClient() {
                           ↻ Recarregar
                         </button>
                         <span
-                          className={`epc-roll-result epc-ammo-result ${reloadState.ammo <= 0 ? "epc-ammo-empty" : ""}`}
+                          className={`epc-roll-result epc-ammo-result ${reloadState.item ? "" : "epc-ammo-empty"}`}
                           title={reloadState.item ? `Reserva: ${reloadState.item.item}` : "Sem munição compatível na mochila"}
                         >
-                          pente {reloadState.ammo}/{reloadState.magazine}
-                          {reloadState.item && ` · reserva ${reloadState.reserve}`}
+                          📦 {reloadState.item ? `${reloadState.reserve} balas · ${reloadState.item.item}` : "sem munição"}
                         </span>
                       </div>
                     )}

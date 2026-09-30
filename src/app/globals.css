@@ -4212,3 +4212,19 @@
 .enemy-supply-info b.is-empty { color: #ff6b6b; }
 .enemy-supply-note { font: 600 .6rem var(--font-geist-mono), monospace; color: #d5ac5a; white-space: nowrap; }
 .enemy-supply-hint { margin-top: .5rem; }
+
+/* ── Cartão do participante: barra de MUNIÇÃO, logo abaixo da barra de HP ──
+   Mesma geometria da barra de vida (o olho do GM lê as duas juntas), mas em
+   latão > âmbar > vermelho para não se confundir com a vida. Some quando a
+   arma não tem pente (corpo a corpo). A cada 🎲 Atacar a barra desce. */
+.epc-ammo-row { display: flex; justify-content: space-between; align-items: baseline; }
+.epc-ammo-label {
+  color: var(--muted);
+  font: 600 .6rem var(--font-geist-mono), monospace;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.epc-ammo-value { color: var(--foreground); font: 700 .8rem var(--font-geist-mono), monospace; }
+.epc-ammo-value small { color: var(--muted); font-weight: 400; font-size: .65rem; }
+.epc-ammo-bar { height: .45rem; background: #1a1f1a; border-radius: 2px; overflow: hidden; }
+.epc-ammo-fill { height: 100%; transition: width .3s ease, background-color .3s ease; border-radius: 2px; }
