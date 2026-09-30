@@ -1,6 +1,5 @@
 import { rollAttack } from "@/lib/attacks";
 import { rollSkillCheck } from "@/lib/skills";
-import { getMartialArtsPoints, type MartialArtsPoints } from "@/lib/progression";
 import { MARTIAL_ARTS_FORMS, skillDefinitions, type MartialArtForm } from "@/data/skills";
 import { SPECIAL_MOVES, type SpecialMove, type SpecialMoveRequirement } from "@/data/specialMoves";
 import type { AttackRollResult } from "@/types/attack";
@@ -20,7 +19,6 @@ export interface TurnState {
   hitBrawling: boolean;
   hitMartialArts: boolean;
 }
-
 export const DEFAULT_TURN_STATE: TurnState = {
   movedMeters: 0,
   meleeHits: 0,
@@ -69,31 +67,18 @@ export function resolveSkillForMove(character: Pick<Character, "skills">, move: 
   return skill && skill.level > 0 ? { skillId: entry.skillId, name: skill.name, level: skill.level } : undefined;
 }
 
-function unlockedMoveIds(character: Pick<Character, "unlockedSpecialMoves">): string[] {
-  return character.unlockedSpecialMoves ?? [];
-}
-
-/** Desbloqueio sai do bolso único de Martial Arts (`getMartialArtsPoints`): os níveis da
- * perícia-mãe geram 1 ponto cada, e o mesmo bolso paga especialização e Special Move. */
-export function getSpecialMovePoints(character: Pick<Character, "skills" | "unlockedSpecialMoves">): MartialArtsPoints {
-  return getMartialArtsPoints(character);
-}
-
-/** Paga 1 ponto de Martial Arts para desbloquear o move (permanente, fica na ficha).
- * Ainda exige ≥1 ponto na especialização daquele move. */
-export function unlockSpecialMove(character: Character, move: SpecialMove): Character | null {
-  const unlocked = unlockedMoveIds(character);
-  if (unlocked.includes(move.id)) return null;
-  if (!resolveSkillForMove(character, move)) return null;
-  if (getMartialArtsPoints(character).free <= 0) return null;
-  return { ...character, unlockedSpecialMoves: [...unlocked, move.id] };
-}
-
-/** Devolve o ponto do desbloqueio (corrige gasto errado). */
-export function refundSpecialMove(character: Character, move: SpecialMove): Character | null {
-  const unlocked = unlockedMoveIds(character);
-  if (!unlocked.includes(move.id)) return null;
-  return { ...character, unlockedSpecialMoves: unlocked.filter((id) => id !== move.id) };
+/** Desbloqueio dos Special Moves não custa ponto: o move abre sozinho quando a
+ * especialização correspondente (ou, para moves compartilhados, a melhor forma)
+ * já foi upada — a mesma condição que define a perícia usada na rolagem. */
+export interface SpecialMoveAvailability {
+  move: SpecialMove;
+  /** Perícia que será usada; undefined quando o personagem não tem ponto na forma. */
+  skill?: MartialArtsSkillRef;
+  /** O move está liberado: a especialização da forma já tem nível. */
+  unlocked: boolean;
+  available: boolean;
+  /** Motivos em texto para o botão ficar desabilitado (exibidos na ficha). */
+  missing: string[];
 }
 
 function checkRequirement(requirement: SpecialMoveRequirement, character: Character, turnState: TurnState): string | undefined {
@@ -109,38 +94,21 @@ function checkRequirement(requirement: SpecialMoveRequirement, character: Charac
   }
 }
 
-export interface SpecialMoveAvailability {
-  move: SpecialMove;
-  /** Perícia que será usada; undefined quando o personagem não tem ponto na forma. */
-  skill?: MartialArtsSkillRef;
-  /** Bolso único de pontos de Martial Arts (especialização + desbloqueio). */
-  points: MartialArtsPoints;
-  /** O move já foi pago com 1 ponto e está gravado na ficha. */
-  unlocked: boolean;
-  /** Dá para pagar o desbloqueio agora: tem especialização e ponto livre. */
-  canUnlock: boolean;
-  available: boolean;
-  /** Motivos em texto para o botão ficar desabilitado (exibidos na ficha). */
-  missing: string[];
-}
-
-/** Valida automaticamente os requisitos do move: perícia da forma, atributos e flags do turno.
- * O desbloqueio (1 ponto de Martial Arts) é uma trava separada de `available`: move pago pode
- * ficar bloqueado no turno, e move com requisito ok pode continuar travado por falta de ponto. */
+/** Valida automaticamente os requisitos do move: perícia da forma (nível da especialização),
+ * atributos e flags do turno. Sem trava de ponto — o move abre quando a forma já foi upada. */
 export function getSpecialMoveAvailability(
   character: Character,
   turnState: TurnState,
   move: SpecialMove,
 ): SpecialMoveAvailability {
   const skill = resolveSkillForMove(character, move);
-  const points = getMartialArtsPoints(character);
-  const unlocked = unlockedMoveIds(character).includes(move.id);
+  const unlocked = Boolean(skill);
   const missing: string[] = [];
   if (!skill) {
     missing.push(
       move.form === "shared"
-        ? "1 ponto em alguma forma de Martial Arts"
-        : `1 ponto em ${formSkillName(move.form) ?? "a forma correspondente"}`,
+        ? "Nível ≥ 1 em alguma forma de Martial Arts"
+        : `Nível ≥ 1 em ${formSkillName(move.form) ?? "a forma correspondente"}`,
     );
   }
   for (const requirement of move.requirements) {
@@ -150,9 +118,7 @@ export function getSpecialMoveAvailability(
   return {
     move,
     skill,
-    points,
     unlocked,
-    canUnlock: !unlocked && Boolean(skill) && points.free > 0,
     available: unlocked && missing.length === 0,
     missing,
   };
@@ -178,14 +144,7 @@ export function resolveSpecialMove(
 ): SpecialMoveResolution | { error: string } {
   const availability = getSpecialMoveAvailability(character, turnState, move);
   if (!availability.unlocked) {
-    const points = availability.points;
-    const free = points.free;
-    if (!availability.skill) {
-      return { error: `Special Move travado: "${move.name}" precisa de 1 ponto na especialização correspondente.` };
-    }
-    return {
-      error: `Special Move travado: desbloqueie "${move.name}" com 1 ponto de Martial Arts (${free} livre${free === 1 ? "" : "s"} de ${points.total}; ${points.spentSpecializations} em especializações e ${points.spentMoves} em moves).`,
-    };
+    return { error: `Special Move travado: suba a especialização correspondente (nível ≥ 1) para liberar "${move.name}".` };
   }
   if (!availability.available) return { error: `Requisito não atendido: ${availability.missing.join("; ")}.` };
   const skill = availability.skill!;
@@ -217,5 +176,3 @@ export function resolveSpecialMove(
   if ("error" in outcome) return outcome;
   return { kind: "attack", move, skill, attack: outcome.result, character: outcome.character };
 }
-
-export { type MartialArtsPoints } from "@/lib/progression";

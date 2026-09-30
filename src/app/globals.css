@@ -3811,7 +3811,6 @@
 
 .special-move-card { border: 1px solid #2a3a2d; background: #0f1512; overflow: hidden; transition: border-color 0.15s ease; }
 .special-move-card.locked { border-color: #2a2a2a; background: #0d1110; }
-.special-move-card.unlockable { border-color: #2a4a4a; background: #0f1518; }
 .special-move-card.open { border-color: #3a5a3d; }
 /* Coluna esquerda (trilha fixa de 19rem): o aside e os painéis são grid items,
    e o min-width automático deles é o min-content — sem isto, um conteúdo largo
@@ -3836,7 +3835,6 @@
 .smc-badge { flex-shrink: 0; font: 700 0.55rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.08rem 0.3rem; border-radius: 3px; }
 .smc-badge.ok { color: #5acd5a; background: #16241a; border: 1px solid #2a4a2d; }
 .smc-badge.blocked { color: #ff987b; background: #281815; border: 1px solid #4a2a2a; }
-.smc-badge.unlockable { color: #7ac0c5; background: #1a2a2a; border: 1px solid #2a4a4a; }
 .smc-badge.locked { color: var(--muted); background: #141a16; border: 1px solid #2a3a2d; }
 .smc-pool { margin: 0; font: 600 0.6rem var(--font-geist-mono), monospace; color: #d5ac5a; }
 .smc-pool.unlocked { color: #acd55a; }
@@ -3864,11 +3862,6 @@
 .smc-use:disabled { cursor: not-allowed; opacity: 0.45; }
 .smc-use:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .smc-use:not(:disabled):hover { background: var(--accent); color: #111700; }
-.smc-unlock { border: 1px solid #2a4a4a; background: #12211f; color: #7ac0c5; cursor: pointer; padding: 0.35rem 0.5rem; font: 700 0.62rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.04em; align-self: flex-start; transition: all 0.15s ease; }
-.smc-unlock:disabled { cursor: not-allowed; opacity: 0.45; }
-.smc-unlock:not(:disabled):hover { background: #7ac0c5; color: #0a1210; }
-.smc-refund { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0; font: 600 0.58rem var(--font-geist-mono), monospace; text-decoration: underline dotted; text-underline-offset: 2px; align-self: flex-start; }
-.smc-refund:hover { color: #ff987b; }
 .smc-outcome { font: 600 0.65rem var(--font-geist-mono), monospace; padding: 0.35rem 0.5rem; border-left: 2px solid var(--accent); background: #0a120c; color: var(--foreground); line-height: 1.45; }
 .smc-outcome.success { border-left-color: #5acd5a; color: #a8e0a8; }
 .smc-outcome.failure { border-left-color: #ff6b6b; color: #ffcfbf; }

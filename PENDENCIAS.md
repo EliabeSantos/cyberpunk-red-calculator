@@ -135,12 +135,13 @@ Decisões que valem revisão:
   explícito listando o que falta. `check` rola a perícia da forma vs o DV do JSON; `attack` vira um
   ataque de Artes Marciais normal (entra no fluxo de dano da ficha, com dano por BODY e metade de SP);
   `passive` só confirma disponibilidade.
-- **Desbloqueio de Special Move com bolso único de Martial Arts** (decisão da mesa em 25/09/2026):
-  cada move começa travado e custa 1 ponto; o estoque de pontos é o **nível de Martial Arts**
-  (perícia-mãe, 1 ponto por nível), dividido entre **especializações** (custo escalonado
-  1, 2, 3…) e moves de todas as formas. Recovery desconta do mesmo bolso. O desbloqueio é
-  permanente em `character.unlockedSpecialMoves`, com botão **↺ Devolver o ponto**. Os
-  requisitos originais continuam valendo depois de pago.
+- **Desbloqueio de Special Move com bolso único de Martial Arts** (decisão da mesa em 25/09/2026;
+  **revertida em 30/09/2026**): cada move começava travado e custava 1 ponto do nível de Martial
+  Arts, dividido entre especializações e moves. **Hoje moves não custam ponto**: a trava é só o
+  **nível da especialização da forma (≥1)**, o mesmo nível que o painel de Especializações sobe
+  (Recovery: qualquer forma ≥ 1). O campo `unlockedSpecialMoves`, os helpers
+  `unlockSpecialMove`/`refundSpecialMove`, o badge `Liberável` e os botões **🔓 Desbloquear** /
+  **↺ Devolver o ponto** saíram do código. Requisitos originais continuam valendo.
 
 ### Pendências novas
 
@@ -178,14 +179,15 @@ Decisões que valem revisão:
 
 - As 4 formas entraram em `skillDefinitions` — sair é apagar as 4 entradas de `src/data/skills.ts`, o
   array de skills com custo duplo no teste e os ataques por forma viram de volta o `skill:martial_arts`.
-- **`unlockedSpecialMoves` em `Character`** (campo novo, `string[]`, `undefined` em ficha
-  antiga = nenhum) + regra de pool "**nível de Martial Arts = pontos, 1 ponto por nível,
-  dividido entre especializações (escalonado 1,2,3…) e moves (1 cada)**".
-  Reversível: apagar o campo do tipo, a normalização em `src/lib/storage.ts`,
-  `getMartialArtsPoints`/`upgradeSpecialization` em `src/lib/progression.ts`, os helpers de
-  desbloqueio em `src/lib/specialMoves.ts` e o bloco do Card 03 — moves voltam a abrir só com
-  ≥1 ponto na forma, comprados com IP como antes. **Não gasta IP**: os pontos são gerados
-  gratuitamente pelos níveis de Martial Arts.
+- **`unlockedSpecialMoves` em `Character`** — **removido em 30/09/2026**. O campo existia como
+  `string[]` (uma entrada por move pago) junto com a regra de pool "nível de Martial Arts =
+  pontos, 1 ponto por nível, dividido entre especializações (escalonado 1,2,3…) e moves (1 cada)".
+  Hoje o bolso só paga **especializações** e o desbloqueio de move é derivado do nível da forma
+  (`Boolean(skill)` em `src/lib/specialMoves.ts`); a normalização em `src/lib/storage.ts` também
+  saíu. Fichas salvas com o campo antigo seguem funcionando (ele é ignorado). Reversível: para
+  voltar a cobrar, reintroduzir o campo, a contagem `spentMoves` em `getMartialArtsPoints` e os
+  helpers de desbloqueio. **Não gasta IP**: os pontos são gerados gratuitamente pelos níveis de
+  Martial Arts.
 
 ## Mesa online (implementada em 26/09/2026 — Escopos 1 e 2)
 

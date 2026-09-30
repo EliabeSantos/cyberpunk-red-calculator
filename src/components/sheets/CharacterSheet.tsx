@@ -20,7 +20,7 @@ import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, rollDe
 import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold, calculateHPStatus } from "@/lib/calculations";
 import { rollEvasion, reloadWeapon } from "@/lib/attacks";
 import { getInitiativeModifiers, rollInitiative as rollInitiativeRoll, type InitiativeRollResult } from "@/lib/initiative";
-import { DEFAULT_TURN_STATE, listSpecialMoveAvailability, resolveSpecialMove, refundSpecialMove, unlockSpecialMove, type SpecialMoveResolution, type TurnState } from "@/lib/specialMoves";
+import { DEFAULT_TURN_STATE, listSpecialMoveAvailability, resolveSpecialMove, type SpecialMoveResolution, type TurnState } from "@/lib/specialMoves";
 import type { SpecialMove } from "@/data/specialMoves";
 import { rollSkillCheck } from "@/lib/skills";
 import { rollQuickhack } from "@/lib/quickhacks";
@@ -298,26 +298,6 @@ export default function CharacterSheet({
     setOpenSpecialMoves((previous) => ({ ...previous, [moveId]: !previous[moveId] }));
   }
 
-  /** Desbloqueia um Special Move pagando 1 ponto do nível da forma correspondente. */
-  function unlockSpecialMoveCard(move: SpecialMove) {
-    const updated = unlockSpecialMove(character, move);
-    if (updated) onUpdate(updated);
-    // Limpa o resultado antigo (um "travado" ou o resultado daquele move) para não ficar defasado.
-    setSpecialMoveOutcome((previous) =>
-      previous && ("error" in previous || previous.move.id === move.id) ? null : previous,
-    );
-    setOpenSpecialMoves((previous) => ({ ...previous, [move.id]: true }));
-  }
-
-  /** Devolve o ponto gasto no desbloqueio (corrige erro de clique). */
-  function refundSpecialMoveCard(move: SpecialMove) {
-    const updated = refundSpecialMove(character, move);
-    if (updated) onUpdate(updated);
-    setSpecialMoveOutcome((previous) =>
-      previous && !("error" in previous) && previous.move.id === move.id ? null : previous,
-    );
-  }
-
   /** Disponibilidade dos 9 moves para o estado atual (perícia, atributos e flags do turno). */
   const specialMoveAvailability = listSpecialMoveAvailability(character, turnState);
   const maPoints = getMartialArtsPoints(character);
@@ -523,7 +503,7 @@ export default function CharacterSheet({
               {maPoints && (
                 <span
                   className={`skill-ma-points${maPoints.free > 0 ? " has" : ""}${maPoints.balance < 0 ? " debt" : ""}`}
-                  title={`1 ponto por nível de Martial Arts · ${maPoints.total} gerado(s) · ${maPoints.spentSpecializations} em especializações · ${maPoints.spentMoves} em Special Moves`}
+                  title={`1 ponto por nível de Martial Arts · ${maPoints.total} gerado(s) · ${maPoints.spentSpecializations} em especializações · ${maPoints.free} livre`}
                 >
                   {maPoints.balance < 0
                     ? `devendo ${-maPoints.balance} pt`
@@ -1171,7 +1151,7 @@ export default function CharacterSheet({
                 <span className="ma-points-badge">{maPoints.free} pt livre{maPoints.free === 1 ? "" : "s"}</span>
               </div>
               <p className={`ma-points-line${maPoints.balance < 0 ? " warn" : ""}`}>
-                MA {maPoints.total} → {maPoints.total} pt · {maPoints.spentSpecializations} espec · {maPoints.spentMoves} moves · {maPoints.free} livre
+                MA {maPoints.total} → {maPoints.total} pt · {maPoints.spentSpecializations} espec · {maPoints.free} livre
                 {maPoints.balance < 0 ? ` · devendo ${-maPoints.balance}` : ""}
               </p>
               {MARTIAL_ARTS_FORMS.map(({ skillId }) => {
@@ -1267,7 +1247,7 @@ export default function CharacterSheet({
 
             {specialMoveOutcome && "error" in specialMoveOutcome && <p className="form-error">{specialMoveOutcome.error}</p>}
 
-            {specialMoveAvailability.map(({ move, skill, available, missing, points, unlocked, canUnlock }) => {
+            {specialMoveAvailability.map(({ move, skill, available, missing, unlocked }) => {
               const outcome =
                 specialMoveOutcome && !("error" in specialMoveOutcome) && specialMoveOutcome.move.id === move.id
                   ? specialMoveOutcome
@@ -1280,9 +1260,9 @@ export default function CharacterSheet({
                   ? "fail"
                   : "ok"
                 : "";
-              // Travado = sem ponto; unlockable = tem ponto e ainda não pagou.
+              // Travado = especialização da forma ainda em nível 0; sem desbloqueio por ponto.
               let cardState = "";
-              if (!available) cardState = canUnlock ? " unlockable" : " locked";
+              if (!unlocked) cardState = " locked";
               return (
                 <div className={`special-move-card${cardState}${open ? " open" : ""}`} key={move.id}>
                   <button
@@ -1308,8 +1288,8 @@ export default function CharacterSheet({
                         </span>
                       )}
                       {outcomeIcon && <span className={`smc-result ${outcomeClass}`}>{outcomeIcon}</span>}
-                      <span className={`smc-badge ${!unlocked ? (canUnlock ? "unlockable" : "locked") : available ? "ok" : "blocked"}`}>
-                        {!unlocked ? (canUnlock ? "Liberável" : "Travado") : available ? "Disponível" : "Bloqueado"}
+                      <span className={`smc-badge ${!unlocked ? "locked" : available ? "ok" : "blocked"}`}>
+                        {!unlocked ? "Travado" : available ? "Disponível" : "Bloqueado"}
                       </span>
                     </span>
                   </button>
@@ -1325,17 +1305,10 @@ export default function CharacterSheet({
                         </p>
                       )}
                       <p className={`smc-pool${unlocked ? " unlocked" : ""}`}>
-                        {unlocked
-                          ? `✓ Desbloqueado — 1 ponto de Martial Arts gasto (${points.spentSpecializations + points.spentMoves}/${points.total})`
-                          : `Desbloqueio: 1 ponto de Martial Arts — nível ${points.total} = ${points.total} ponto${points.total === 1 ? "" : "s"} · ${points.spentSpecializations} em especializações · ${points.spentMoves} em moves · ${points.free} livre${points.free === 1 ? "" : "s"}`}
+                        {unlocked && skill
+                          ? `✓ Liberado pela especialização ${skill.name} (nível ${skill.level})`
+                          : `Liberação: ${move.form === "shared" ? "nível ≥ 1 em qualquer forma de Martial Arts" : `nível ≥ 1 em ${move.form.charAt(0).toUpperCase() + move.form.slice(1)}`}`}
                       </p>
-                      {points.balance < 0 && (
-                        <p className="smc-pool warn">
-                          Especializações já pagas custaram {Math.abs(points.balance)} ponto
-                          {Math.abs(points.balance) === 1 ? "" : "s"} a mais do que o nível atual de Martial Arts cobre —
-                          suba a perícia-mãe para liberar gastos.
-                        </p>
-                      )}
                       {!available && missing.length > 0 && (
                         <ul className="smc-missing">
                           {missing.map((reason) => (
@@ -1354,20 +1327,6 @@ export default function CharacterSheet({
                           />
                           <span>Mira na cabeça (−8)</span>
                         </label>
-                      )}
-                      {!unlocked && (
-                        <button
-                          type="button"
-                          className="smc-unlock"
-                          disabled={!canUnlock}
-                          onClick={() => unlockSpecialMoveCard(move)}
-                        >
-                          {canUnlock
-                            ? "🔓 Desbloquear — 1 ponto de Martial Arts"
-                            : skill
-                              ? `Sem ponto livre de Martial Arts (${points.free}/${points.total})`
-                              : `Sem ponto em ${move.form === "shared" ? "Martial Arts" : `${move.form.charAt(0).toUpperCase() + move.form.slice(1)}`}`}
-                        </button>
                       )}
                       {unlocked && move.kind !== "passive" && (
                         <button type="button" className="smc-use" disabled={!available} onClick={() => useSpecialMove(move)}>
@@ -1390,11 +1349,6 @@ export default function CharacterSheet({
                         </div>
                       )}
                       {outcome && outcome.kind === "passive" && <div className="smc-outcome info">{move.outcome}</div>}
-                      {unlocked && (
-                        <button type="button" className="smc-refund" onClick={() => refundSpecialMoveCard(move)}>
-                          ↺ Devolver o ponto
-                        </button>
-                      )}
                     </div>
                   )}
                 </div>

@@ -314,13 +314,14 @@ Regras implementadas em 25/09/2026 (`tests/martial-arts.test.ts` cobre cada item
   Requisitos estruturados: perícia da forma, `WILL 8+`, `MOVE 8+` e as flags do turno. `check` rola a
   perícia da forma vs o DV do JSON; `attack` (Bone Breaking Strike, Pressure Point Strike, Flying Kick)
   vira um **ataque de Artes Marciais normal** — mesma lista, mesmo botão de dano, mesma regra de SP.
-- **Special Moves começam travados e custam 1 ponto** (decisão da mesa de 25/09/2026): os
-  pontos vêm da perícia-mãe **Martial Arts** (1 ponto por nível; MA 4 = 4 pontos). O mesmo
-  bolso paga **especializações** (custo escalonado: Karate 1 = 1 pt, Karate 2 = 2 pt…) **e**
-  desbloqueio de moves. O card mostra o saldo (`nível 4 = 4 pts · 3 em especializações · 1 em
-  moves · 0 livre`), badge `Liberável`/`Travado`, botão **🔓 Desbloquear** e **↺ Devolver o
-  ponto**. Requisitos originais continuam valendo depois de pago. Testes:
-  `tests/martial-arts.test.ts` (pool único, devolução, recusa).
+- **Special Moves abrem pela especialização, sem ponto** (revisão de 30/09/2026; substitui o
+  custo de 1 ponto decidido em 25/09/2026): o move libera sozinho quando a especialização da
+  forma correspondente está em **nível ≥ 1** — no caso do Recovery (compartilhado), quando
+  qualquer forma está ≥ 1. É o mesmo nível que o painel de Especializações sobe, então **não há
+  botão de desbloqueio nem devolução**: o card mostra badge `Travado`/`Disponível`/`Bloqueado`,
+  a linha `✓ Liberado pela especialização …` ou `Liberação: nível ≥ 1 em …` e o motivo do
+  bloqueio em vermelho. Os requisitos originais (WILL 8+, MOVE 8+, flags do turno) continuam
+  valendo. Testes: `tests/martial-arts.test.ts` (liberação por nível, formas em 0, recusa).
 
 - **Especializações no Card 03**: as 4 formas (Karate, Taekwondo, Judo, Aikido) **saíram da
   lista de perícias** e ganharam um painel próprio no Card 03, entre Ataques e Special Moves,

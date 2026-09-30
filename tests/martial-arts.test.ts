@@ -24,18 +24,15 @@ import {
 } from "../src/lib/progression.ts";
 import {
   DEFAULT_TURN_STATE,
-  getSpecialMovePoints,
   listSpecialMoveAvailability,
-  refundSpecialMove,
   resolveSpecialMove,
-  unlockSpecialMove,
   type TurnState,
 } from "../src/lib/specialMoves.ts";
 import type { DamageRollResult } from "../src/types/attack.ts";
 import type { Character } from "../src/types/character.ts";
 
 /** Ficha de teste: DEX/BODY/WILL/MOVE altos e três formas compradas (Karate 4, Aikido 3, Taekwondo 2).
- * Todos os Special Moves já estão desbloqueados (1 ponto por move pago). */
+ * Os Special Moves dessas formas já nascem liberados — o desbloqueio vem do nível da especialização. */
 function fighter(): Character {
   const base = createEmptyCharacter("martial-arts");
   const character: Character = {
@@ -52,7 +49,6 @@ function fighter(): Character {
         level: 2,
       },
     },
-    unlockedSpecialMoves: SPECIAL_MOVES.map((move) => move.id),
   };
   return character;
 }
@@ -208,7 +204,6 @@ test("a especialização sobe pelo bolso da perícia-mãe e respeita o saldo dis
   assert.deepStrictEqual(getMartialArtsPoints(character), {
     total: 4,
     spentSpecializations: 2,
-    spentMoves: 0,
     free: 2,
     balance: 2,
   });
@@ -596,7 +591,7 @@ test("Special Move de ataque vira um ataque de Artes Marciais normal (dano por B
   });
 });
 
-test("Special Move travado: 1 ponto por move, pago do bolso único de Martial Arts", () => {
+test("Special Move abre pela especialização da forma, sem gastar ponto", () => {
   const base = createEmptyCharacter("unlock");
   const character: Character = {
     ...base,
@@ -613,73 +608,103 @@ test("Special Move travado: 1 ponto por move, pago do bolso único de Martial Ar
   const armor = SPECIAL_MOVES.find(
     (move) => move.id === "armor_breaking_combination",
   )!;
+  const judoMove = SPECIAL_MOVES.find((move) => move.id === "counter_throw")!;
 
-  // Tem ponto na forma, mas não pagou o move → travado, porém canUnlock = true.
-  const travado = listSpecialMoveAvailability(
+  const disponiveis = listSpecialMoveAvailability(
     character,
     DEFAULT_TURN_STATE,
-  ).find((entry) => entry.move.id === bone.id)!;
-  assert.strictEqual(travado.unlocked, false);
-  assert.strictEqual(travado.canUnlock, true);
-  assert.strictEqual(
-    travado.available,
-    false,
-    "requisitos ok, mas o move não foi pago",
   );
-  assert.deepStrictEqual(travado.points, {
+  const boneLiberado = disponiveis.find(
+    (entry) => entry.move.id === bone.id,
+  )!;
+  assert.strictEqual(
+    boneLiberado.unlocked,
+    true,
+    "Karate 1 já libera os moves de Karate",
+  );
+  assert.strictEqual(
+    boneLiberado.available,
+    true,
+    "WILL 8+ ok → usável sem pagar nada",
+  );
+
+  // Requisitos originais continuam valendo mesmo com o move liberado.
+  const armorLiberado = disponiveis.find(
+    (entry) => entry.move.id === armor.id,
+  )!;
+  assert.strictEqual(armorLiberado.unlocked, true);
+  assert.strictEqual(armorLiberado.available, false);
+  assert.strictEqual(
+    armorLiberado.missing.length,
+    2,
+    "faltam os dois acertos do turno",
+  );
+
+  // Judo em nível 0 → move dela continua travado, apontando a especialização.
+  const judoTravado = disponiveis.find((entry) => entry.move.id === judoMove.id)!;
+  assert.strictEqual(judoTravado.unlocked, false);
+  assert.strictEqual(judoTravado.skill, undefined);
+  assert.ok(
+    judoTravado.missing.some((reason) =>
+      reason.includes("Martial Arts (Judo)"),
+    ),
+    `motivo aponta a especialização: ${judoTravado.missing.join("; ")}`,
+  );
+
+  // Liberar move nenhum mexe no bolso: só a especialização gasta ponto.
+  assert.deepStrictEqual(getMartialArtsPoints(character), {
     total: 3,
-    balance: 2,
     spentSpecializations: 1,
-    spentMoves: 0,
     free: 2,
+    balance: 2,
   });
 
-  const pago = unlockSpecialMove(character, bone);
-  assert.ok(pago);
-  assert.deepStrictEqual(pago.unlockedSpecialMoves, [bone.id]);
-
-  const depois = listSpecialMoveAvailability(pago, DEFAULT_TURN_STATE);
-  const bonePago = depois.find((entry) => entry.move.id === bone.id)!;
-  assert.strictEqual(bonePago.unlocked, true);
-  assert.strictEqual(bonePago.available, true, "pago + WILL 8+ → usável");
-  assert.strictEqual(bonePago.points!.free, 1);
-
-  // Outro move da mesma forma também pode ser desbloqueado (bolso compartilhado).
-  const segundo = depois.find((entry) => entry.move.id === armor.id)!;
-  assert.strictEqual(segundo.canUnlock, true);
-  const pagoArmor = unlockSpecialMove(pago, armor)!;
-
-  // Subir a forma para 2 custa 2 pontos → specs 1+2=3, moves 2 → livre = 3−3−2 = 0.
+  // Subir Karate para 2 custa 1+2=3 → livre 0; o move segue liberado.
   const karate2: Character = {
-    ...pagoArmor,
+    ...character,
     skills: {
-      ...pagoArmor.skills,
+      ...character.skills,
       martial_arts_karate: {
-        ...pagoArmor.skills.martial_arts_karate,
+        ...character.skills.martial_arts_karate,
         level: 2,
       },
     },
   };
-  assert.strictEqual(getSpecialMovePoints(karate2)!.free, 0);
-
-  // Devolver o ponto desfaz o desbloqueio.
-  const devolvido = refundSpecialMove(pagoArmor, bone);
-  assert.ok(devolvido);
-  assert.deepStrictEqual(devolvido.unlockedSpecialMoves, [armor.id]);
+  assert.deepStrictEqual(getMartialArtsPoints(karate2), {
+    total: 3,
+    spentSpecializations: 3,
+    free: 0,
+    balance: 0,
+  });
   assert.strictEqual(
-    listSpecialMoveAvailability(devolvido, DEFAULT_TURN_STATE).find(
+    listSpecialMoveAvailability(karate2, DEFAULT_TURN_STATE).find(
       (entry) => entry.move.id === bone.id,
-    )!.canUnlock,
+    )!.available,
     true,
+    "subir a especialização não trava nada",
   );
-  assert.strictEqual(refundSpecialMove(devolvido, bone), null, "já devolvido");
+
+  // Zerar a especialização volta a travar o move daquela forma.
+  const semKarate: Character = {
+    ...karate2,
+    skills: {
+      ...karate2.skills,
+      martial_arts_karate: {
+        ...karate2.skills.martial_arts_karate,
+        level: 0,
+      },
+    },
+  };
+  assert.strictEqual(
+    listSpecialMoveAvailability(semKarate, DEFAULT_TURN_STATE).find(
+      (entry) => entry.move.id === bone.id,
+    )!.unlocked,
+    false,
+  );
 });
 
-test("Recovery usa o bolso único de Martial Arts e formas sem nível não desbloqueiam", () => {
+test("Recovery usa a melhor forma e formas sem nível não liberam moves", () => {
   const character = fighter();
-  const judoMove = SPECIAL_MOVES.find((move) => move.id === "counter_throw")!;
-
-  const recoveryPoints = getSpecialMovePoints(character)!;
   const recoveryAvail = listSpecialMoveAvailability(
     character,
     DEFAULT_TURN_STATE,
@@ -689,42 +714,76 @@ test("Recovery usa o bolso único de Martial Arts e formas sem nível não desbl
     "martial_arts_karate",
     "a melhor forma é Karate 4",
   );
-  assert.strictEqual(recoveryPoints.total, 7);
-  assert.strictEqual(
-    recoveryPoints.free,
-    0,
-    "tudo gasto: 19 em especializações + 9 moves",
+  assert.strictEqual(recoveryAvail.unlocked, true);
+  assert.strictEqual(recoveryAvail.available, true);
+  assert.deepStrictEqual(
+    getMartialArtsPoints(character),
+    {
+      total: 7,
+      spentSpecializations: 19,
+      free: 0,
+      balance: -12,
+    },
+    "moves não pesam no bolso: só as 19 das especializações",
   );
 
-  // Judo não foi comprada (nível 0): não dá pra desbloquear moves dela (perícia ausente).
+  // Judo não foi comprada (nível 0): o move dela continua travado.
   const judoAvail = listSpecialMoveAvailability(
     character,
     DEFAULT_TURN_STATE,
   ).find((entry) => entry.move.id === "counter_throw")!;
   assert.strictEqual(judoAvail.skill, undefined);
-  assert.strictEqual(judoAvail.points.total, 7);
-  assert.strictEqual(judoAvail.points.free, 0);
-  assert.strictEqual(unlockSpecialMove(character, judoMove), null);
+  assert.strictEqual(judoAvail.unlocked, false);
+  assert.ok(
+    judoAvail.missing.some((reason) => reason.includes("Nível ≥ 1")),
+    "o motivo é o nível da especialização, não ponto",
+  );
 });
 
-test("Special Move não pago recusa com o aviso de desbloqueio", () => {
-  // Ficha antiga: sem o campo, tudo vira "nenhum desbloqueado".
-  const character = { ...fighter() };
-  delete character.unlockedSpecialMoves;
+test("Special Move sem especialização recusa com o aviso de nível", () => {
+  const character = fighter();
   const bone = SPECIAL_MOVES.find(
     (move) => move.id === "bone_breaking_strike",
   )!;
 
-  const outcome = resolveSpecialMove(character, bone, DEFAULT_TURN_STATE);
+  // Zera Karate: os moves de Karate travam mesmo com o resto da ficha igual.
+  const semKarate: Character = {
+    ...character,
+    skills: {
+      ...character.skills,
+      martial_arts_karate: {
+        ...character.skills.martial_arts_karate,
+        level: 0,
+      },
+    },
+  };
+  const outcome = resolveSpecialMove(semKarate, bone, DEFAULT_TURN_STATE);
   assert.ok("error" in outcome);
   assert.match(outcome.error, /travado/);
-  assert.match(outcome.error, /1 ponto de Martial Arts/);
+  assert.match(outcome.error, /nível ≥ 1/i);
 
-  // Sem o campo desbloqueado, os pontos continuam contando pelo nível de Martial Arts (7).
+  // Sem nenhuma forma treinada nem perícia-mãe, o Recovery compartilhado trava também.
+  const skills = { ...character.skills };
+  for (const skillId of [
+    "martial_arts",
+    "martial_arts_karate",
+    "martial_arts_taekwondo",
+    "martial_arts_judo",
+    "martial_arts_aikido",
+  ]) {
+    skills[skillId] = { ...skills[skillId], level: 0 };
+  }
+  const semFormas: Character = { ...character, skills };
   const recovery = listSpecialMoveAvailability(
-    character,
+    semFormas,
     DEFAULT_TURN_STATE,
   ).find((entry) => entry.move.id === "recovery")!;
   assert.strictEqual(recovery.unlocked, false);
-  assert.strictEqual(recovery.points!.total, 7);
+  assert.strictEqual(recovery.available, false);
+  assert.ok(
+    recovery.missing.some((reason) =>
+      reason.includes("Nível ≥ 1 em alguma forma de Martial Arts"),
+    ),
+    `motivo: ${recovery.missing.join("; ")}`,
+  );
 });

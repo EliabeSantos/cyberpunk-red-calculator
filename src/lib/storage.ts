@@ -89,7 +89,6 @@ export function normalizeCharacter(character: Character): Character {
     primaryRole: character.primaryRole ?? null,
     roleAbilities: character.roleAbilities ?? [],
     ip: character.ip ?? character.progression?.improvementPoints ?? 0,
-    unlockedSpecialMoves: character.unlockedSpecialMoves ?? [],
     teamMembers: character.teamMembers ?? [],
     familyVehicles: character.familyVehicles ?? [],
     progression: character.progression ?? { improvementPoints: 0 },

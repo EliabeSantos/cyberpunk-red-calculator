@@ -223,12 +223,6 @@ export default function EncountersPageClient() {
     setEnemyCount(count);
   };
 
-  /**
-   * Os inimigos deste encontro no formato que a mesa partilhada aceita.
-   * HP atual é preservado (se o Mestre já aplicou dano antes de lançar o
-   * combate online, o inimigo entra ferido — mas com o HP máximo intacto).
-   * O `key` carrega o id do participante para o espelho de vida futura.
-   */
   const mesaEnemies: MesaEnemySeed[] = (encounter?.participants ?? [])
     .filter((p) => !p.isPlayer)
     .slice(0, 20)

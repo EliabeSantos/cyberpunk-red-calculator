@@ -20,14 +20,12 @@ export function getSpecializationCost(currentLevel: number): number {
 }
 
 /** Bolso único de pontos de Martial Arts: os níveis da perícia-mãe geram 1 ponto cada,
- * e o mesmo bolso paga as especializações e o desbloqueio dos Special Moves. */
+ * e o mesmo bolso paga as especializações. Special Moves não custam ponto. */
 export interface MartialArtsPoints {
   /** Total já ganho (= nível de Martial Arts). */
   total: number;
   /** Gasto em especializações (1 + 2 + … + nível, somado nas 4 formas). */
   spentSpecializations: number;
-  /** Gasto em Special Moves desbloqueados (1 ponto cada). */
-  spentMoves: number;
   /** Pontos gastáveis agora (nunca negativo). */
   free: number;
   /** Saldo real: negativo = especializações já pagas com IP antigo acima do que a mãe cobre. */
@@ -35,26 +33,24 @@ export interface MartialArtsPoints {
 }
 
 export function getMartialArtsPoints(
-  character: Pick<Character, "skills" | "unlockedSpecialMoves">,
+  character: Pick<Character, "skills">,
 ): MartialArtsPoints {
   const total = Math.max(0, character.skills.martial_arts?.level ?? 0);
   const spentSpecializations = MARTIAL_ARTS_FORMS.reduce((sum, { skillId }) => {
     const level = Math.max(0, character.skills[skillId]?.level ?? 0);
     return sum + (level * (level + 1)) / 2;
   }, 0);
-  const spentMoves = Math.max(0, character.unlockedSpecialMoves?.length ?? 0);
-  const balance = total - spentSpecializations - spentMoves;
+  const balance = total - spentSpecializations;
   return {
     total,
     spentSpecializations,
-    spentMoves,
     free: Math.max(0, balance),
     balance,
   };
 }
 
 export function canUpgradeSpecialization(
-  character: Pick<Character, "skills" | "unlockedSpecialMoves">,
+  character: Pick<Character, "skills">,
   skillId: string,
 ): boolean {
   const skill = character.skills[skillId];

@@ -98,16 +98,12 @@ export default function MesaEncounterStart({ enemies, encounter, battle, onStart
   // Só para reagir a criar/entrar noutra aba: o valor é lido no clique.
   useSyncExternalStore(subscribeToMembership, getMembershipSnapshot, getServerMembershipSnapshot);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ message: string; kind: "error" | "ok" } | null>(null);
-  const [canRestart, setCanRestart] = useState(false);
 
   async function handleStart(mode: "start" | "restart") {
     const mesa = findGmMesa();
     if (!mesa || enemies.length === 0) return;
 
     setBusy(true);
-    setNotice(null);
-    setCanRestart(false);
     try {
       if (mode === "restart") {
         try {
@@ -126,35 +122,12 @@ export default function MesaEncounterStart({ enemies, encounter, battle, onStart
         await startCombat(mesa.sessionId, enemies, encounter ? { encounter } : {});
       }
 
-      setNotice({
-        message: `Combate iniciado na mesa ${mesa.joinCode} (${enemies.length} inimigo${enemies.length === 1 ? "" : "s"}).`,
-        kind: "ok",
-      });
       onStarted?.({
         sessionId: mesa.sessionId,
         joinCode: mesa.joinCode,
         status: "active",
         startedAt: new Date().toISOString(),
       });
-    } catch (caught) {
-      if (caught instanceof MesaApiError && caught.code === "combat_already_active") {
-        setNotice({
-          message: "Esta mesa já tem um combate ativo. Encerre-o para entrar com este encontro.",
-          kind: "error",
-        });
-        setCanRestart(true);
-      } else if (caught instanceof MesaApiError && caught.code === "encounter_restart") {
-        // Partida DESTE encontro já rolando e o vínculo local faltava (ex.:
-        // lançado noutro separador) — o caminho certo é recomeçar a mesma
-        // partida, não encerrar a luta.
-        setNotice({ message: caught.message, kind: "error" });
-        setCanRestart(true);
-      } else {
-        setNotice({
-          message: caught instanceof MesaApiError ? caught.message : "Não foi possível iniciar o combate na mesa.",
-          kind: "error",
-        });
-      }
     } finally {
       setBusy(false);
     }
@@ -214,25 +187,6 @@ export default function MesaEncounterStart({ enemies, encounter, battle, onStart
       >
         {restartHere ? "🔄 Reiniciar combate na Mesa" : "⚔ Iniciar combate na Mesa"}
       </button>
-
-      {canRestart && !restartHere && (
-        <button
-          type="button"
-          className="gm-button gm-button-small mesa-start-secondary"
-          disabled={busy}
-          onClick={() => void handleStart("restart")}
-        >
-          🔄 Reiniciar o combate com este encontro
-        </button>
-      )}
-
-      {notice && <p className={`mesa-notice ${notice.kind}`}>{notice.message}</p>}
-      {notice?.kind === "ok" && (
-        <Link className="mesa-ghost" href={`/mesa/${mesa.joinCode}`}>
-          Ver a Mesa agora →
-        </Link>
-      )}
-      <span className="mesa-encounter-start-code">Mesa {mesa.joinCode}</span>
     </div>
   );
 }
