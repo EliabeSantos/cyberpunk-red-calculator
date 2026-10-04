@@ -27,6 +27,7 @@ import {
   subscribeToMembership,
 } from "@/lib/mesa/membershipStore";
 import type { EncounterBattle } from "@/lib/gmStorage";
+import type { EncounterParticipant } from "@/types/encounter";
 
 export interface MesaEnemySeed {
   name: string;
@@ -59,6 +60,8 @@ export interface MesaEnemySeed {
     /** Reserva na mochila: munição para recarregar e itens de cura. */
     inventory?: Array<{ item: string; quantity: number }>;
   };
+  /** Dados do encontro que o servidor transforma em snapshot de combate. */
+  snapshot?: EncounterParticipant;
 }
 
 interface Props {

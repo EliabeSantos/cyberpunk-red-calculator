@@ -1,6 +1,7 @@
 import { rollDice, type DiceResult } from "@/lib/dice";
 import { getEnemyAttackModifiers, getEnemySkillModifiers, getEnemyUnarmedDamageDice, isSmartWeaponByName } from "@/lib/enemyCyberware";
-import type { Enemy, EnemyAttributeName, EnemySkill } from "@/types/enemy";
+import { getSkillLabel } from "@/data/skills";
+import { getEnemySkill, type Enemy, type EnemyAttributeName, type EnemySkill } from "@/types/enemy";
 
 /** Context for an enemy attack or skill check */
 export interface EnemyRollContext {
@@ -86,9 +87,9 @@ export function getAvailableEnemyAttacks(enemy: Enemy): {
 
   // Weapon attacks
   for (const weapon of enemy.weapons) {
-    const skill = enemy.skills[weapon.skill];
+    const skill = getEnemySkill(enemy.skills, weapon.skill);
     const skillValue = skill ? enemy.stats[skill.stat] + skill.level : 0;
-    const skillName = skill?.name ?? weapon.skill;
+    const skillName = skill?.name ?? getSkillLabel(weapon.skill);
 
     attacks.push({
       id: weapon.id,
@@ -104,7 +105,7 @@ export function getAvailableEnemyAttacks(enemy: Enemy): {
   }
 
   // Unarmed attack (always available)
-  const brawlSkill = enemy.skills["brawling"];
+  const brawlSkill = getEnemySkill(enemy.skills, "brawling");
   const brawlValue = brawlSkill ? enemy.stats[brawlSkill.stat] + brawlSkill.level : enemy.stats.REF;
   const implantDice = getEnemyUnarmedDamageDice(enemy.cyberware);
   
@@ -129,7 +130,7 @@ export function rollEnemyAttack(enemy: Enemy, context: EnemyRollContext): { resu
   
   // Determine skill
   const skillId = context.skillId ?? weapon?.skill ?? "brawling";
-  const skill = enemy.skills[skillId];
+  const skill = getEnemySkill(enemy.skills, skillId);
   
   if (!skill) {
     return { error: `Perícia "${skillId}" não encontrada no inimigo` };
@@ -229,7 +230,7 @@ export function rollEnemySkillCheck(enemy: Enemy, context: EnemyRollContext): { 
     return { error: "Skill ID é obrigatório para teste de perícia" };
   }
 
-  const skill = enemy.skills[skillId];
+  const skill = getEnemySkill(enemy.skills, skillId);
   if (!skill) {
     return { error: `Perícia "${skillId}" não encontrada no inimigo` };
   }

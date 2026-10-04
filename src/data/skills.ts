@@ -70,3 +70,44 @@ export function createDefaultSkills(): Skills {
     costMultiplier: definition.costMultiplier, level: definition.creation.minimumLevel,
   }]));
 }
+
+/** Ids canônicos — o MESMO catálogo que define as skills da ficha, sem lista paralela. */
+const canonicalSkillIds = new Set(Object.keys(baseSkillDefinitions));
+
+/** Índice rótulo → id, derivado do mesmo catálogo: "Handgun" → `handgun`. */
+const skillIdByLabel = new Map<string, string>(
+  Object.entries(baseSkillDefinitions).map(([id, definition]) => [definition.name.toLowerCase(), id]),
+);
+
+/** Slug determinístico para perícia que a ficha não conhece (ex.: "Throwing Knife" do bestiário). */
+function slugifySkillId(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+/**
+ * Normaliza qualquer referência de perícia para o **id canônico da ficha**.
+ *
+ * Aceita as três grafias que circulam pelo sistema — id (`handgun`), rótulo do
+ * Core Rulebook (`Handgun`) e caixa alternativa (`HANDGUN`) — e devolve sempre
+ * o id de `baseSkillDefinitions`. O que não existe na ficha vira slug
+ * (`"Throwing Knife"` → `throwing_knife`), nunca some.
+ *
+ * É a ÚNICA fonte de normalização: o rótulo continua sendo o que a UI mostra
+ * (`skillDefinitions[id].name`), só a chave muda.
+ */
+export function normalizeSkillId(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return trimmed;
+  if (canonicalSkillIds.has(trimmed)) return trimmed;
+  return skillIdByLabel.get(trimmed.toLowerCase()) ?? slugifySkillId(trimmed);
+}
+
+/**
+ * Rótulo visível de uma perícia a partir do id (ou do próprio rótulo) — o
+ * inverso de `normalizeSkillId` para tudo que existe na ficha. O que não
+ * existe volta intacto, para não reescrever nomes digitados pelo Mestre.
+ */
+export function getSkillLabel(idOrLabel: string): string {
+  const trimmed = idOrLabel.trim();
+  return skillDefinitions[normalizeSkillId(trimmed)]?.name ?? trimmed;
+}

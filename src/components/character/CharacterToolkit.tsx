@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import CharacterCreator from "@/components/character/CharacterCreator";
 import CharacterSheet from "@/components/sheets/CharacterSheet";
@@ -10,6 +10,9 @@ import { getDiscordConsent, setDiscordConsent, type DiscordConsent } from "@/lib
 import { findNewRollEntry, notifyDiscordRoll } from "@/lib/discord/rollNotify";
 import { getActiveCharacter, upsertCharacter } from "@/lib/storage";
 import { maybePushSheet } from "@/lib/mesa/client";
+import { getMembershipSnapshot, getServerMembershipSnapshot, subscribeToMembership } from "@/lib/mesa/membershipStore";
+import { useMesaState } from "@/lib/mesa/useMesaState";
+import type { PlayerAttackSetup } from "@/components/combat/AttackActions";
 import { publishMesaHp } from "@/lib/mesa/hpPublish";
 import { publishMesaRoll } from "@/lib/mesa/rollPublish";
 import type { Character } from "@/types/character";
@@ -29,6 +32,35 @@ export default function CharacterToolkit({ initialJoinCode }: Props) {
   const [screen, setScreen] = useState<Screen>("creator");
   const [ready, setReady] = useState(false);
   const [discordConsent, setDiscordConsentState] = useState<DiscordConsent | null>(null);
+  const memberships = useSyncExternalStore(subscribeToMembership, getMembershipSnapshot, getServerMembershipSnapshot);
+  const activeMembership = memberships.activeJoinCode ? memberships.entries[memberships.activeJoinCode] ?? null : null;
+  const mesa = useMesaState(activeMembership?.sessionId ?? null);
+
+  const playerAttack = useMemo<PlayerAttackSetup | undefined>(() => {
+    const state = mesa.state;
+    if (!character || !state || state.viewer.role !== "player" || !state.combat || state.combat.status !== "active") return undefined;
+    const actor = state.combatants.find(
+      (combatant) => combatant.participantId === state.viewer.participantId && combatant.kind === "character" && combatant.characterId === character.id,
+    );
+    if (!actor) return undefined;
+    return {
+      sessionId: state.session.id,
+      actorId: actor.id,
+      targets: state.combatants.map((combatant) => ({
+        id: combatant.id,
+        name: combatant.name,
+        kind: combatant.kind,
+        isDead: combatant.isDead,
+      })),
+      onRefresh: mesa.refresh,
+    };
+  }, [character, mesa.refresh, mesa.state]);
+  const playerAttackUnavailable = Boolean(
+    character &&
+      mesa.state?.viewer.role === "player" &&
+      mesa.state.combat?.status === "active" &&
+      !playerAttack,
+  );
 
   useEffect(() => {
     const savedCharacter = getActiveCharacter();
@@ -41,6 +73,16 @@ export default function CharacterToolkit({ initialJoinCode }: Props) {
   function handleDiscordConsent(consent: DiscordConsent) {
     setDiscordConsent(consent);
     setDiscordConsentState(consent);
+  }
+
+  function handleUpdate(updated: Character) {
+    const newRoll = findNewRollEntry(character, updated);
+    if (newRoll) notifyDiscordRoll(newRoll, updated);
+    publishMesaRoll(newRoll);
+    publishMesaHp(character, updated);
+    upsertCharacter(updated);
+    setCharacter(updated);
+    void maybePushSheet(updated);
   }
 
   // O painel da mesa renderiza mesmo durante o carregamento: quem chega pelo
@@ -71,24 +113,9 @@ export default function CharacterToolkit({ initialJoinCode }: Props) {
         character={character}
         discordConsent={discordConsent}
         onDiscordConsentChange={handleDiscordConsent}
-        onUpdate={(updated) => {
-          // Espelho das rolagens: envia a entrada nova ao backend sem tocar na lógica de rolagem.
-          // notifyDiscordRoll só envia com consentimento explícito ("granted").
-          const newRoll = findNewRollEntry(character, updated);
-          if (newRoll) notifyDiscordRoll(newRoll, updated);
-          // Espelho para a MESA: se este navegador está numa mesa, o dado que o
-          // jogador acabou de rolar vira a ação dela e aparece no registro
-          // compartilhado. Sem mesa ativa não faz absolutamente nada.
-          publishMesaRoll(newRoll);
-          // Espelho de VIDA: HP/HP máximo/morte que mudaram na ficha baixam (ou
-          // sobem) na linha deste personagem na mesa. Fire-and-forget.
-          publishMesaHp(character, updated);
-          upsertCharacter(updated);
-          setCharacter(updated);
-          // Modo online: mantém a cópia da ficha na servidor em dia.
-          // Fire-and-forget — sem mesa ativa (modo local) não faz absolutamente nada.
-          void maybePushSheet(updated);
-        }}
+        onUpdate={handleUpdate}
+        playerAttack={playerAttack}
+        playerAttackUnavailable={playerAttackUnavailable}
         onEdit={() => setScreen("creator")}
         onNewCharacter={() => { setCharacter(null); setScreen("creator"); }}
       />

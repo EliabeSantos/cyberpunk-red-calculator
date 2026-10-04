@@ -10,6 +10,8 @@
  * o jogador vincula o personagem a uma mesa.
  */
 import type { MesaBattle, MesaParticipant, MesaSession, MesaState } from "@/lib/mesa/types";
+import type { AttackResult, DamageResult } from "@/lib/combat/contract";
+import type { DiceResult } from "@/lib/dice";
 import type { MesaRollSummary } from "@/lib/mesa/rollPolicy";
 import {
   getActiveMembership,
@@ -194,6 +196,63 @@ export async function performAction(
   });
 }
 
+/** Envia apenas intenção; o resultado é produzido pelo servidor/Combat Engine. */
+export async function attackMesa(input: {
+  sessionId: string;
+  /** Identidade estável desta intenção; reutilize-a ao repetir a requisição. */
+  resolutionId?: string;
+  actorId: string;
+  targetId: string;
+  weaponId?: string;
+  skillId?: string;
+  attackType?: string;
+  attackMode?: string;
+  aimedTarget?: string;
+}): Promise<{
+  attackResult: AttackResult;
+  weaponDamage?: DiceResult;
+  damageResult?: DamageResult;
+  damageError?: { code: string; message: string };
+  ammoAfter?: number;
+  actionAfter?: number;
+}> {
+  return api(`/api/mesa/${input.sessionId}/combat/attack`, {
+    method: "POST",
+    body: {
+      resolutionId: input.resolutionId ?? crypto.randomUUID(),
+      actorId: input.actorId,
+      targetId: input.targetId,
+      weaponId: input.weaponId,
+      skillId: input.skillId,
+      attackType: input.attackType,
+      attackMode: input.attackMode,
+      aimedTarget: input.aimedTarget,
+    },
+  });
+}
+
+/** Solicita reload; ammo, reserva e Actions nunca vêm do navegador. */
+export async function reloadMesa(input: {
+  sessionId: string;
+  resolutionId?: string;
+  weaponId: string;
+}): Promise<{
+  weaponId: string;
+  ammoBefore: number;
+  ammoAfter: number;
+  actionsBefore: number;
+  actionsAfter: number;
+  consumed: number;
+}> {
+  return api(`/api/mesa/${input.sessionId}/combat/reload`, {
+    method: "POST",
+    body: {
+      resolutionId: input.resolutionId ?? crypto.randomUUID(),
+      weaponId: input.weaponId,
+    },
+  });
+}
+
 export async function endTurn(sessionId: string): Promise<void> {
   await api(`/api/mesa/${sessionId}/combat/turn`, { method: "POST", body: {} });
 }
@@ -227,6 +286,13 @@ export interface MesaHpUpdate {
   /** Chave do inimigo no encontro (só o Mestre; usa `source_key`). */
   key?: string;
   /**
+   * HP que a ORIGEM acreditava ver ANTES desta mudança (F1.7.1, Decisão 2).
+   * Quando presente, o servidor só grava `hp_current`/`is_dead` se a linha da
+   * mesa ainda estiver nesse valor — guarda contra sobrescrever, com atraso,
+   * um resultado mais novo do Combat Engine. Ausente = caminho legado.
+   */
+  hpBefore?: number;
+  /**
    * Mochila do INIMIGO (pente + reserva), enviada junto porque o dono dela é a
    * tela de Encontros: tiro, recarregamento e cura acontecem lá e a linha da
    * mesa precisa mostrar o estado novo. Só o Mestre envia.
@@ -244,6 +310,46 @@ export interface MesaHpUpdate {
  */
 export async function sendMesaHp(sessionId: string, update: MesaHpUpdate): Promise<void> {
   await api(`/api/mesa/${sessionId}/combat/hp`, { method: "POST", body: update });
+}
+
+/**
+ * F1.7.1 — dano de inimigo RESOLVIDO PELO COMBAT ENGINE no servidor
+ * (`POST /combat/damage`, caminho B). Todo o resultado (hp_after, is_dead) é
+ * calculado lá com `serverRandom`; aqui só vão as entradas da origem.
+ *
+ * Ao contrário do espelho, esta chamada LANÇA em recusa (`409 stale_hp`/
+ * `hp_conflict`, `400`, rede, migração) — o chamador decide o fallback.
+ * `200 {updated:false}` (sem combate ativo/linha) é sucesso silencioso.
+ */
+export async function sendMesaEngineDamage(
+  sessionId: string,
+  update: MesaEngineDamageUpdate,
+): Promise<MesaEngineDamageResult> {
+  return api<MesaEngineDamageResult>(`/api/mesa/${sessionId}/combat/damage`, { method: "POST", body: update });
+}
+
+/** Intenção de dano de INIMIGO para o motor resolver no servidor (F1.7.1). */
+export interface MesaEngineDamageUpdate {
+  /** `source_key` do inimigo no encontro. */
+  key: string;
+  /** Dano bruto já rolado pelo GM (o motor NÃO rola dano). */
+  amount: number;
+  /** HP da origem ANTES deste dano — precondição/CAS/idempotência no servidor. */
+  hpBefore: number;
+  hitLocation?: "head" | "body";
+  /** Atalho legado do encontro (`ignore ? "ignore" : "full"`). */
+  ignoreArmor?: boolean;
+  /** Veste `{head, body}` do inimigo no encontro — a mesa não persiste armor. */
+  armor: { head: number; body: number };
+  /** SP de cyberware do corpo (implantes do encontro). */
+  bodySP?: number;
+}
+
+/** Resposta da resolução no servidor (hp/isDead `null` quando `updated:false`). */
+export interface MesaEngineDamageResult {
+  updated: boolean;
+  hp: number | null;
+  isDead: boolean | null;
 }
 
 export async function addEnemies(sessionId: string, enemies: unknown[]): Promise<void> {

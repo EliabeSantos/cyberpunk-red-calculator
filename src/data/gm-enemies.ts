@@ -3,6 +3,7 @@
  * Mapeia os dados do JSON para a estrutura Enemy já existente no sistema GM.
  */
 
+import { withCanonicalSkillIds } from "@/types/enemy";
 import type { Enemy, EnemySkill, EnemySupply } from "@/types/enemy";
 
 // Mapeamento de nomes de perícia para atributo primário (base do cálculo de base do GM)
@@ -1264,7 +1265,11 @@ const preMappedEnemies: Enemy[] = [
 export const gmEnemyCatalog: Enemy[] = [
   ...(catalogEnemies as unknown as Array<Parameters<typeof mapJsonToEnemy>[0]>).map(mapJsonToEnemy),
   ...preMappedEnemies,
-].map(withDerivedSupplies);
+]
+  // O JSON e os `preMappedEnemies` guardam a perícia pelo RÓTULO ("Handgun");
+  // a chave que o resto do sistema consulta é o id canônico da ficha (`handgun`).
+  .map(withCanonicalSkillIds)
+  .map(withDerivedSupplies);
 
 /**
  * Lê de volta a mochila escrita na nota de GM no formato

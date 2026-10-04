@@ -200,13 +200,13 @@ test("applyAttackDamage with Aimed Shot to Leg records leg location", () => {
     total: 5,
   } as import("../src/types/attack.ts").DamageRollResult;
   
-  const result = applyAttackDamage(character, mockDamageRoll, "right_leg");
+  const result = applyAttackDamage(character, mockDamageRoll, "leg");
   
   assert.ok("character" in result);
   if ("character" in result) {
-    assert.strictEqual(result.result.location, "right_leg");
+    assert.strictEqual(result.result.location, "leg");
     if (result.result.criticalInjury) {
-      assert.strictEqual(result.result.criticalInjury.location, "right_leg");
+      assert.strictEqual(result.result.criticalInjury.location, "leg");
     }
   }
 });

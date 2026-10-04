@@ -99,7 +99,9 @@ export function getAmmoKind(
   if (typeof weapon.magazine === "number" && weapon.magazine <= 0) return null;
 
   const name = normalize(weapon.name);
-  const skill = normalize(weapon.skill);
+  // O bestiário escreve a perícia pelo rótulo ("Shoulder Arms") e a ficha
+  // guarda o id canônico (`shoulder_arms`) — mesmos dois, com "_" ≡ " ".
+  const skill = normalize(weapon.skill).replace(/_/g, " ");
 
   // Ordem importa: "Heavy Pistol" não pode cair em rifle nem em SMG.
   if (name.includes("shotgun") || name.includes("escopeta")) return "shotgun";
@@ -125,10 +127,41 @@ export function ammoSupplyName(kind: AmmoKind): string {
  * só quando ele não pertence a outra qualidade — um inimigo de escopeta não
  * gasta "Heavy Pistol Ammo". `-1` = nada compatível.
  */
-export function findAmmoSupplyIndex(items: readonly EnemySupply[], kind: AmmoKind): number {
-  const specific = items.findIndex((entry) => isAmmoSupply(entry.item) && matchesKind(entry.item, kind));
+/**
+ * Índice do item da mochila que alimenta uma arma de qualidade `kind`, **pelo
+ * nome** — a mesma regra de `findAmmoSupplyIndex` (que é esta função adaptada),
+ * para quem guarda a mochila noutro formato (a ficha do jogador tem
+ * `InventoryItem`, não `EnemySupply`).
+ *
+ * Prefere o item ESPECÍFICO ("Pistol Ammunition"); cai no genérico ("Ammo")
+ * só quando ele não pertence a outra qualidade — uma arma de escopeta não gasta
+ * munição de pistola, mesmo que a pilha dela apareça primeiro no inventário.
+ * `-1` = nada compatível.
+ */
+export function findAmmoIndexByNames(names: readonly string[], kind: AmmoKind): number {
+  const specific = names.findIndex((name) => isAmmoSupply(name) && matchesKind(name, kind));
   if (specific >= 0) return specific;
-  return items.findIndex((entry) => isAmmoSupply(entry.item) && !matchesAnyKind(entry.item));
+  return names.findIndex((name) => isAmmoSupply(name) && !matchesAnyKind(name));
+}
+
+export function findAmmoSupplyIndex(items: readonly EnemySupply[], kind: AmmoKind): number {
+  return findAmmoIndexByNames(items.map((entry) => entry.item), kind);
+}
+
+/**
+ * Retém apenas munição que pode alimentar pelo menos uma arma do snapshot.
+ * A decisão continua passando pelo mesmo classificador usado no reload.
+ */
+export function isAmmoRelevantToWeapons(
+  name: string,
+  weapons: ReadonlyArray<{ name?: string; skill?: string; attackType?: string; magazine?: number }>,
+): boolean {
+  return weapons.some((weapon) => {
+    // `planReload` classifica armas de ficha por nome/perícia; attackType
+    // (`handgun`, `rifle`...) não é o marcador `ranged` usado pelo bestiário.
+    const kind = getAmmoKind({ name: weapon.name, skill: weapon.skill });
+    return kind !== null && findAmmoIndexByNames([name], kind) === 0;
+  });
 }
 
 /**

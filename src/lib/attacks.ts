@@ -1,6 +1,8 @@
 import { getSkillBase, getCriticalInjuryModifiers, getWoundPenalty } from "@/lib/calculations";
 import { rollDice } from "@/lib/dice";
+import type { RandomSource } from "@/lib/combat/contract";
 import { getCatalogItem } from "@/data/items";
+import { findAmmoIndexByNames, getAmmoKind } from "@/data/enemySupplies";
 import { getCyberwareAttackModifiers, getCyberwareEvasionModifiers, getCyberwarePhysicalModifiers, getCyberwareUnarmedDamageModifiers, hasInstalledCyberarm, isSmartWeapon } from "@/lib/cyberwareEffects";
 import type {
   AttackContext,
@@ -59,6 +61,36 @@ function getAttackLabel(type: AttackContext["type"]): string {
       ? "Ataque Desarmado"
       : "Ataque";
 }
+
+/** Tipos resolvidos que atacam à distância (penalidade de lesão à distância e Attack Modes). */
+const RANGED_ATTACK_TYPES: AttackType[] = ["handgun", "smg", "rifle", "shotgun", "sniper", "heavy_weapon", "thrown_weapon", "grenade", "exotic_weapon"];
+/** Tipos resolvidos de corpo a corpo. */
+const MELEE_ATTACK_TYPES: AttackType[] = ["melee", "martial_arts", "brawling", "unarmed"];
+/** Fallback legado: fichas antigas guardam `attackType: "weapon"` e o tipo fica na perícia. */
+const RANGED_SKILL_IDS = ["archery", "autofire", "handgun", "heavy_weapons", "shoulder_arms"];
+
+/**
+ * O ataque é à distância?
+ *
+ * Decide pelo TIPO RESOLVIDO do ataque — para armas isso é `weapon.attackType`
+ * (handgun, smg, heavy_weapon, melee...), não `context.type`, que é sempre
+ * "weapon" (bug 3b: antes, todo ataque com arma escapava dos modificadores de
+ * distância, e a lista antiga usava ids de perícia "heavy_weapons" em vez de
+ * AttackType "heavy_weapon", fora "smg"). O fallback por perícia cobre chamadas
+ * legadas com type: "weapon".
+ *
+ * É o MESMO critério que a UI usa para mostrar os Attack Modes (`AttackActions`):
+ * uma lista só, para o seletor e o cálculo nunca discordarem sobre o que é
+ * ataque à distância. (O nome não é `isRangedAttack` porque `rollAttack` já tem
+ * uma variável local com esse nome — o teste de perícia à distância do cyberware.)
+ */
+export function isRangedAttackType(attackType: AttackType, skillId?: string | null): boolean {
+  return (
+    RANGED_ATTACK_TYPES.includes(attackType) ||
+    (attackType === "weapon" && RANGED_SKILL_IDS.includes(skillId ?? ""))
+  );
+}
+
 export type AttackResolution =
   | { character: Character; result: AttackRollResult }
   | { error: string };
@@ -77,6 +109,7 @@ export function getUnarmedDamageDice(body: number, cyberwareBonusDice = 0, hasCy
 export function rollAttack(
   character: Character,
   context: AttackContext,
+  rng?: RandomSource,
 ): AttackResolution {
   const modifiers = context.modifiers ?? [];
   let skillId = context.skillId;
@@ -121,17 +154,8 @@ export function rollAttack(
   // Calcula modificadores de Critical Injuries
   const injuryModifiers = getCriticalInjuryModifiers(character);
   
-  // Determina se é ataque à distância ou corpo a corpo a partir do TIPO RESOLVIDO do ataque.
-  // Para armas isso é `weapon.attackType` (handgun, smg, heavy_weapon, melee...), não `context.type`,
-  // que é sempre "weapon" — antes, todo ataque com arma escapava desses dois modificadores (bug 3b)
-  // e a lista antiga usava ids de perícia ("heavy_weapons") em vez de AttackType ("heavy_weapon"),
-  // fora "smg" (bug 3). O fallback por perícia cobre chamadas legadas com type: "weapon".
-  const RANGED_ATTACK_TYPES: AttackType[] = ["handgun", "smg", "rifle", "shotgun", "sniper", "heavy_weapon", "thrown_weapon", "grenade", "exotic_weapon"];
-  const MELEE_ATTACK_TYPES: AttackType[] = ["melee", "martial_arts", "brawling", "unarmed"];
-  const RANGED_SKILL_IDS = ["archery", "autofire", "handgun", "heavy_weapons", "shoulder_arms"];
-  const isRanged =
-    RANGED_ATTACK_TYPES.includes(attackType) ||
-    (attackType === "weapon" && RANGED_SKILL_IDS.includes(skillId));
+  // Distância/corpo a corpo a partir do TIPO RESOLVIDO do ataque (ver isRangedAttackType).
+  const isRanged = isRangedAttackType(attackType, skillId);
   const isMelee = MELEE_ATTACK_TYPES.includes(attackType);
   
   // Calcula modificadores de Critical Injury aplicáveis ao ataque
@@ -188,7 +212,7 @@ export function rollAttack(
   let isFumble = false;
   
   function rollExplodingD10(): number {
-    const roll = rollDice("1d10");
+    const roll = rollDice("1d10", rng);
     const rollValue = roll.rolls[0];
     allRolls.push({ value: rollValue, type: "normal" });
     diceTotal += rollValue;
@@ -197,7 +221,7 @@ export function rollAttack(
     if (rollValue === 10) {
       isCritical = true;
       allRolls[allRolls.length - 1].type = "crit";
-      const nextRoll = rollDice("1d10");
+      const nextRoll = rollDice("1d10", rng);
       const nextValue = nextRoll.rolls[0];
       allRolls.push({ value: nextValue, type: "crit_add" });
       diceTotal += nextValue;
@@ -208,7 +232,7 @@ export function rollAttack(
     if (rollValue === 1) {
       isFumble = true;
       allRolls[allRolls.length - 1].type = "fumble";
-      const nextRoll = rollDice("1d10");
+      const nextRoll = rollDice("1d10", rng);
       const nextValue = nextRoll.rolls[0];
       allRolls.push({ value: nextValue, type: "fumble_sub" });
       diceTotal -= nextValue;
@@ -290,7 +314,7 @@ export function rollAttack(
 }
 
 /** Defensive skill test. It shares Skill Base and dice rules, but is never an attack. */
-export function rollEvasion(character: Character, modifiers: import("@/types/attack").AttackModifier[] = []): { character: Character; result: import("@/types/attack").EvasionRollResult } | { error: string } {
+export function rollEvasion(character: Character, modifiers: import("@/types/attack").AttackModifier[] = [], rng?: RandomSource): { character: Character; result: import("@/types/attack").EvasionRollResult } | { error: string } {
   const skill = character.skills.evasion;
   if (!skill) return { error: "A perícia Evasion não existe na ficha." };
   
@@ -302,7 +326,7 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
   let isFumble = false;
   
   function rollExplodingD10(): number {
-    const roll = rollDice("1d10");
+    const roll = rollDice("1d10", rng);
     const rollValue = roll.rolls[0];
     allRolls.push({ value: rollValue, type: "normal" });
     diceTotal += rollValue;
@@ -311,7 +335,7 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
     if (rollValue === 10) {
       isCritical = true;
       allRolls[allRolls.length - 1].type = "crit";
-      const nextRoll = rollDice("1d10");
+      const nextRoll = rollDice("1d10", rng);
       const nextValue = nextRoll.rolls[0];
       allRolls.push({ value: nextValue, type: "crit_add" });
       diceTotal += nextValue;
@@ -322,7 +346,7 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
     if (rollValue === 1) {
       isFumble = true;
       allRolls[allRolls.length - 1].type = "fumble";
-      const nextRoll = rollDice("1d10");
+      const nextRoll = rollDice("1d10", rng);
       const nextValue = nextRoll.rolls[0];
       allRolls.push({ value: nextValue, type: "fumble_sub" });
       diceTotal -= nextValue;
@@ -384,15 +408,6 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
   return { character: { ...character, rollHistory: [entry, ...character.rollHistory] }, result };
 }
 
-/** Mapeia subtipo de arma para a categoria de munição correspondente no inventário. */
-const ammoCategoryMap: Record<string, string> = {
-  handgun: "pistol_ammo",
-  smg: "smg_ammo",
-  rifle: "rifle_ammo",
-  shotgun: "shotgun_shells",
-  heavy: "rifle_ammo",
-};
-
 /** Recarrega uma arma consumindo munição do inventário. Retorna erro se não houver munição. */
 export function reloadWeapon(
   character: Character,
@@ -405,15 +420,23 @@ export function reloadWeapon(
 
   const ammoNeeded = weapon.magazine - (weapon.ammo ?? 0);
 
-  const ammoCategory = weapon.skill ? ammoCategoryMap[weapon.skill] ?? "ammunition" : "ammunition";
-  const ammoItem = character.inventory.find(
-    (item) => item.category === "ammunition" && item.name.toLowerCase().includes(ammoCategory.replace("_", " "))
-      || item.catalogItemId === ammoCategory
-      || item.name.toLowerCase().includes("ammo")
-      || item.name.toLowerCase().includes("munição")
-      || item.name.toLowerCase().includes("municao")
-      || item.name.toLowerCase().includes("shells")
-  );
+  // QUALIDADE da reserva: o MESMO classificador do bestiário e do encontro
+  // (`getAmmoKind`) e a MESMA regra de escolha (`findAmmoIndexByNames`:
+  // específico → genérico) — só assim o pente recebe munição compatível.
+  //
+  // O predicado anterior casava por QUALQUER cláusula do nome (|| solto) e
+  // `find` devolvia o primeiro item que desse match, qualquer que fosse a
+  // qualidade: um rifle de `shoulder_arms` enchia o pente com "Pistol
+  // Ammunition" e uma pistola com "Shotgun Shells" se a escopeta tivesse sido
+  // comprada primeiro (M7, reproduzido em F0.6).
+  //
+  // `attackType` NÃO entra aqui de propósito: na ficha do jogador ele é
+  // `"handgun" | "rifle" | ...` (nunca `"ranged"`) e o classificador retornaria
+  // `null` para toda arma à distância — mesmo caminho do encontro, que passa
+  // só `{ name, skill }`.
+  const kind = getAmmoKind({ name: weapon.name, skill: weapon.skill });
+  const ammoIndex = kind ? findAmmoIndexByNames(character.inventory.map((item) => item.name), kind) : -1;
+  const ammoItem = ammoIndex >= 0 ? character.inventory[ammoIndex] : undefined;
   if (!ammoItem) return { error: "Nenhuma munição encontrada no inventário." };
   if (ammoItem.quantity < ammoNeeded) return { error: `Munição insuficiente. Necessário ${ammoNeeded}, disponível ${ammoItem.quantity}.` };
 

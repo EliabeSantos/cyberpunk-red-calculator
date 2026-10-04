@@ -1,3 +1,6 @@
+import { rollDice } from "@/lib/dice";
+import type { RandomSource } from "@/lib/combat/contract";
+import type { DiceResult } from "@/lib/dice";
 import type { HitLocation } from "@/types/combat";
 import type { AttributeName } from "@/types/character";
 
@@ -344,39 +347,62 @@ const headCriticalInjuries: CriticalInjury[] = [
 export const criticalInjuryTables: Record<HitLocation, CriticalInjury[]> = {
   head: headCriticalInjuries,
   body: bodyCriticalInjuries,
-  right_arm: bodyCriticalInjuries,
-  left_arm: bodyCriticalInjuries,
-  right_leg: bodyCriticalInjuries,
-  left_leg: bodyCriticalInjuries,
+  leg: bodyCriticalInjuries,
+  held_item: bodyCriticalInjuries,
 };
 
 export { bodyCriticalInjuries, headCriticalInjuries };
 
 /** Obtém uma Critical Injury aleatória (2d6) para a localização especificada.
  * Se a lesão já estiver sofrida pelo personagem, rola novamente até obter uma nova (regra oficial).
- */
+ *
+ * F1.4: `rng` é opcional e vem DEPOIS de `existingInjuries` para não mexer nas
+ * chamadas existentes — sem ele a rolagem é a de sempre (`browserRandom`). O
+ * problema conhecido de `existingInjuries` não ser passado pelos consumidores
+ * continua fora do escopo desta etapa. */
 export function rollCriticalInjury(
   location: HitLocation,
-  existingInjuries: Set<string> = new Set()
+  existingInjuries: Set<string> = new Set(),
+  rng?: RandomSource
 ): CriticalInjury {
+  return rollCriticalInjuryDetail(location, existingInjuries, rng).injury;
+}
+
+/** A lesão E o 2d6 que a produziu — o que `CombatResult.rolls` publica (F1.5). */
+export interface CriticalInjuryRoll {
+  injury: CriticalInjury;
+  roll: DiceResult;
+}
+
+/**
+ * O mesmo laço de `rollCriticalInjury`, devolvendo também a rolagem.
+ *
+ * A primeira rolagem sai antes do laço para que o 2d6 conclusivo sempre exista
+ * (as tabelas nunca são vazias), mantendo a contagem de sorteios de sempre:
+ * 1 quando acerta na primeira, `table.length` quando tudo falha.
+ */
+export function rollCriticalInjuryDetail(
+  location: HitLocation,
+  existingInjuries: Set<string> = new Set(),
+  rng?: RandomSource
+): CriticalInjuryRoll {
   const table = criticalInjuryTables[location];
-  let attempts = 0;
   const maxAttempts = table.length;
+  let attempts = 0;
+  let roll = rollDice("2d6", rng);
+  let injury = table.find((entry) => entry.roll === roll.total);
 
-  while (attempts < maxAttempts) {
-    // 2d6 roll
-    const roll = Math.floor(Math.random() * 6) + 1 + Math.floor(Math.random() * 6) + 1;
-    const injury = table.find((inj) => inj.roll === roll);
-
-    if (injury && !existingInjuries.has(injury.name)) {
-      return injury;
-    }
+  while (attempts < maxAttempts && (!injury || existingInjuries.has(injury.name))) {
     attempts++;
+    roll = rollDice("2d6", rng);
+    injury = table.find((entry) => entry.roll === roll.total);
   }
+
+  if (injury && !existingInjuries.has(injury.name)) return { injury, roll };
 
   // Fallback: retorna a primeira lesão não sofrida (ou a primeira se todas já sofridas)
   const available = table.find((inj) => !existingInjuries.has(inj.name)) ?? table[0];
-  return available;
+  return { injury: available, roll };
 }
 
 /** Verifica se os dados de dano contêm dois ou mais resultados 6 (Critical Injury por dados). */

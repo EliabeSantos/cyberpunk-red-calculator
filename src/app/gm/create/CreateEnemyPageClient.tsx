@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { upsertEnemy, getEnemy } from "@/lib/gmStorage";
-import { createEmptyEnemy } from "@/types/enemy";
+import { normalizeSkillId } from "@/data/skills";
+import { createEmptyEnemy, getEnemySkill, newEnemySkillId } from "@/types/enemy";
 import { archetypeOptions, threatLevels, threatLevelLabels } from "@/data/enemies";
 import { enemyStatNames } from "@/types/enemy";
 import type { Enemy, EnemyWeapon, EnemySkill, EnemyCondition } from "@/types/enemy";
@@ -31,6 +32,15 @@ const commonSkillOptions: Record<string, string> = {
   "Basic Tech": "TECH",
   "Cybertech": "TECH",
 };
+
+/**
+ * Mesmo `commonSkillOptions`, indexado pelo id canônico da ficha: o formulário
+ * escreve a perícia pelo rótulo ("Handgun") e o resto do sistema consulta
+ * `handgun` (`normalizeSkillId`), então a base de ataque precisa achar as duas.
+ */
+const commonSkillStatById: Record<string, string> = Object.fromEntries(
+  Object.entries(commonSkillOptions).map(([name, stat]) => [normalizeSkillId(name), stat]),
+);
 
 /** Common weapon names with default stats. */
 const commonWeaponOptions: Record<string, { damage: string; attackType: "melee" | "ranged" | "thrown"; skill: string; rateOfFire: number; ammo: number | null }> = {
@@ -116,12 +126,12 @@ export default function CreateEnemyPageClient() {
 
   /** Calculate attackBase for a weapon based on its skill and the enemy's stats. */
   const calculateAttackBase = useCallback((skillName: string): number => {
-    const statName = commonSkillOptions[skillName];
+    const skillId = normalizeSkillId(skillName);
+    const statName = commonSkillStatById[skillId];
     if (!statName || !(statName in enemy.stats)) return 0;
     const stat = enemy.stats[statName as keyof Enemy["stats"]];
-    // Find the enemy's skill entry to get the level
-    const skillEntry = Object.values(enemy.skills).find((s) => s.name === skillName);
-    const skillLevel = skillEntry?.level ?? 0;
+    // Find the enemy's skill entry to get the level (id canônico ou rótulo legado)
+    const skillLevel = getEnemySkill(enemy.skills, skillId)?.level ?? 0;
     return stat + skillLevel;
   }, [enemy.stats, enemy.skills]);
 
@@ -172,7 +182,8 @@ export default function CreateEnemyPageClient() {
     const name = predefined?.name ?? "";
     const stat = (predefined?.stat ?? "REF") as EnemySkill["stat"];
     const newSkill: EnemySkill = { name, stat, level: 1 };
-    const id = predefined?.name || `skill_${Date.now()}`;
+    // A CHAVE é o id canônico (`handgun`); `name` continua sendo o rótulo visível.
+    const id = newEnemySkillId(predefined?.name);
     setEnemy((prev) => ({
       ...prev,
       skills: { ...prev.skills, [id]: newSkill },
@@ -186,10 +197,12 @@ export default function CreateEnemyPageClient() {
         ...prev.skills,
         [id]: { ...prev.skills[id], [field]: value },
       };
-      // If the name changed, also update the key
-      if (field === "name" && typeof value === "string" && value !== id) {
+      // If the name changed, also update the key (sempre para o id canônico)
+      if (field === "name" && typeof value === "string") {
+        const nextId = normalizeSkillId(value);
+        if (nextId === id) return { ...prev, skills: updatedSkills, updatedAt: new Date().toISOString() };
         const { [id]: old, ...rest } = updatedSkills;
-        rest[value] = { ...old, name: value };
+        rest[nextId] = { ...old, name: value };
         return { ...prev, skills: rest, updatedAt: new Date().toISOString() };
       }
       return { ...prev, skills: updatedSkills, updatedAt: new Date().toISOString() };
@@ -212,7 +225,7 @@ export default function CreateEnemyPageClient() {
       name,
       damage: preset?.damage ?? "1d6",
       attackType: preset?.attackType ?? "melee",
-      skill: preset?.skill ?? "brawling",
+      skill: preset ? normalizeSkillId(preset.skill) : "brawling",
       attackBase: 0,
       rateOfFire: preset?.rateOfFire ?? 2,
       magazine: undefined,
@@ -289,9 +302,15 @@ export default function CreateEnemyPageClient() {
     [enemy.skills]
   );
 
-  // Predefined skills not yet added
+  // Predefined skills not yet added (compara pelo RÓTULO: a chave pode ser o id)
   const availablePredefinedSkills = useMemo(
-    () => Object.entries(commonSkillOptions).filter(([name]) => !enemy.skills[name]),
+    () => Object.entries(commonSkillOptions).filter(([name]) => !existingSkillNames.includes(name)),
+    [existingSkillNames]
+  );
+
+  /** Perícias do inimigo como `{ id, name }` — o select de arma guarda o id e mostra o rótulo. */
+  const existingSkillEntries = useMemo(
+    () => Object.entries(enemy.skills).map(([id, skill]) => ({ id, name: skill.name })),
     [enemy.skills]
   );
 
@@ -578,8 +597,8 @@ export default function CreateEnemyPageClient() {
                           onChange={(e) => updateWeapon(weapon.id, "skill", e.target.value)}
                         >
                           <option value="">Selecione...</option>
-                          {existingSkillNames.map((name) => (
-                            <option key={name} value={name}>{name}</option>
+                          {existingSkillEntries.map(({ id, name }) => (
+                            <option key={id} value={id}>{name}</option>
                           ))}
                           <option value="__custom">Outra (digitar)...</option>
                         </select>

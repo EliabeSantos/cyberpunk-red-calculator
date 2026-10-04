@@ -195,7 +195,7 @@ test("dano e rolagem livre nunca planejam débito, nem com chave de inimigo", ()
   }
 });
 
-test("Mestre rolando pelo inimigo fora do turno continua valendo (regra do motor)", () => {
+test("Mestre rolando pelo inimigo fora do turno não debita a ação", () => {
   const result = resolveAction({
     combatStatus: "active",
     initiativeStarted: true,
@@ -206,7 +206,7 @@ test("Mestre rolando pelo inimigo fora do turno continua valendo (regra do motor
     actionType: MESA_ROLL_ACTION.attack!,
     meters: 0,
   });
-  assert.deepEqual(result, { ok: true, cost: 1 });
+  assert.deepEqual(result, { ok: false, reason: "not_your_turn" });
 });
 
 test("inimigo fora do combate não paga ação — e o registro diz por quê", () => {

@@ -18,6 +18,7 @@
  */
 
 import { rollDice } from "@/lib/dice";
+import type { RandomSource } from "@/lib/combat/contract";
 
 /** Cyberpunk RED nesta aplicação: 2 Actions por turno. */
 export const ACTIONS_PER_TURN = 2;
@@ -48,7 +49,7 @@ export function movementMetersPerTurn(moveStat: number): number {
 }
 
 /** Ações aceitas pelo motor. */
-export type CombatActionType = "attack" | "move" | "item" | "other";
+export type CombatActionType = "attack" | "move" | "item" | "reload" | "other";
 
 /**
  * Custo de cada ação em "actionsRemaining".
@@ -56,11 +57,12 @@ export type CombatActionType = "attack" | "move" | "item" | "other";
  * `move` custa 0 ações: o movimento tem orçamento próprio (**MOVE × 2 metros**
  * por turno, `movementMetersPerTurn`), como mostra o painel
  * (Ações 2/2 · Movimento 14/20 m). Ataque e item custam 1,
- * então dois ataques esgotam o turno (2 → 1 → 0).
+ * reload, item e ataque custam 1, então duas ações esgotam o turno (2 → 1 → 0).
  */
 export const ACTION_COSTS: Record<CombatActionType, number> = {
   attack: 1,
   item: 1,
+  reload: 1,
   other: 1,
   move: 0,
 };
@@ -132,18 +134,17 @@ export function resolveAction(request: ActionRequest): ActionResult {
 
   if (!isCombatActionType(request.actionType)) return { ok: false, reason: "invalid_action" };
 
-  // GM comanda qualquer combatente; jogador só o próprio.
+  // GM pode comandar qualquer combatente; jogador só o próprio.
   if (request.actorRole !== "gm" && !request.actorOwnsCombatant) {
     return { ok: false, reason: "not_allowed" };
   }
 
   if (combatant.isDead) return { ok: false, reason: "combatant_defeated" };
 
-  // Só age no próprio turno (o GM pode agir por qualquer combatente, inclusive fora de turno).
-  if (
-    request.actorRole !== "gm" &&
-    request.combatant.id !== request.activeCombatantId
-  ) {
+  // A autoridade de turno é do combatente, não do papel de quem fez a
+  // requisição. O GM pode comandar qualquer combatente, mas somente aquele
+  // que está ativo pode executar uma ação de combate.
+  if (request.combatant.id !== request.activeCombatantId) {
     return { ok: false, reason: "not_your_turn" };
   }
 
@@ -262,6 +263,7 @@ export function isTurnOf(combatantId: string, activeCombatantId: string | null):
  * `bonus` é o bônus de cyberware do inimigo (Sandevistan, Kerenzikov...), 0
  * quando o seed não informou — ver `src/lib/enemyCyberware.ts`.
  */
-export function rollEnemyInitiative(ref: number, bonus = 0): number {
-  return ref + bonus + rollDice("1d10").rolls[0];
+/** `rng` opcional (F1.4): só torna a fonte do d10 injetável, a fórmula não muda. */
+export function rollEnemyInitiative(ref: number, bonus = 0, rng?: RandomSource): number {
+  return ref + bonus + rollDice("1d10", rng).rolls[0];
 }

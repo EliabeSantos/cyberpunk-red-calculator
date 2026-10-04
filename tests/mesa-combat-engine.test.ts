@@ -72,8 +72,10 @@ test("dois ataques esgotam o turno (2 → 1 → 0)", () => {
 test("ataque custa 1 ação; movimento custa 0 e gasta os metros", () => {
   assert.equal(getActionCost("attack"), 1);
   assert.equal(getActionCost("item"), 1);
+  assert.equal(getActionCost("reload"), 1);
   assert.equal(getActionCost("move"), 0);
   assert.equal(ACTION_COSTS.move, 0);
+  assert.equal(ACTION_COSTS.reload, 1);
 
   const moved = applyAction(economy(), "move", 3);
   assert.equal(moved.actionsRemaining, 2, "mover não consome ação");
@@ -89,6 +91,7 @@ test("orçamentos nunca ficam negativos", () => {
 
 test("reconhece só os tipos de ação conhecidos", () => {
   assert.ok(isCombatActionType("attack"));
+  assert.ok(isCombatActionType("reload"));
   assert.ok(isCombatActionType("move"));
   assert.ok(!isCombatActionType("fly"));
   assert.ok(!isCombatActionType(null));
@@ -116,13 +119,30 @@ test("jogador não age com combatente de outro jogador", () => {
   assert.deepEqual(result, { ok: false, reason: "not_allowed" });
 });
 
-test("GM pode agir por qualquer combatente, inclusive fora de turno", () => {
+test("GM pode comandar qualquer combatente, mas respeita o turno ativo", () => {
   const result = request({
     actorRole: "gm",
     actorOwnsCombatant: false,
     activeCombatantId: "outro-combatente",
   });
-  assert.deepEqual(result, { ok: true, cost: 1 });
+  assert.deepEqual(result, { ok: false, reason: "not_your_turn" });
+});
+
+test("somente o combatente ativo pode iniciar o ataque, inclusive quando é o GM", () => {
+  const makeRequest = (combatantId: string, activeCombatantId: string) => request({
+    actorRole: "gm",
+    actorOwnsCombatant: false,
+    activeCombatantId,
+    combatant: { id: combatantId, isDead: false, ...economy() },
+  });
+
+  assert.deepEqual(makeRequest("enemy-A", "enemy-A"), { ok: true, cost: 1 });
+  for (const enemyId of ["enemy-B", "enemy-C", "enemy-D"]) {
+    assert.deepEqual(makeRequest(enemyId, "enemy-A"), { ok: false, reason: "not_your_turn" });
+  }
+
+  assert.deepEqual(makeRequest("enemy-B", "enemy-B"), { ok: true, cost: 1 });
+  assert.deepEqual(makeRequest("enemy-A", "enemy-B"), { ok: false, reason: "not_your_turn" });
 });
 
 test("personagem fora do combate não age", () => {

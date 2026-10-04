@@ -6,10 +6,8 @@ import {
   loadEncounters,
   deleteEncounter,
   getEncounter,
-  createEncounterFromFaction,
   ensureEncounterIds,
   updateParticipantHP,
-  rollAttack,
   rollDamage,
   rollEvasion,
   getEvasionBase,
@@ -34,21 +32,38 @@ import {
   type EncounterData,
 } from "@/lib/gmStorage";
 import { gmEnemyCatalog, availableFactions } from "@/data/gm-enemies";
+import {
+  buildEncounterRoster,
+  createEncounterFromRoster,
+  type EncounterRosterRequest,
+} from "@/lib/encounterRoster";
 import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjuries";
 import { rollDice } from "@/lib/dice";
-import { notifyEnemyAttack, notifyEnemyDamage, notifyEnemyEvasion, notifyEnemyInitiative } from "@/lib/discord/rollNotify";
+import { notifyEnemyDamage, notifyEnemyEvasion, notifyEnemyInitiative } from "@/lib/discord/rollNotify";
 import {
-  publishMesaGmAttack,
   publishMesaGmDamage,
   publishMesaGmEvasion,
-  publishMesaGmInitiative,
 } from "@/lib/mesa/gmRollPublish";
-import { publishMesaEnemyHp, publishMesaEnemySupplies } from "@/lib/mesa/hpPublish";
-import { fetchMesaBattles, listMemberships, MesaApiError } from "@/lib/mesa/client";
+import { publishMesaEnemyHp, publishMesaEnemySupplies, publishMesaEngineDamage } from "@/lib/mesa/hpPublish";
+import { getEnemyBodySP } from "@/lib/enemyCyberware";
+import { attackMesa, fetchMesaBattles, listMemberships, MesaApiError, rollInitiative } from "@/lib/mesa/client";
 import { applyMesaStateToEncounter, reconcileEncountersWithBattles } from "@/lib/mesa/encounterSync";
+import { findParticipantById, toggleParticipantSelection } from "@/lib/participantSelection";
 import { useMesaState } from "@/lib/mesa/useMesaState";
 import type { MesaBattle } from "@/lib/mesa/types";
+import type { AttackResult, DamageResult } from "@/lib/combat/contract";
+import type { DiceResult } from "@/lib/dice";
 import MesaEncounterStart, { type MesaEnemySeed } from "@/components/mesa/MesaEncounterStart";
+import {
+  ClockIcon,
+  ListIcon,
+  PlayIcon,
+  RotateCwIcon,
+  SaveIcon,
+  SwordsIcon,
+  TrashIcon,
+  UsersIcon,
+} from "@/components/icons";
 
 /**
  * Trecho de bônus de implante para a linha de resultado, com o sinal certo
@@ -67,21 +82,50 @@ function implantSourcesText(modifiers: readonly { source: string; value: number 
   return modifiers.map((m) => `${m.source} ${m.value >= 0 ? "+" : ""}${m.value}`).join(" · ");
 }
 
+/** Nível 1–4 derivado da ameaça do inimigo (low → extreme). */
+function threatToLevel(threatLevel: string): number {
+  if (threatLevel === "extreme") return 4;
+  if (threatLevel === "high") return 3;
+  if (threatLevel === "medium") return 2;
+  return 1;
+}
+
 /** Selo do vínculo do encontro com uma partida (na lista e nos cartões). */
 function battleBadge(battle: EncounterBattle | undefined) {
   if (!battle) return null;
   if (battle.status === "completed") {
     const when = battle.completedAt ? new Date(battle.completedAt) : null;
     const date = when && !Number.isNaN(when.getTime()) ? when.toLocaleDateString("pt-BR") : "";
-    return <span className="encounter-badge encounter-badge-done">✅ Concluído{date ? ` · ${date}` : ""}</span>;
+    return <span className="encounter-badge encounter-badge-done">Concluído{date ? ` · ${date}` : ""}</span>;
   }
-  return <span className="encounter-badge encounter-badge-live">⚔ Mesa {battle.joinCode}</span>;
+  // Partida viva = acento, igual a todo o resto do sistema.
+  return (
+    <span className="encounter-badge encounter-badge-live">
+      <span className="encounter-badge-dot" aria-hidden="true" />
+      Mesa {battle.joinCode}
+    </span>
+  );
 }
 
 function formatDateTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
+
+interface ServerAttackFeedback {
+  attackResult: AttackResult;
+  weaponDamage?: DiceResult;
+  damageResult?: DamageResult;
+  damageError?: { code: string; message: string };
+  ammoAfter?: number;
+}
+
+function serverAttackType(participant: NonNullable<EncounterData["participants"]>[number]): string | undefined {
+  if (participant.weaponAttackType === "melee") return "melee";
+  if (participant.weaponAttackType === "thrown") return "thrown_weapon";
+  if (participant.weaponAttackType === "ranged") return "weapon";
+  return undefined;
 }
 
 export default function EncountersPageClient() {
@@ -92,7 +136,10 @@ export default function EncountersPageClient() {
   const [encounter, setEncounter] = useState<EncounterData | null>(null);
   const [savedEncounters, setSavedEncounters] = useState<EncounterData[]>([]);
   const [activeTab, setActiveTab] = useState<"new" | "list">("new");
-  const [selectedParticipant, setSelectedParticipant] = useState<number | null>(null);
+  // Seleção guarda o **id** do participante, não a posição: `handleRollInitiative`
+  // reordena `encounter.participants` e um índice ficaria apontando para outro
+  // inimigo (F0.5). O participante é derivado em `selectedParticipant` abaixo.
+  const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
   const [damageValue, setDamageValue] = useState("");
   const [ignoreArmor, setIgnoreArmor] = useState(false);
   const [hitLocation, setHitLocation] = useState<"head" | "body">("body");
@@ -103,6 +150,13 @@ export default function EncountersPageClient() {
   const [previewSeed, setPreviewSeed] = useState(0);
   const [battles, setBattles] = useState<MesaBattle[]>([]);
   const [historyNotice, setHistoryNotice] = useState<string | null>(null);
+  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
+  const [attackMode, setAttackMode] = useState<"normal" | "aimed">("aimed");
+  const [aimedTarget, setAimedTarget] = useState<"head" | "leg" | "held_item">("head");
+  const [attackBusyId, setAttackBusyId] = useState<string | null>(null);
+  const [attackFeedback, setAttackFeedback] = useState<Record<string, ServerAttackFeedback>>({});
+  const [attackError, setAttackError] = useState<string | null>(null);
+  const [initiativeBusy, setInitiativeBusy] = useState(false);
   // Só um contador: o ↻ do histórico reexecuta o efeito abaixo sem duplicar lógica.
   const [historyTick, setHistoryTick] = useState(0);
 
@@ -110,36 +164,33 @@ export default function EncountersPageClient() {
   // mesa: este hook traz o estado (Realtime + polling) para a volta de vida
   // e para a marcação de fim de partida. Sem vínculo, `null` = nada é consultado.
   const linkedSessionId = encounter?.battle?.status === "active" ? encounter.battle.sessionId : null;
-  const { state: mesaState } = useMesaState(linkedSessionId);
+  const { state: mesaState, refresh: refreshMesaState } = useMesaState(linkedSessionId);
 
-  // Simple seeded random for stable preview picks
-  const seededRandom = (seed: number) => {
-    let s = seed;
-    return () => {
-      s = (s * 16807 + 0) % 2147483647;
-      return (s - 1) / 2147483646;
-    };
+  /**
+   * O roster: UM objeto para o preview e para a criação (`src/lib/encounterRoster`).
+   * Facção, intervalo de nível, contagem e semente são os mesmos nos dois lados,
+   * então o que a tela lista é exatamente o que "Iniciar encontro" materializa.
+   */
+  const rosterRequest: EncounterRosterRequest = {
+    faction,
+    minLevel,
+    maxLevel,
+    count: enemyCount,
+    seed: previewSeed,
   };
 
-  const getPreviewEnemies = (count: number) => {
-    if (!faction) return [];
-    const threatLevels = ["low", "medium", "high", "extreme"];
-    const minThreat = threatLevels[minLevel - 1] || "low";
-    const maxThreat = threatLevels[maxLevel - 1] || "extreme";
-    const minIndex = threatLevels.indexOf(minThreat);
-    const maxIndex = threatLevels.indexOf(maxThreat);
-    const eligible = gmEnemyCatalog.filter(
-      (e) => e.identity.faction === faction && e.identity.archetype && threatLevels.indexOf(e.identity.threatLevel) >= minIndex && threatLevels.indexOf(e.identity.threatLevel) <= maxIndex
-    );
-    if (eligible.length === 0) return [];
-    const rng = seededRandom(previewSeed + count);
-    const shuffled = [...eligible].sort(() => rng() - 0.5);
-    // Wrap around if there are fewer eligible enemies than requested
-    const result = [];
-    for (let i = 0; i < count; i++) {
-      result.push(shuffled[i % shuffled.length]);
-    }
-    return result;
+  const previewEnemies = buildEncounterRoster(rosterRequest);
+  // Espaços vazios numerados do estado inicial: deixam visível quantos
+  // inimigos entram sem inventar nome nenhum.
+  const ghostSlots = Math.min(Math.max(enemyCount, 1), 6);
+  const ghostOverflow = enemyCount - ghostSlots;
+
+  /** Uma frase dizendo onde o "Iniciar encontro" está travado — ou pronto. */
+  const describeStart = (): string => {
+    if (!faction) return "Sem facção · roster vazio";
+    if (previewEnemies.length === 0) return `Nível ${minLevel}–${maxLevel} sem inimigos`;
+    if (!encounterName.trim()) return "Falta o nome do encontro";
+    return `${previewEnemies.length} inimigo${previewEnemies.length !== 1 ? "s" : ""} · nível ${minLevel}–${maxLevel}`;
   };
 
   // Load saved encounters
@@ -243,24 +294,18 @@ export default function EncountersPageClient() {
         magazine: getParticipantAmmoState(p)?.magazine,
         inventory: getParticipantInventory(p),
       },
+      snapshot: p,
     }));
 
   const handleStartEncounter = () => {
     if (!faction || !encounterName.trim()) return;
-    const threatLevels = ["low", "medium", "high", "extreme"];
-    const minThreat = threatLevels[minLevel - 1] || "low";
-    const maxThreat = threatLevels[maxLevel - 1] || "extreme";
-    const minIndex = threatLevels.indexOf(minThreat);
-    const maxIndex = threatLevels.indexOf(maxThreat);
-    const filteredCatalog = gmEnemyCatalog.filter(
-      (e) => e.identity.faction === faction && threatLevels.indexOf(e.identity.threatLevel) >= minIndex && threatLevels.indexOf(e.identity.threatLevel) <= maxIndex
-    );
-    const newEncounter = createEncounterFromFaction(encounterName.trim(), faction, enemyCount, filteredCatalog.length > 0 ? filteredCatalog : gmEnemyCatalog);
+    // Mesmo `rosterRequest` do preview: a criação NÃO escolhe os inimigos de novo.
+    const newEncounter = createEncounterFromRoster(encounterName.trim(), rosterRequest);
     if (newEncounter.participants.length === 0) return;
     setEncounter(newEncounter);
     setPhase("combat");
     setActiveTab("new");
-    setSelectedParticipant(null);
+    setSelectedParticipantId(null);
     setDamageValue("");
     setConditionName("");
   };
@@ -275,7 +320,7 @@ export default function EncountersPageClient() {
     setEncounter(loaded);
     setPhase("combat");
     setActiveTab("list");
-    setSelectedParticipant(null);
+    setSelectedParticipantId(null);
     setDamageValue("");
     setConditionName("");
   };
@@ -318,33 +363,66 @@ export default function EncountersPageClient() {
     const newHP = participant.hp.current + 1;
     const next = updateParticipantHP(encounter, participantIndex, Math.min(newHP, participant.hp.max));
     setEncounter(next);
-    setSelectedParticipant(participantIndex);
     // Espelho de vida: a cura feita aqui também sobe na mesa (sem mesa ativa
     // não manda nada; ver hpPublish).
     const healed = next.participants[participantIndex];
-    publishMesaEnemyHp(healed.id, healed.hp.current);
+    // Seleção reafirmada pelo ID do participante curado, não pela posição.
+    setSelectedParticipantId(healed.id ?? null);
+    // `hpBefore` = vida ANTES da cura: precondição do servidor (F1.7.1) contra
+    // sobrescrever, com atraso, um resultado mais novo na mesa.
+    publishMesaEnemyHp(healed.id, healed.hp.current, participant.hp.current);
   };
 
-  const handleRollAttack = (participantIndex: number) => {
-    if (!encounter) return;
-    const next = rollAttack(encounter, participantIndex);
-    setEncounter(next);
-    // Espelho no Discord (mesmos portões do jogador): consentimento + mesa.
-    notifyEnemyAttack(next.participants[participantIndex]);
-    const p = next.participants[participantIndex];
-    if (p.lastAttackRoll) {
-      // `key` identifica o inimigo na mesa: o servidor debita a Action DELE
-      // (mesma economia do botão ATAQUE) e escreve o Registro com o nome dele.
-      publishMesaGmAttack(
-        p.name.trim() || p.archetype.trim() || "Inimigo",
-        p.weaponName || "Ataque",
-        "1d10",
-        p.lastAttackRoll.total,
-        p.lastAttackRoll.diceRolls,
-        p.id,
-      );
-      // O tiro gastou uma bala: a mesa espelha o pente novo.
-      publishMesaEnemySupplies(p.id, p.hp.current, getParticipantSupplies(p));
+  const handleServerAttack = async (participantIndex: number) => {
+    if (!encounter || !mesaState || !selectedTargetId) return;
+    const p = encounter.participants[participantIndex];
+    if (!p.id || !p.weaponId) {
+      setAttackError("Este inimigo não possui uma identidade de arma válida no snapshot da Mesa.");
+      return;
+    }
+    const actor = mesaState.combatants.find((row) => row.kind === "enemy" && row.sourceKey === p.id);
+    if (!actor) {
+      setAttackError("O atacante não está presente no combate server-side.");
+      return;
+    }
+
+    setAttackBusyId(p.id);
+    setAttackError(null);
+    try {
+      const response = await attackMesa({
+        sessionId: mesaState.session.id,
+        actorId: actor.id,
+        targetId: selectedTargetId,
+        weaponId: p.weaponId,
+        attackType: serverAttackType(p),
+        attackMode,
+        ...(attackMode === "aimed" ? { aimedTarget } : {}),
+      });
+      setAttackFeedback((current) => ({
+        ...current,
+        [p.id!]: {
+          ...response,
+        },
+      }));
+      if (response.ammoAfter !== undefined) {
+        setEncounter((current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            participants: current.participants.map((participant) =>
+              participant.id === p.id ? { ...participant, ammo: response.ammoAfter } : participant,
+            ),
+          };
+        });
+      }
+    } catch (caught) {
+      if (caught instanceof MesaApiError) {
+        setAttackError(`${caught.code}: ${caught.message}`);
+      } else {
+        setAttackError("Não foi possível resolver o ataque na Mesa.");
+      }
+    } finally {
+      setAttackBusyId(null);
     }
   };
 
@@ -400,9 +478,10 @@ export default function EncountersPageClient() {
     const result = reloadParticipantWeapon(encounter, participantIndex);
     if ("error" in result) return;
     setEncounter(result.encounter);
-    // A reserva mudou de lugar (pente ← mochila): a mesa acompanha o estado.
+    // A reserva mudou de lugar (pente ← mochila): a mesa acompanha o estado
+    // (vida intacta → `hpBefore` igual ao atual, mesma guarda do tiro).
     const p = result.encounter.participants[participantIndex];
-    publishMesaEnemySupplies(p.id, p.hp.current, getParticipantSupplies(p));
+    publishMesaEnemySupplies(p.id, p.hp.current, getParticipantSupplies(p), p.hp.current);
   };
 
   /**
@@ -415,32 +494,57 @@ export default function EncountersPageClient() {
     if ("error" in result) return;
     setEncounter(result.encounter);
     const p = result.encounter.participants[participantIndex];
-    publishMesaEnemyHp(p.id, p.hp.current);
-    publishMesaEnemySupplies(p.id, p.hp.current, getParticipantSupplies(p));
-    setSelectedParticipant(participantIndex);
+    // `hpBefore` = vida da ORIGEM antes da cura (a clausura `encounter` é o
+    // estado pré-mudança) — precondição do servidor, F1.7.1.
+    const hpBefore = encounter.participants[participantIndex].hp.current;
+    publishMesaEnemyHp(p.id, p.hp.current, hpBefore);
+    publishMesaEnemySupplies(p.id, p.hp.current, getParticipantSupplies(p), hpBefore);
+    setSelectedParticipantId(p.id ?? null);
   };
 
   const handleApplyDamage = (participantIndex: number) => {
     if (!encounter || damageValue === "") return;
     const damage = parseInt(damageValue, 10);
     if (isNaN(damage) || damage <= 0) return;
+    const before = encounter.participants[participantIndex];
     const next = applyDamageToParticipant(encounter, participantIndex, damage, ignoreArmor, hitLocation);
     setEncounter(next);
     setDamageValue("");
-    setSelectedParticipant(participantIndex);
-    // Espelho de vida: o dano aplicado aqui baixa na linha do inimigo na mesa.
     const hit = next.participants[participantIndex];
-    publishMesaEnemyHp(hit.id, hit.hp.current);
+    // Reafirma a seleção pelo ID do participante atingido — nunca pelo índice.
+    setSelectedParticipantId(hit.id ?? null);
+
+    // F1.7.1 — primeiro caminho REAL do Combat Engine: o HP/morte do inimigo na
+    // mesa sai da resolução do SERVIDOR (POST /combat/damage) com as mesmas
+    // entradas canônicas que o `applyDamageToParticipant` acima usou (dano,
+    // local, veste, SP do corpo) e `hpBefore` = vida ANTES do golpe — a
+    // precondição que recusa retry/estado desatualizado (409). Sem combate
+    // ativo a rota responde `updated:false` (o espelho antigo também não
+    // faria nada). Em RECUSA o fallback é o espelho com a MESMA precondição:
+    // ele só grava se a linha ainda estiver no HP que a origem acreditava.
+    const key = hit.id;
+    if (key) {
+      void publishMesaEngineDamage({
+        key,
+        amount: damage,
+        hpBefore: before.hp.current,
+        hitLocation,
+        ignoreArmor,
+        armor: { head: before.armor.head, body: before.armor.body },
+        bodySP: getEnemyBodySP(before.implants),
+      }).catch(() => publishMesaEnemyHp(key, hit.hp.current, before.hp.current));
+    }
   };
 
   const handleAddCondition = (participantIndex: number) => {
     if (!encounter || conditionName.trim() === "") return;
-    setEncounter(addParticipantCondition(encounter, participantIndex, {
+    const next = addParticipantCondition(encounter, participantIndex, {
       id: crypto.randomUUID(),
       name: conditionName.trim(),
-    }));
+    });
+    setEncounter(next);
     setConditionName("");
-    setSelectedParticipant(participantIndex);
+    setSelectedParticipantId(next.participants[participantIndex].id ?? null);
   };
 
   const handleRemoveCondition = (participantIndex: number, conditionId: string) => {
@@ -448,16 +552,29 @@ export default function EncountersPageClient() {
     setEncounter(removeParticipantCondition(encounter, participantIndex, conditionId));
   };
 
-  const handleSelectParticipant = (index: number) => {
-    setSelectedParticipant(selectedParticipant === index ? null : index);
+  const handleSelectParticipant = (participantId: string | null) => {
+    setSelectedParticipantId(toggleParticipantSelection(selectedParticipantId, participantId));
     setDamageValue("");
     setIgnoreArmor(false);
     setHitLocation("body");
     setConditionName("");
   };
 
-  const handleRollInitiative = () => {
+  const handleRollInitiative = async () => {
     if (!encounter) return;
+    if (linkedSessionId) {
+      if (!mesaState || initiativeBusy) return;
+      setInitiativeBusy(true);
+      try {
+        await rollInitiative(mesaState.session.id);
+        await refreshMesaState();
+      } catch (caught) {
+        setAttackError(caught instanceof MesaApiError ? caught.message : "Não foi possível rolar a iniciativa da Mesa.");
+      } finally {
+        setInitiativeBusy(false);
+      }
+      return;
+    }
     const rolled = encounter.participants.map((p) => {
       const roll = rollDice("1d10").rolls[0];
       const ref = p.refStat;
@@ -483,239 +600,277 @@ export default function EncountersPageClient() {
         total: r.total,
       })),
     );
-    rolled.forEach((r) => {
-      const actor = r.participant.name.trim() || r.participant.archetype.trim() || "Inimigo";
-      publishMesaGmInitiative(actor, r.total, r.participant.id);
-    });
   };
+
+  /**
+   * Participante selecionado DERIVADO do id — nunca da posição. Depois que
+   * `handleRollInitiative` reescreve a lista em ordem de iniciativa, um índice
+   * guardado apontaria para outro inimigo; o id é o mesmo (F0.5).
+   */
+  const selectedParticipant = encounter
+    ? findParticipantById(encounter.participants, selectedParticipantId)
+    : null;
+  const mesaTargets = mesaState?.combatants.filter((combatant) => combatant.kind === "character" && !combatant.isDead) ?? [];
+
+  // Cabeçalho acompanha a fase: a tela muda de propósito (montar →
+  // acompanhar → retomar) e o selo de estado diz em qual delas se está.
+  const phaseLabel = phase === "combat" ? "Em combate" : phase === "saved" ? "Encontros salvos" : "Sem encontro ativo";
+  const pageSubtitle =
+    phase === "combat"
+      ? "Acompanhe HP, condições e iniciativa de cada participante."
+      : phase === "saved"
+        ? "Retome um encontro salvo de onde ele parou."
+        : "Monte o encontro, gere o roster e inicie o combate.";
 
   return (
     <div className="gm-page gm-encounters-page">
       <header className="gm-page-header">
         <div>
           <h1 className="gm-page-title">Combate / Encontros</h1>
-          <p className="gm-page-subtitle">Gerencie encontros de combate, acompanhe HP e condições</p>
+          <p className="gm-page-subtitle">{pageSubtitle}</p>
         </div>
         <div className="gm-page-header-actions">
+          <span className={`gm-phase-chip gm-phase-${phase}`}>
+            <span className="gm-phase-dot" aria-hidden="true" />
+            {phaseLabel}
+          </span>
           {phase === "combat" && (
             <button className="gm-button gm-button-secondary" onClick={handleSaveEncounter}>
-              💾 Salvar Encontro
+              <SaveIcon />
+              Salvar encontro
             </button>
           )}
           {savedEncounters.length > 0 && phase === "combat" && (
             <button className="gm-button gm-button-secondary" onClick={() => setPhase("saved")}>
-              📋 Encontros Salvos
+              <ListIcon />
+              Encontros salvos
             </button>
           )}
           {phase === "saved" && (
             <button className="gm-button gm-button-secondary" onClick={handleClearAll}>
-              🗑️ Limpar Todos
+              <TrashIcon />
+              Limpar todos
             </button>
           )}
         </div>
       </header>
 
       {phase === "setup" && (
-        <>
-          <div className="encounter-setup">
-            <div className="encounter-setup-panel">
-              <div className="encounter-hero">
-                <div className="encounter-hero-content">
-                  <div className="encounter-hero-icon">⚔️</div>
-                  <div className="encounter-hero-text">
-                    <h2 className="encounter-hero-title">Novo Encontro</h2>
-                    <p className="encounter-hero-desc">Configure o combate, selecione a facção inimiga e inicie a sessão de combate.</p>
-                  </div>
-                </div>
-              </div>
-              <div className="encounter-form-grid">
-                <div className="encounter-form-section">
-                  <div className="encounter-form-section-header">
-                    <span className="encounter-form-section-icon">📝</span>
-                    <span className="encounter-form-section-title">Identificação</span>
-                  </div>
-                  <div className="encounter-form-fields">
-                    <div className="gm-form-field">
-                      <label className="gm-form-label" htmlFor="encounter-name">
-                        Nome do Encontro <span className="encounter-required">*</span>
-                      </label>
-                      <input
-                        id="encounter-name"
-                        className="gm-form-input"
-                        type="text"
-                        placeholder="Ex: Ataque à Corp Zone"
-                        value={encounterName}
-                        onChange={(e) => setEncounterName(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="encounter-form-section">
-                  <div className="encounter-form-section-header">
-                    <span className="encounter-form-section-icon">🛡️</span>
-                    <span className="encounter-form-section-title">Forças Inimigas</span>
-                  </div>
-                  <div className="encounter-form-fields">
-                    <div className="gm-form-field">
-                      <label className="gm-form-label" htmlFor="encounter-faction">
-                        Facção <span className="encounter-required">*</span>
-                      </label>
-                      <select
-                        id="encounter-faction"
-                        className="gm-form-select"
-                        value={faction}
-                        onChange={(e) => handleFactionChange(e.target.value)}
-                      >
-                        <option value="">— Selecione uma facção —</option>
-                        {availableFactions.map((f) => (
-                          <option key={f} value={f}>{f}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="gm-form-field">
-                      <label className="gm-form-label" htmlFor="encounter-count">Quantidade de Inimigos</label>
-                      <input
-                        id="encounter-count"
-                        className="gm-form-input"
-                        type="number"
-                        min={1}
-                        max={12}
-                        value={enemyCount}
-                        onChange={(e) => setEnemyCount(parseInt(e.target.value, 10) || 1)}
-                      />
-                      <small className="gm-form-hint">
-                        Inimigos serão selecionados da facção escolhida (máximo 12)
-                      </small>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="encounter-preview">
-                  <div className="encounter-preview-header">
-                    <h3 className="section-heading">
-                      <span>👥</span> Preview dos Participantes
-                    </h3>
-                    <div className="encounter-preview-controls">
-                      <label className="encounter-minlevel-label">
-                        Min Level
-                        <select
-                          className="encounter-minlevel-select"
-                          value={minLevel}
-                          onChange={(e) => { setMinLevel(Number(e.target.value)); setPreviewSeed((s) => s + 1); }}
-                        >
-                          <option value={1}>1</option>
-                          <option value={2}>2</option>
-                          <option value={3}>3</option>
-                          <option value={4}>4</option>
-                        </select>
-                      </label>
-                      <label className="encounter-minlevel-label">
-                        Max Level
-                        <select
-                          className="encounter-minlevel-select"
-                          value={maxLevel}
-                          onChange={(e) => { setMaxLevel(Number(e.target.value)); setPreviewSeed((s) => s + 1); }}
-                        >
-                          <option value={1}>1</option>
-                          <option value={2}>2</option>
-                          <option value={3}>3</option>
-                          <option value={4}>4</option>
-                        </select>
-                      </label>
-                      <button
-                        className="gm-button gm-button-small encounter-repick-button"
-                        onClick={() => setPreviewSeed((s) => s + 1)}
-                        disabled={!faction}
-                      >
-                        🔄 Repick
-                      </button>
-                    </div>
-                  </div>
-                  {faction ? (
-                    <div className="encounter-participant-list">
-                      {getPreviewEnemies(enemyCount).map((source, i) => (
-                        <div key={`${previewSeed}-${i}`} className="encounter-preview-item">
-                          <span className="encounter-preview-name">
-                            {source.identity.name || `${source.identity.archetype} #${i + 1}`}
-                          </span>
-                          <span className="encounter-preview-meta">
-                            {source.identity.archetype} · Level {source.identity.threatLevel === "extreme" ? 4 : source.identity.threatLevel === "high" ? 3 : source.identity.threatLevel === "medium" ? 2 : 1} · HP {source.combat.hp.max}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="encounter-empty">Selecione uma facção para ver o preview</p>
-                  )}
-                </div>
+        <div className="encounter-setup">
+          <section className="encounter-console" aria-label="Configuração do encontro">
+            <div className="encounter-console-body">
+              <div className="gm-form-field">
+                <label className="gm-form-label" htmlFor="encounter-name">
+                  Nome do encontro <span className="encounter-required">*</span>
+                </label>
+                <input
+                  id="encounter-name"
+                  className="gm-form-input"
+                  type="text"
+                  placeholder="Ex: Ataque à Corp Zone"
+                  value={encounterName}
+                  onChange={(e) => setEncounterName(e.target.value)}
+                />
               </div>
 
-              <div className="encounter-actions">
+              <div className="encounter-field-row">
+                <div className="gm-form-field">
+                  <label className="gm-form-label" htmlFor="encounter-faction">
+                    Facção <span className="encounter-required">*</span>
+                  </label>
+                  <select
+                    id="encounter-faction"
+                    className="gm-form-select"
+                    value={faction}
+                    onChange={(e) => handleFactionChange(e.target.value)}
+                  >
+                    <option value="">— Selecione —</option>
+                    {availableFactions.map((f) => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="gm-form-field">
+                  <label className="gm-form-label" htmlFor="encounter-count">Inimigos</label>
+                  <input
+                    id="encounter-count"
+                    className="gm-form-input"
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={enemyCount}
+                    onChange={(e) => setEnemyCount(parseInt(e.target.value, 10) || 1)}
+                  />
+                  <small className="gm-form-hint">até 12</small>
+                </div>
+              </div>
+            </div>
+
+            <footer className="encounter-console-foot">
+              <p className={`encounter-console-summary${faction && encounterName.trim() ? " is-ready" : ""}`}>
+                {describeStart()}
+              </p>
+              <button
+                className="gm-button gm-button-primary encounter-start-button"
+                onClick={handleStartEncounter}
+                disabled={!faction || !encounterName.trim()}
+              >
+                <SwordsIcon className="encounter-start-icon" />
+                <span>Iniciar encontro</span>
+              </button>
+            </footer>
+          </section>
+
+          <aside className="encounter-roster" aria-label="Roster do encontro">
+            <div className="encounter-roster-head">
+              <h2 className="encounter-roster-title">
+                <UsersIcon />
+                Roster
+              </h2>
+              <div className="encounter-roster-controls">
+                <span className="encounter-level-group">
+                  Nível
+                  <select
+                    className="encounter-minlevel-select"
+                    aria-label="Nível mínimo"
+                    value={minLevel}
+                    onChange={(e) => { setMinLevel(Number(e.target.value)); setPreviewSeed((s) => s + 1); }}
+                  >
+                    <option value={1}>1</option>
+                    <option value={2}>2</option>
+                    <option value={3}>3</option>
+                    <option value={4}>4</option>
+                  </select>
+                  <span className="encounter-level-sep" aria-hidden="true">–</span>
+                  <select
+                    className="encounter-minlevel-select"
+                    aria-label="Nível máximo"
+                    value={maxLevel}
+                    onChange={(e) => { setMaxLevel(Number(e.target.value)); setPreviewSeed((s) => s + 1); }}
+                  >
+                    <option value={1}>1</option>
+                    <option value={2}>2</option>
+                    <option value={3}>3</option>
+                    <option value={4}>4</option>
+                  </select>
+                </span>
                 <button
-                  className="gm-button gm-button-primary encounter-start-button"
-                  onClick={handleStartEncounter}
-                  disabled={!faction || !encounterName.trim()}
+                  className="gm-icon-button"
+                  onClick={() => setPreviewSeed((s) => s + 1)}
+                  disabled={!faction}
+                  title="Gerar outro roster"
+                  aria-label="Gerar outro roster"
                 >
-                  <span className="encounter-start-icon">⚔️</span>
-                  <span className="encounter-start-text">Iniciar Encontro</span>
+                  <RotateCwIcon />
                 </button>
               </div>
+            </div>
 
-              {savedEncounters.length > 0 && (
-                <div className="encounter-setup-saved">
-                  <div className="encounter-saved-header">
-                    <div className="encounter-saved-header-left">
-                      <span className="encounter-saved-header-icon">📋</span>
-                      <div>
-                        <h2 className="encounter-saved-header-title">Encontros Salvos</h2>
-                        <span className="encounter-saved-header-count">{savedEncounters.length} encontro{savedEncounters.length !== 1 ? "s" : ""}</span>
-                      </div>
-                    </div>
-                    <button className="gm-button gm-button-small gm-button-danger" onClick={handleClearAll}>
-                      🗑️ Limpar Todos
-                    </button>
-                  </div>
-                  <div className="encounter-saved-list">
-                    {savedEncounters.map((e) => (
-                      <div key={e.id} className="encounter-saved-card">
-                        <div className="encounter-saved-card-main">
-                          <span className="encounter-saved-name">{e.name}</span>
-                          <div className="encounter-saved-details">
-                            <span className="encounter-saved-detail-badge">{e.faction}</span>
-                            <span className="encounter-saved-detail-text">{e.participants.length} inimigos</span>
-                            <span className="encounter-saved-detail-sep">·</span>
-                            <span className="encounter-saved-detail-text">{new Date(e.createdAt).toLocaleDateString("pt-BR")}</span>
-                            {battleBadge(e.battle)}
-                          </div>
-                        </div>
-                        <div className="encounter-saved-actions">
-                          <button className="gm-button gm-button-small" onClick={() => handleLoadEncounter(e.id)}>
-                            ▶️ Carregar
-                          </button>
-                          {showConfirmDelete === e.id ? (
-                            <>
-                              <button className="gm-button gm-button-small gm-button-danger" onClick={() => handleDeleteEncounter(e.id)}>
-                                Confirmar
-                              </button>
-                              <button className="gm-button gm-button-small" onClick={() => setShowConfirmDelete(null)}>
-                                Cancelar
-                              </button>
-                            </>
-                          ) : (
-                            <button className="gm-button gm-button-small" onClick={() => setShowConfirmDelete(e.id)}>
-                              🗑️
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+            {!faction ? (
+              <div className="encounter-roster-empty">
+                <p>Escolha uma facção para gerar o roster deste encontro.</p>
+                <ul className="encounter-roster-ghosts" aria-hidden="true">
+                  {Array.from({ length: ghostSlots }, (_, i) => (
+                    <li key={i} className="encounter-roster-ghost">
+                      <span>
+                        {i === ghostSlots - 1 && ghostOverflow > 0
+                          ? `+${ghostOverflow}`
+                          : String(i + 1).padStart(2, "0")}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : previewEnemies.length === 0 ? (
+              <p className="encounter-roster-empty-msg">
+                Nenhum inimigo de {faction} entre os níveis {minLevel} e {maxLevel}. Ajuste o intervalo.
+              </p>
+            ) : (
+              <ul className="encounter-roster-list">
+                {previewEnemies.map((source, i) => (
+                  <li key={`${previewSeed}-${i}`} className="encounter-roster-item">
+                    <span className="encounter-roster-name">
+                      {source.identity.name || `${source.identity.archetype} #${i + 1}`}
+                    </span>
+                    <span className="encounter-roster-meta">
+                      <span>{source.identity.archetype}</span>
+                      <span className="encounter-roster-stat">Nv {threatToLevel(source.identity.threatLevel)}</span>
+                      <span className="encounter-roster-stat">{source.combat.hp.max} HP</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </aside>
+
+          {savedEncounters.length > 0 && (
+            <div className="encounter-setup-saved">
+              <div className="encounter-saved-header">
+                <div className="encounter-saved-header-left">
+                  <ListIcon className="encounter-saved-header-icon" />
+                  <div>
+                    <h2 className="encounter-saved-header-title">Encontros salvos</h2>
+                    <span className="encounter-saved-header-count">
+                      {savedEncounters.length} encontro{savedEncounters.length !== 1 ? "s" : ""}
+                    </span>
                   </div>
                 </div>
-              )}
+                <button className="gm-button gm-button-small gm-button-danger" onClick={handleClearAll}>
+                  <TrashIcon />
+                  Limpar todos
+                </button>
+              </div>
+              <div className="encounter-saved-list">
+                {savedEncounters.map((e) => (
+                  <div key={e.id} className="encounter-saved-card">
+                    <div className="encounter-saved-card-main">
+                      <span className="encounter-saved-name">{e.name}</span>
+                      <div className="encounter-saved-details">
+                        <span className="encounter-saved-detail-badge">{e.faction}</span>
+                        <span className="encounter-saved-detail-text">
+                          {e.participants.length} inimigo{e.participants.length !== 1 ? "s" : ""}
+                        </span>
+                        <span className="encounter-saved-detail-sep">·</span>
+                        <span className="encounter-saved-detail-text">
+                          {new Date(e.createdAt).toLocaleDateString("pt-BR")}
+                        </span>
+                        {battleBadge(e.battle)}
+                      </div>
+                    </div>
+                    <div className="encounter-saved-actions">
+                      <button className="gm-button gm-button-small" onClick={() => handleLoadEncounter(e.id)}>
+                        <PlayIcon />
+                        Carregar
+                      </button>
+                      {showConfirmDelete === e.id ? (
+                        <>
+                          <button
+                            className="gm-button gm-button-small gm-button-danger"
+                            onClick={() => handleDeleteEncounter(e.id)}
+                          >
+                            Confirmar
+                          </button>
+                          <button className="gm-button gm-button-small" onClick={() => setShowConfirmDelete(null)}>
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="gm-icon-button is-danger"
+                          onClick={() => setShowConfirmDelete(e.id)}
+                          title="Excluir encontro"
+                          aria-label={`Excluir encontro ${e.name}`}
+                        >
+                          <TrashIcon />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        </>
+          )}
+        </div>
       )}
 
       {phase === "combat" && encounter && (
@@ -736,16 +891,69 @@ export default function EncountersPageClient() {
                 battle={encounter.battle ?? null}
                 onStarted={handleBattleStarted}
               />
-              <button className="gm-button gm-button-small encounter-action-initiative" onClick={handleRollInitiative}>
+              <button className="gm-button gm-button-small encounter-action-initiative" onClick={() => void handleRollInitiative()} disabled={initiativeBusy || Boolean(linkedSessionId && !mesaState)}>
                 <span className="encounter-action-icon" aria-hidden="true">🎲</span>
-                Iniciativa
+                {initiativeBusy ? "Rolando..." : "Iniciativa"}
               </button>
             </div>
           </div>
 
+          <div className="encounter-attack-panel" role="region" aria-label="Ataque server-authoritative">
+            <div className="encounter-attack-panel-title">Ataque da Mesa</div>
+            <label className="encounter-attack-field">
+              <span>Alvo</span>
+              <select
+                value={selectedTargetId ?? ""}
+                onChange={(event) => setSelectedTargetId(event.target.value || null)}
+                disabled={mesaTargets.length === 0}
+              >
+                <option value="">{mesaTargets.length === 0 ? "Nenhum alvo disponível" : "Escolha um alvo"}</option>
+                {mesaTargets.map((target) => (
+                  <option key={target.id} value={target.id}>
+                    {target.name} · HP {target.hpCurrent}/{target.hpMax}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="encounter-attack-field">
+              <span>Modo</span>
+              <div className="encounter-attack-mode-buttons">
+                <button type="button" className={`gm-button gm-button-small ${attackMode === "normal" ? "is-active" : ""}`} onClick={() => setAttackMode("normal")}>
+                  Normal
+                </button>
+                <button
+                  type="button"
+                  className={`gm-button gm-button-small ${attackMode === "aimed" ? "is-active" : ""}`}
+                  onClick={() => setAttackMode("aimed")}
+                >
+                  Aimed
+                </button>
+                {attackMode === "aimed" && (
+                   <select value={aimedTarget} onChange={(event) => setAimedTarget(event.target.value as "head" | "leg" | "held_item")}>
+                     <option value="head">Head</option>
+                     <option value="leg">Leg</option>
+                     <option value="held_item">Held Item</option>
+                  </select>
+                )}
+              </div>
+            </div>
+            {attackError && <p className="encounter-attack-error" role="alert">{attackError}</p>}
+          </div>
+
           <div className="encounter-participants">
             {encounter.participants.map((p, index) => {
-              const isSelected = selectedParticipant === index;
+              // Referência do array: o selecionado é EXATAMENTE este participante,
+              // independente de onde a reordenação de iniciativa deixou a posição.
+              const isSelected = selectedParticipant === p;
+              const mesaCombatant = linkedSessionId
+                ? mesaState?.combatants.find((combatant) =>
+                    p.isPlayer ? combatant.characterId === p.id : combatant.sourceKey === p.id,
+                  )
+                : null;
+              const isMesaActiveCombatant = Boolean(
+                mesaCombatant && mesaState?.combat?.activeCombatantId === mesaCombatant.id,
+              );
+              const displayedInitiative = linkedSessionId ? mesaCombatant?.initiative ?? null : p.initiative;
               const isDown = p.hp.current <= 0;
               const hpPercent = (p.hp.current / p.hp.max) * 100;
               const hpColor = hpPercent > 50 ? "#2e7d32" : hpPercent > 25 ? "#f57f17" : "#c62828";
@@ -776,7 +984,6 @@ export default function EncountersPageClient() {
               const backpack = getParticipantInventory(p).filter(
                 (entry) => reloadState?.item?.item !== entry.item,
               );
-              const isOutOfAmmo = ammoState !== null && ammoState.ammo <= 0;
               const isFullHP = p.hp.current >= p.hp.max;
               // Barra de munição (logo abaixo da de HP) — mesmos patamares,
               // mas em latão para não se confundir com a vida.
@@ -784,16 +991,16 @@ export default function EncountersPageClient() {
               const ammoColor = ammoPercent > 50 ? "#c9a227" : ammoPercent > 25 ? "#f57f17" : "#c62828";
               return (
                 <div
-                  key={index}
+                  key={p.id}
                   className={`encounter-participant-card ${isSelected ? "encounter-participant-selected" : ""} ${isDown ? "encounter-participant-down" : ""}`}
-                  onClick={() => handleSelectParticipant(index)}
+                  onClick={() => handleSelectParticipant(p.id ?? null)}
                 >
                   {/* ── Header ── */}
                   <div className="epc-header">
                     <div className="epc-header-left">
                       <span className="epc-name">{p.name || "Sem nome"}</span>
-                      {p.initiative != null && (
-                        <span className="epc-initiative">{p.initiative}</span>
+                      {displayedInitiative != null && (
+                        <span className="epc-initiative">{displayedInitiative}</span>
                       )}
                     </div>
                     <span className="epc-archetype">{p.archetype}</span>
@@ -866,20 +1073,31 @@ export default function EncountersPageClient() {
                     <div className="epc-roll-row">
                       <button
                         className="gm-button gm-button-small"
-                        onClick={(e) => { e.stopPropagation(); handleRollAttack(index); }}
-                        disabled={isOutOfAmmo}
-                        title={isOutOfAmmo ? "Sem munição no pente — recarregue antes de atirar." : undefined}
+                        onClick={(e) => { e.stopPropagation(); void handleServerAttack(index); }}
+                        disabled={attackBusyId === p.id || !selectedTargetId || !p.weaponId || isDown || (Boolean(linkedSessionId) && !isMesaActiveCombatant)}
+                        title={!p.weaponId ? "Arma sem identidade server-side." : !selectedTargetId ? "Escolha um alvo na Mesa." : linkedSessionId && !isMesaActiveCombatant ? "Este combatente está fora do turno." : undefined}
                       >
-                        {isOutOfAmmo ? "🔫 Sem munição" : "🎲 Atacar"}
+                        {attackBusyId === p.id ? "⏳ Resolvendo…" : "⚔ Atacar na Mesa"}
                       </button>
-                      {p.lastAttackRoll != null && (
-                        <span
-                          className={`epc-roll-result ${p.lastAttackRoll.fumble ? "epc-roll-fumble" : p.lastAttackRoll.critical ? "epc-roll-crit" : ""}`}
-                          title={implantSourcesText(p.lastAttackRoll.modifiers) || undefined}
-                        >
-                          {p.lastAttackRoll.fumble && "💀 "}
-                          {p.lastAttackRoll.critical && "⚡ "}
-                          d10({p.lastAttackRoll.diceRolls.join(", ")}) + {p.attackBase}{implantBonusText(p.lastAttackRoll.modifiers)} = <strong>{p.lastAttackRoll.total}</strong>
+                      {attackFeedback[p.id ?? ""]?.attackResult && (
+                        <span className="epc-roll-result">
+                          {(() => {
+                            const result = attackFeedback[p.id ?? ""].attackResult;
+                            return <>{result.hit ? "✅ HIT" : "❌ MISS"} · d10({result.roll.rolls.join(", ")}) · total <strong>{result.total}</strong> · defesa {result.defenseValue}{result.critical ? " · crítico" : ""}{result.fumble ? " · fumble" : ""}</>;
+                          })()}
+                        </span>
+                      )}
+                      {attackFeedback[p.id ?? ""]?.damageResult && (
+                        <span className="epc-roll-result epc-damage-result">
+                          {(() => {
+                            const damage = attackFeedback[p.id ?? ""].damageResult!;
+                            return <>Dano {attackFeedback[p.id ?? ""].weaponDamage?.total ?? damage.rawDamage} · {damage.hitLocation} · armor {damage.armorValue} · HP {damage.hpBefore} → <strong>{damage.hpAfter}</strong></>;
+                          })()}
+                        </span>
+                      )}
+                      {attackFeedback[p.id ?? ""]?.damageError && (
+                        <span className="epc-roll-result epc-roll-fumble">
+                          Dano recusado: {attackFeedback[p.id ?? ""].damageError?.message}
                         </span>
                       )}
                     </div>
@@ -901,22 +1119,24 @@ export default function EncountersPageClient() {
                         </span>
                       </div>
                     )}
-                    <div className="epc-roll-row">
-                      <button
-                        className="gm-button gm-button-small"
-                        onClick={(e) => { e.stopPropagation(); handleRollDamage(index); }}
-                      >
-                        🔥 Dano ({getParticipantDamageExpression(p)})
-                      </button>
-                      {p.lastDamageRoll != null && (
-                        <span className="epc-roll-result epc-damage-result">
-                          {p.lastDamageRoll.expression && p.lastDamageRoll.expression !== p.damageExpression
-                            ? `${p.lastDamageRoll.expression}: `
-                            : ""}
-                          {p.lastDamageRoll.rolls.join(" + ")} = <strong>{p.lastDamageRoll.total}</strong> dmg
-                        </span>
-                      )}
-                    </div>
+                    {!attackFeedback[p.id ?? ""]?.damageResult && (
+                      <div className="epc-roll-row">
+                        <button
+                          className="gm-button gm-button-small"
+                          onClick={(e) => { e.stopPropagation(); handleRollDamage(index); }}
+                        >
+                          🔥 Dano ({getParticipantDamageExpression(p)})
+                        </button>
+                        {p.lastDamageRoll != null && (
+                          <span className="epc-roll-result epc-damage-result">
+                            {p.lastDamageRoll.expression && p.lastDamageRoll.expression !== p.damageExpression
+                              ? `${p.lastDamageRoll.expression}: `
+                              : ""}
+                            {p.lastDamageRoll.rolls.join(" + ")} = <strong>{p.lastDamageRoll.total}</strong> dmg
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <div className="epc-roll-row">
                       <button
                         className="gm-button gm-button-small"
@@ -1127,8 +1347,9 @@ export default function EncountersPageClient() {
 
       {phase === "saved" && (
         <div className="encounter-saved">
-          <h2 className="section-heading">
-            <span>📋</span> Encontros Salvos
+          <h2 className="encounter-saved-page-title">
+            <ListIcon />
+            Encontros salvos
           </h2>
           {savedEncounters.length === 0 ? (
             <div className="encounter-empty">
@@ -1144,13 +1365,15 @@ export default function EncountersPageClient() {
                   <div className="encounter-saved-info">
                     <span className="encounter-saved-name">{e.name}</span>
                     <span className="encounter-saved-meta">
-                      {e.faction} · {e.participants.length} inimigos · {new Date(e.createdAt).toLocaleDateString("pt-BR")}
+                      {e.faction} · {e.participants.length} inimigo{e.participants.length !== 1 ? "s" : ""} ·{" "}
+                      {new Date(e.createdAt).toLocaleDateString("pt-BR")}
                       {battleBadge(e.battle)}
                     </span>
                   </div>
                   <div className="encounter-saved-actions">
                     <button className="gm-button gm-button-small" onClick={() => handleLoadEncounter(e.id)}>
-                      ▶️ Carregar
+                      <PlayIcon />
+                      Carregar
                     </button>
                     {showConfirmDelete === e.id ? (
                       <>
@@ -1162,8 +1385,13 @@ export default function EncountersPageClient() {
                         </button>
                       </>
                     ) : (
-                      <button className="gm-button gm-button-small" onClick={() => setShowConfirmDelete(e.id)}>
-                        🗑️
+                      <button
+                        className="gm-icon-button is-danger"
+                        onClick={() => setShowConfirmDelete(e.id)}
+                        title="Excluir encontro"
+                        aria-label={`Excluir encontro ${e.name}`}
+                      >
+                        <TrashIcon />
                       </button>
                     )}
                   </div>
@@ -1183,7 +1411,7 @@ export default function EncountersPageClient() {
         <section className="encounter-history">
           <div className="encounter-history-header">
             <div className="encounter-history-header-left">
-              <span className="encounter-history-icon">📜</span>
+              <ClockIcon className="encounter-history-icon" />
               <div>
                 <h2 className="encounter-history-title">Histórico de partidas</h2>
                 <span className="encounter-history-count">
@@ -1192,7 +1420,8 @@ export default function EncountersPageClient() {
               </div>
             </div>
             <button className="gm-button gm-button-small" onClick={() => setHistoryTick((tick) => tick + 1)}>
-              ↻ Atualizar
+              <RotateCwIcon />
+              Atualizar
             </button>
           </div>
 
@@ -1204,7 +1433,8 @@ export default function EncountersPageClient() {
                 <div className="encounter-history-card-header">
                   <span className="encounter-history-name">{battle.encounterName}</span>
                   <span className={`encounter-history-status ${battle.status}`}>
-                    {battle.status === "completed" ? "✅ Concluída" : "⚔ Em andamento"}
+                    <span className="encounter-status-dot" aria-hidden="true" />
+                    {battle.status === "completed" ? "Concluída" : "Em andamento"}
                   </span>
                 </div>
                 <p className="encounter-history-meta">
@@ -1227,7 +1457,7 @@ export default function EncountersPageClient() {
                             ? ` (${row.hpStart} no início)`
                             : null}
                         </span>
-                        {row.isDead && <span className="encounter-history-dead">☠</span>}
+                        {row.isDead && <span className="encounter-history-dead">Morto</span>}
                       </li>
                     ))}
                   </ul>

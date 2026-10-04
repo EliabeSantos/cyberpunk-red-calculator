@@ -1,4 +1,5 @@
 import { catalogItems, getCatalogItem, type ActivationStage, type CatalogItem, type CyberwareAction, type CyberwareModifier } from "@/data/items";
+import { effectiveArmorSP } from "@/lib/combat/damage";
 import type { AttackModifier } from "@/types/attack";
 import type { Character, CyberwareItem } from "@/types/character";
 
@@ -149,10 +150,11 @@ export function ignoresWoundPenalty(character: Pick<Character, "cyberware">): bo
   });
 }
 
-/** SP efetivo de um local de impacto: armadura equipada e cyberware não acumulam, vale o maior. */export function getEffectiveArmorSP(character: Pick<Character, "combat" | "cyberware">, slot: "head" | "body"): number {
+/** SP efetivo de um local de impacto: armadura equipada e cyberware não acumulam, vale o maior.
+ * Mesma regra canônica (`effectiveArmorSP`) que a aplicação de dano usa. */export function getEffectiveArmorSP(character: Pick<Character, "combat" | "cyberware">, slot: "head" | "body"): number {
   const wornArmor = character.combat.armor[slot] ?? 0;
   const cyberwareSP = slot === "body" ? getCyberwareBodySP(character) : 0;
-  return Math.max(wornArmor, cyberwareSP);
+  return effectiveArmorSP(wornArmor, cyberwareSP);
 }
 
 /** Erro de instalação/equipamento por requisito não atendido. */

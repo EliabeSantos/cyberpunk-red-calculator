@@ -16,6 +16,8 @@ export const DENIAL_MESSAGES: Record<string, string> = {
   not_your_turn: "Agora não é o seu turno.",
   not_allowed: "Você só pode agir com o seu próprio personagem.",
   insufficient_actions: "Você não tem ações restantes neste turno.",
+  reload_unavailable: "Não é possível recarregar esta arma agora.",
+  ammo_unavailable: "A munição server-side desta arma não está disponível.",
   invalid_action: "Ação inválida.",
   movement_exhausted: "Você já gastou todo o movimento deste turno.",
   combatant_defeated: "Este combatente está fora do combate.",
@@ -25,6 +27,7 @@ export const ACTION_LABELS: Record<CombatActionType, string> = {
   attack: "Ataque",
   move: "Movimento",
   item: "Item",
+  reload: "Reload",
   other: "Ação",
 };
 

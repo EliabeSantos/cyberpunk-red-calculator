@@ -33,11 +33,14 @@ import type { HumanityLossResult } from "@/lib/humanity";
 import type { QuickhackRollResult, QuickhackCategory } from "@/lib/quickhacks";
 import StorePanel from "@/components/sheets/StorePanel";
 import DiceDrawer from "@/components/dice/DiceDrawer";
-import AttackActions from "@/components/combat/AttackActions";
+import AttackActions, { type PlayerAttackSetup } from "@/components/combat/AttackActions";
 import MesaEntry from "@/components/mesa/MesaEntry";
 import type { DiscordConsent } from "@/lib/discord/consent";
 import type { AttackRollResult, DamageRollResult, EvasionRollResult, AttackMode } from "@/types/attack";
 import type { AttributeName, Character, Skill } from "@/types/character";
+import type { AttackResult } from "@/lib/combat/contract";
+import type { DamageResult } from "@/lib/combat/contract";
+import type { DiceResult } from "@/lib/dice";
 import { MARTIAL_ARTS_FORMS, isMartialArtFormSkill, type SkillCategory } from "@/data/skills";
 import { hitLocationLabels, hitLocations, type HitLocation } from "@/types/combat";
 import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjuries";
@@ -56,6 +59,10 @@ type CharacterSheetProps = {
   /** Consentimento do usuário para enviar rolagens ao Discord ("null" = ainda não respondeu). */
   discordConsent: DiscordConsent | null;
   onDiscordConsentChange: (consent: DiscordConsent) => void;
+  /** Contexto seguro da mesa; ausente mantém o ataque local legado. */
+  playerAttack?: PlayerAttackSetup;
+  /** Combate integrado ativo sem contexto server-side completo. */
+  playerAttackUnavailable?: boolean;
 };
 const statOrder: AttributeName[] = [
   "INT",
@@ -92,11 +99,16 @@ export default function CharacterSheet({
   onNewCharacter,
   discordConsent,
   onDiscordConsentChange,
+  playerAttack,
+  playerAttackUnavailable,
 }: CharacterSheetProps) {
   const [ipToGrant, setIpToGrant] = useState(0);
   const [lastHumanityLoss, setLastHumanityLoss] =
     useState<HumanityLossResult | null>(null);
   const [lastAttack, setLastAttack] = useState<AttackRollResult | null>(null);
+  const [lastMesaAttack, setLastMesaAttack] = useState<AttackResult | null>(null);
+  const [lastMesaWeaponDamage, setLastMesaWeaponDamage] = useState<DiceResult | null>(null);
+  const [lastMesaDamage, setLastMesaDamage] = useState<DamageResult | null>(null);
   const [lastDamage, setLastDamage] = useState<DamageRollResult | null>(null);
   const [lastEvasion, setLastEvasion] = useState<EvasionRollResult | null>(null);
   const [lastSkillRoll, setLastSkillRoll] = useState<{ skillId: string; result: SkillCheckResult } | null>(null);
@@ -1017,8 +1029,37 @@ export default function CharacterSheet({
             <AttackActions
               character={character}
               onUpdate={onUpdate}
+              mesaAttack={
+                playerAttack
+                  ? {
+                      ...playerAttack,
+                      onResult: (result) => {
+                        setCombatError("");
+                        setLastMesaAttack(result);
+                        setLastAttack(null);
+                        setLastDamage(null);
+                        setLastMesaWeaponDamage(null);
+                        setLastMesaDamage(null);
+                      },
+                      onWeaponDamage: setLastMesaWeaponDamage,
+                      onDamageResult: setLastMesaDamage,
+                      onDamageError: setCombatError,
+                      onAmmoAfter: (weaponId, ammoAfter) => {
+                        onUpdate({
+                          ...character,
+                          weapons: character.weapons.map((weapon) =>
+                            weapon.id === weaponId ? { ...weapon, ammo: ammoAfter } : weapon,
+                          ),
+                        });
+                      },
+                      onError: setCombatError,
+                    }
+                  : undefined
+              }
+              mesaAttackUnavailable={playerAttackUnavailable}
               onResult={(result) => {
                 setLastAttack(result);
+                setLastMesaAttack(null);
                 setLastDamage(null);
                 // Alimenta os requisitos dos Special Moves com o ataque que acabou de ser rolado.
                 setTurnState((previous) => {
@@ -1031,7 +1072,51 @@ export default function CharacterSheet({
               weaponAttackModes={weaponAttackModes}
               onAttackModeChange={(weaponId, mode) => setWeaponAttackModes((prev) => ({ ...prev, [weaponId]: mode }))}
             />
-            {(lastAttack ?? character.lastAttack) &&
+            {lastMesaAttack && (
+              <div className="attack-result-card" role="status">
+                <div className="attack-result-header">
+                  <div className="attack-weapon-info">
+                    <span className="attack-weapon-name">{lastMesaAttack.label}</span>
+                    <span className={`attack-type-badge type-${lastMesaAttack.attackType}`}>{lastMesaAttack.attackType}</span>
+                  </div>
+                  <div className={`attack-total-display ${lastMesaAttack.critical ? "critical" : ""} ${lastMesaAttack.fumble ? "fumble" : ""}`}>
+                    {lastMesaAttack.total}
+                  </div>
+                </div>
+                <div className="attack-badges">
+                  <span className={lastMesaAttack.hit ? "crit-badge" : "fumble-badge"}>
+                    {lastMesaAttack.hit ? "HIT" : "MISS"}
+                  </span>
+                  {lastMesaAttack.critical && <span className="crit-badge">⚡ CRÍTICO</span>}
+                  {lastMesaAttack.fumble && <span className="fumble-badge">💥 FALHA CRÍTICA</span>}
+                </div>
+                <div className="attack-formula">
+                  {lastMesaAttack.baseStat.id} {lastMesaAttack.baseStat.value} + {lastMesaAttack.skill.id} {lastMesaAttack.skill.value} + 1d10
+                  {lastMesaAttack.defenseType === "evasion" && ` · Evasão ${lastMesaAttack.defenseValue}`}
+                </div>
+                <small>Resultado e dano calculados pelo servidor.</small>
+                {lastMesaWeaponDamage && (
+                  <div className="damage-result-card">
+                    <span className="damage-label">Dano da arma</span>
+                    <span className="damage-total">{lastMesaWeaponDamage.total}</span>
+                    <span className="damage-dice-row">{lastMesaWeaponDamage.rolls.map((roll, index) => <span key={index}>[{roll}]</span>)}</span>
+                  </div>
+                )}
+                {lastMesaDamage && (
+                  <div className="damage-result-card">
+                    <div className="damage-result-header">
+                      <span className="damage-label">Dano aplicado · {lastMesaDamage.hitLocation}</span>
+                      <span className="damage-total">{lastMesaDamage.damageAfterArmor}</span>
+                    </div>
+                    <small>
+                      Bruto {lastMesaDamage.rawDamage} · Armadura {lastMesaDamage.armorValue} · absorvido {lastMesaDamage.damageAbsorbed} · HP {lastMesaDamage.hpBefore} → {lastMesaDamage.hpAfter}
+                    </small>
+                    {lastMesaDamage.criticalInjury && <p className="critical-injury-warning">⚠ Critical Injury: {lastMesaDamage.criticalInjury.injury.name}</p>}
+                  </div>
+                )}
+              </div>
+            )}
+            {!playerAttack && (lastAttack ?? character.lastAttack) &&
               (() => {
                 const attack = lastAttack ?? character.lastAttack!;
                 return (

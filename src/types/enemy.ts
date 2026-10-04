@@ -1,3 +1,4 @@
+import { normalizeSkillId } from "@/data/skills";
 import type { AttributeName } from "@/types/character";
 import type { HitLocation } from "@/types/combat";
 import type { CriticalInjury } from "@/data/criticalInjuries";
@@ -147,8 +148,64 @@ export function createEmptyEnemy(id = crypto.randomUUID()): Enemy {
   };
 }
 
+/**
+ * Lookup da perícia do inimigo — o caminho único para ler `enemy.skills`.
+ *
+ * Aceita o id canônico (`handgun`), o rótulo do bestiário ("Handgun") e a
+ * chave legada em caixa mista, porque o catálogo migrou para o id da ficha sem
+ * deixar de entender fichas gravadas antes da normalização.
+ */
+export function getEnemySkill(skills: EnemySkills, skillId: string): EnemySkill | undefined {
+  const direct = skills[skillId];
+  if (direct) return direct;
+
+  const canonical = normalizeSkillId(skillId);
+  const byCanonicalKey = skills[canonical];
+  if (byCanonicalKey) return byCanonicalKey;
+
+  return Object.entries(skills).find(([key]) => normalizeSkillId(key) === canonical)?.[1];
+}
+
+/**
+ * Chave de uma perícia recém-criada no formulário do GM: o id canônico do
+ * rótulo escolhido (`handgun`) ou, para a personalizada sem nome, uma chave
+ * estável. É a MESMA regra que `addSkill` aplica — `name` continua sendo o
+ * rótulo que a UI mostra.
+ */
+export function newEnemySkillId(predefinedName?: string): string {
+  return predefinedName ? normalizeSkillId(predefinedName) : `skill_${Date.now()}`;
+}
+
+/**
+ * Leva `skills` (chaves) e `weapons[].skill` para o id canônico da ficha.
+ *
+ * Só a CHAVE muda: `skill.name` continua sendo o rótulo visível ("Handgun").
+ * Duas entradas que colidem no mesmo id não se juntam — fica a primeira.
+ */
+export function withCanonicalSkillIds(enemy: Enemy): Enemy {
+  const skills: EnemySkills = {};
+  let skillsChanged = false;
+  for (const [key, skill] of Object.entries(enemy.skills ?? {})) {
+    const id = normalizeSkillId(key);
+    if (id !== key) skillsChanged = true;
+    if (Object.hasOwn(skills, id)) continue;
+    skills[id] = skill;
+  }
+
+  let weaponsChanged = false;
+  const weapons = (enemy.weapons ?? []).map((weapon) => {
+    const skill = normalizeSkillId(weapon.skill ?? "");
+    if (skill === weapon.skill) return weapon;
+    weaponsChanged = true;
+    return { ...weapon, skill };
+  });
+
+  if (!skillsChanged && !weaponsChanged) return enemy;
+  return { ...enemy, skills, weapons };
+}
+
 export function calculateEnemySkillBase(enemy: Enemy, skillId: string): number {
-  const skill = enemy.skills[skillId];
+  const skill = getEnemySkill(enemy.skills, skillId);
   if (!skill) return 0;
   return enemy.stats[skill.stat] + skill.level;
 }

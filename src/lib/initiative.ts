@@ -1,4 +1,5 @@
 import { rollDice } from "@/lib/dice";
+import type { RandomSource } from "@/lib/combat/contract";
 import { getCriticalInjuryModifiers, getWoundPenalty } from "@/lib/calculations";
 import { getCyberwareInitiativeModifiers } from "@/lib/cyberwareEffects";
 import type { AttackModifier, RollDetail } from "@/types/attack";
@@ -62,8 +63,8 @@ function formatExpression(
  * Antes esse cálculo vivia dentro do componente; agora a ficha e os testes
  * usam o mesmo caminho.
  */
-export function rollInitiative(character: Character): { character: Character; result: InitiativeRollResult } {
-  const dice = rollDice("1d10");
+export function rollInitiative(character: Character, rng?: RandomSource): { character: Character; result: InitiativeRollResult } {
+  const dice = rollDice("1d10", rng);
   const rollValue = dice.rolls[0];
   const diceTotal = rollValue;
   const diceRolls: RollDetail[] = [{ value: rollValue, type: "normal" }];

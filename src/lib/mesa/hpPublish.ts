@@ -10,7 +10,7 @@
  * ativa não manda nada e falha de rede/migração pendente nunca quebra a tela.
  */
 import { getActiveMembership } from "@/lib/mesa/membershipStore";
-import { sendMesaHp, type MesaHpUpdate } from "@/lib/mesa/client";
+import { sendMesaEngineDamage, sendMesaHp, type MesaEngineDamageUpdate, type MesaHpUpdate } from "@/lib/mesa/client";
 import type { Character } from "@/types/character";
 
 function send(update: MesaHpUpdate): void {
@@ -62,10 +62,19 @@ export function publishMesaHp(
  * `key` é o `id` estável do participante do encontro (é o que vira
  * `source_key` no servidor). Sem chave (encontro antigo) não há como achar a
  * linha, então nada é enviado — o Mestre continua ajustando no painel.
+ *
+ * `hpBefore` (F1.7.1) é o HP da origem ANTES da mudança: levado ao servidor
+ * como precondição, ele impede um push atrasado de sobrescrever um resultado
+ * mais novo (resolução do Combat Engine ou ajuste manual do painel).
  */
-export function publishMesaEnemyHp(key: string | null | undefined, hp: number): void {
+export function publishMesaEnemyHp(
+  key: string | null | undefined,
+  hp: number,
+  hpBefore?: number,
+): void {
   if (!key || !Number.isFinite(hp)) return;
-  send({ key, hp: Math.floor(hp) });
+  const before = typeof hpBefore === "number" && Number.isFinite(hpBefore) ? Math.floor(hpBefore) : null;
+  send({ key, hp: Math.floor(hp), ...(before !== null ? { hpBefore: before } : {}) });
 }
 
 /**
@@ -74,13 +83,31 @@ export function publishMesaEnemyHp(key: string | null | undefined, hp: number): 
  *
  * Mesmos portões de `publishMesaEnemyHp`: sem chave não há como achar a linha,
  * e falha de rede/migração pendente nunca quebra a origem. O HP vai junto só
- * porque é o mesmo caminho de escrita do servidor — ele é reenviado como está.
+ * porque é o mesmo caminho de escrita do servidor — ele é reenviado como está
+ * (com `hpBefore` igual ao atual: a mochila não mexe na vida, então a guarda
+ * só protege um valor que não deveria mudar).
  */
 export function publishMesaEnemySupplies(
   key: string | null | undefined,
   hp: number,
   supplies: MesaHpUpdate["supplies"],
+  hpBefore?: number,
 ): void {
   if (!key || !supplies || !Number.isFinite(hp)) return;
-  send({ key, hp: Math.floor(hp), supplies });
+  const before = typeof hpBefore === "number" && Number.isFinite(hpBefore) ? Math.floor(hpBefore) : null;
+  send({ key, hp: Math.floor(hp), supplies, ...(before !== null ? { hpBefore: before } : {}) });
+}
+
+/**
+ * F1.7.1 — dano de INIMIGO resolvido pelo Combat Engine no servidor
+ * (`POST /combat/damage`, caminho B). Mesmo portão do espelho (sem mesa ativa
+ * não manda nada), mas AO CONTRÁRIO do espelho REJEITA em recusa: o promise
+ * rejeita (`409 stale_hp`/`hp_conflict`, rede, migração pendente) para o
+ * chamador decidir o fallback. `200 {updated:false}` resolve normal — sem
+ * combate ativo o espelho antigo também não faria nada.
+ */
+export async function publishMesaEngineDamage(update: MesaEngineDamageUpdate): Promise<void> {
+  const membership = getActiveMembership();
+  if (!membership) return; // modo local: nada a enviar
+  await sendMesaEngineDamage(membership.sessionId, update);
 }

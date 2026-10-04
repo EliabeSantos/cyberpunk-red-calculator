@@ -203,13 +203,8 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
 
           {(myTurn || isGM) && (
             <div className="mesa-actions">
-              <ActionButton
-                label="ATAQUE"
-                enabled={canPerform("attack", active)}
-                title={denialFor("attack")}
-                busy={busy}
-                onClick={() => run(() => performAction(sessionId, active.id, "attack"))}
-              />
+              {isGM && <span className="mesa-waiting">ATAQUE PELA TELA DE ENCONTROS</span>}
+              {!isGM && <span className="mesa-waiting">ATAQUE PELA FICHA</span>}
               <div className="mesa-move">
                 <input
                   type="number"

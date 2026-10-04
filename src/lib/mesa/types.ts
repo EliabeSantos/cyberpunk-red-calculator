@@ -29,12 +29,15 @@ export interface MesaParticipant {
 }
 
 /**
- * Mochila de um inimigo espelhada na mesa (`mesa_combatants.supplies`).
+ * Suprimentos de combate espelhados na mesa (`mesa_combatants.supplies`).
  *
- * A mesa só EXPOE o estado — quem rola ataque, gasta bala, recarrega e usa
- * cura é a tela de Encontros (`src/lib/gmStorage.ts`), dona da mochila.
+ * Para inimigos, a tela de Encontros continua sendo a dona da mochila. Para
+ * personagens, o conteúdo é materializado ao iniciar o combate e a Mesa passa
+ * a ser a autoridade durante aquela batalha.
  */
 export interface MesaSupplies {
+  /** Arma cujo pente está representado por ammo/magazine. */
+  weaponId?: string;
   /** Balas no pente agora; ausente quando a arma não tem pente. */
   ammo?: number;
   /** Capacidade do pente. */
@@ -60,6 +63,8 @@ export interface MesaCombatant {
   sourceKey: string | null;
   /** `null` em personagens e em inimigos sem mochila (`mesa_combatants.supplies`). */
   supplies: MesaSupplies | null;
+  /** Munição atual por `weaponId`, mantida pelo servidor. */
+  ammoByWeapon?: Record<string, number> | null;
   initiative: number | null;
   /**
    * Como a iniciativa foi calculada. `bonus` é o bônus de implantes do inimigo
