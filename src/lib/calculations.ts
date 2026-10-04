@@ -117,11 +117,11 @@ export function getCriticalInjuryModifiers(
 }
 
 /** Calcula o Wound Threshold (limiar de ferimento grave).
- * Em Cyberpunk RED, o Wound Threshold é metade do HP máximo (arredondado para baixo).
- * Personagens com HP <= Wound Threshold estão "Seriously Wounded".
+ * Em Cyberpunk RED, o Wound Threshold é metade do HP máximo (arredondado para cima).
+ * Personagens com HP < Wound Threshold estão "Seriously Wounded".
  */
 export function calculateWoundThreshold(maxHP: number): number {
-  return Math.floor(maxHP / 2);
+  return Math.ceil(maxHP / 2);
 }
 
 /** Calcula a Humanity Máxima baseada no Cyberware instalado.
@@ -157,8 +157,8 @@ export type HPStatus =
 
 /** Calcula o status de HP do personagem baseado nas regras do Cyberpunk RED.
  * - HP > Wound Threshold → Normal
- * - HP <= Wound Threshold e HP > 0 → Seriously Wounded (-2 em todas ações)
- * - HP <= 0 e não isDead → Mortally Wounded (sistema de Death Saves)
+ * - HP < Wound Threshold e HP > 0 → Seriously Wounded (-2 em todas ações)
+ * - HP < 1 e não isDead → Mortally Wounded (sistema de Death Saves)
  * - isDead === true → Dead
  */
 export function calculateHPStatus(
@@ -167,9 +167,9 @@ export function calculateHPStatus(
   isDead: boolean,
 ): HPStatus {
   if (isDead) return "dead";
-  if (hpCurrent <= 0) return "mortally_wounded";
+  if (hpCurrent < 1) return "mortally_wounded";
   const woundThreshold = calculateWoundThreshold(hpMax);
-  if (hpCurrent <= woundThreshold) return "seriously_wounded";
+  if (hpCurrent < woundThreshold) return "seriously_wounded";
   return "normal";
 }
 

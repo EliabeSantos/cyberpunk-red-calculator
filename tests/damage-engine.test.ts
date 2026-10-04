@@ -253,7 +253,7 @@ test("wound penalty: atravessa o limiar → −2, exatamente o que getWoundPenal
   const dmg = danoOk(result);
 
   assert.equal(dmg.hpAfter, 16);
-  assert.equal(16, calculateWoundThreshold(40) - 4, "o limiar é floor(maxHP/2)");
+  assert.equal(16, calculateWoundThreshold(40) - 4, "o limiar é ceil(maxHP/2)");
 
   // Delegação: o número é o da função canônica, calculado sobre o HP NOVO.
   const ficha = createEmptyCharacter("delegacao");
@@ -262,11 +262,9 @@ test("wound penalty: atravessa o limiar → −2, exatamente o que getWoundPenal
   assert.equal(dmg.woundPenalty, getWoundPenalty(ficha), "a fonte única decide a penalidade");
   assert.equal(dmg.woundPenalty, -2, "Seriously Wounded = −2");
 
-  // O comportamento F1.5 (lesão ao atravessar o limiar) continua intacto.
-  assert.deepEqual(result.rolls, [
-    { kind: "critical_injury", actorId: INIMIGO_ID, targetId: PC_ID, expression: "2d6", rolls: [3, 4], total: 7 },
-  ]);
-  assert.ok(result.changes.some((c) => c.type === "critical_injury_added"));
+  // Wound Threshold determina somente Seriously Wounded.
+  assert.deepEqual(result.rolls, []);
+  assert.equal(result.changes.some((c) => c.type === "critical_injury_added"), false);
 });
 
 test("wound penalty: acima do limiar → 0 e nenhum sorteio", () => {
@@ -460,7 +458,7 @@ test("determinismo: mesmo estado + mesma action + mesma sequência → mesmo res
       personagem(saude({ hp: [40, 40], armor: [0, 4], deathSave: { dc: 6, failures: 0 } })),
       inimigo(saude({ hp: [40, 40] })),
     ]);
-  const action = dano(PC_ID, 24, INIMIGO_ID);
+  const action = { ...dano(PC_ID, 24, INIMIGO_ID), damageRolls: [6, 6, 3] };
 
   // `createTestRandomSource` é stateful (cursor interno): cada execução
   // precisa da SUA instância, com a mesma sequência declarada.

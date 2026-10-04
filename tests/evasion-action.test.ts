@@ -202,9 +202,9 @@ test("action.modifiers entram na conta (mesmo papel do parâmetro da ficha)", ()
  * 3 — Penalidade de lesão grave (fonte única getWoundPenalty)
  * ========================================================================== */
 
-test("wound penalty: Seriously Wounded (HP ≤ metade) → −2 na evasão", () => {
-  // HP 20/40 → threshold floor(40/2) = 20 → Seriously Wounded → −2.
-  const state = estado([ator({ combat: { hp: { current: 20, max: 40 }, ...saudePadrao } })]);
+test("wound penalty: Seriously Wounded (HP abaixo da metade) → −2 na evasão", () => {
+  // HP 19/40 → threshold ceil(40/2) = 20 → Seriously Wounded → −2.
+  const state = estado([ator({ combat: { hp: { current: 19, max: 40 }, ...saudePadrao } })]);
   const rng = createTestRandomSource([5, 9]);
 
   const result = execute(state, acao(), rng);

@@ -3,6 +3,7 @@ import { rollDice } from "@/lib/dice";
 import { getCriticalInjuryModifiers, getWoundPenalty } from "@/lib/calculations";
 import { getCyberwarePhysicalModifiers, getCyberwareSkillModifierFor } from "@/lib/cyberwareEffects";
 import type { Character, Skill, RollHistoryEntry } from "@/types/character";
+import type { SkillCheckActionContext } from "@/lib/combat/contract";
 
 /** Registro de check de perícia no histórico */
 interface SkillCheckHistoryEntry {
@@ -31,6 +32,7 @@ interface SkillCheckHistoryEntry {
 export function rollSkillCheck(
   character: Character,
   skillId: string,
+  options: { actionContext?: SkillCheckActionContext } = {},
 ): {
   character: Character;
   result: SkillCheckResult;
@@ -233,6 +235,7 @@ export function rollSkillCheck(
     stat: { id: definition.stat, value: modifiedStatValue },
     skill: { id: skillId, value: skill.level },
     modifiers: modifierEntries,
+    skillCheckContext: options.actionContext ?? "free",
   };
 
   const updatedCharacter: Character = {

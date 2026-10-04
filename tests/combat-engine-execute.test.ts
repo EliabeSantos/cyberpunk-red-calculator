@@ -285,28 +285,17 @@ test("armorRule explícito tem prioridade sobre o atalho ignoreArmor", () => {
  * 4 — Critical Injury: o RandomSource do F1.4 dentro do motor
  * -------------------------------------------------------------------------- */
 
-test("limiar de ferimento atravessado → lesão, roll e 2 valores do rng consumidos na ordem", () => {
+test("limiar de ferimento atravessado não gera Critical Injury", () => {
   const state = estado([personagem(saude({ hp: [30, 40], armor: [0, 4], deathSave: { dc: 0, failures: 0 } }))]);
-  const rng = createTestRandomSource([3, 4, 9]); // 2d6 = 7 → "Foreign Object"; sobra o 9
+  const rng = createTestRandomSource([3, 4, 9]);
 
   const result = execute(state, { type: "damage", actorId: null, targetId: PC_ID, amount: 20 }, rng);
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.rolls, [
-    { kind: "critical_injury", actorId: null, targetId: PC_ID, expression: "2d6", rolls: [3, 4], total: 7 },
-  ]);
-  assert.equal(result.rolls[0].total, 7);
-
-  const lesao = result.changes.find(
-    (change): change is Extract<CombatStateChange, { type: "critical_injury_added" }> =>
-      change.type === "critical_injury_added",
-  );
-  assert.ok(lesao, "a lesão aparece nas mudanças observáveis");
-  assert.equal(lesao.injury.name, "Foreign Object");
-  assert.equal(lesao.injury.roll, 7);
-  assert.equal(result.state.participants[0].combat.criticalInjuries.length, 1);
-
-  assert.equal(rng.d10(), 9, "foram consumidos exatamente os 2 valores do 2d6, nessa ordem");
+  assert.deepEqual(result.rolls, []);
+  assert.equal(result.changes.some((change) => change.type === "critical_injury_added"), false);
+  assert.equal(result.state.participants[0].combat.criticalInjuries.length, 0);
+  assert.equal(rng.d10(), 3, "o threshold não consome dados de Critical Injury");
 });
 
 test("RNG fica intocado quando a ação não rola nada", () => {
@@ -319,6 +308,28 @@ test("RNG fica intocado quando a ação não rola nada", () => {
   assert.equal(result.ok, true);
   assert.deepEqual(result.rolls, []);
   assert.equal(rng.d10(), 5, "nenhum valor da sequência foi consumido");
+});
+
+test("2+ seis geram exatamente uma Critical Injury e +5 HP, inclusive ao chegar a 0", () => {
+  const state = estado([personagem(saude({ hp: [25, 40], armor: [0, 0], deathSave: { dc: 8, failures: 0 } }))]);
+  const rng = createTestRandomSource([3, 4, 9]);
+
+  const result = execute(state, {
+    type: "damage",
+    actorId: null,
+    targetId: PC_ID,
+    amount: 20,
+    damageRolls: [6, 6, 3],
+  }, rng);
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.state.participants[0].combat.hp.current, 0, "25 − 20 − 5");
+    assert.equal(result.state.participants[0].combat.criticalInjuries.length, 1);
+    assert.equal(result.changes.filter((change) => change.type === "critical_injury_added").length, 1);
+    assert.equal(result.rolls.filter((roll) => roll.kind === "critical_injury").length, 1);
+    assert.equal(rng.d10(), 9, "uma única rolagem 2d6");
+  }
 });
 
 test("inimigo não rastreia lesões: limiar atravessado não gera Critical Injury", () => {
@@ -363,7 +374,7 @@ test("rollCriticalInjuryDetail devolve a lesão E o 2d6 (e repete quando já sof
  * -------------------------------------------------------------------------- */
 
 test("determinismo: mesma entrada + mesma sequência = mesmo resultado mecânico", () => {
-  const acao: CombatAction = { type: "damage", actorId: null, targetId: PC_ID, amount: 20 };
+  const acao: CombatAction = { type: "damage", actorId: null, targetId: PC_ID, amount: 20, damageRolls: [6, 6, 3] };
   const roda = (sequencia: number[]) =>
     execute(estado([personagem(saude({ hp: [30, 40], armor: [0, 4], deathSave: { dc: 0, failures: 0 } }))]), acao, createTestRandomSource(sequencia));
 

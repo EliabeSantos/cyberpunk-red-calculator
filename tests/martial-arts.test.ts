@@ -304,8 +304,8 @@ test("Martial Arts ignora metade do SP da armadura (arredondando para cima)", ()
     attackName: "Teste",
     attackType,
     damageDice: "2d6",
-    roll: { expression: "2d6", rolls: [6, 6], total: 12 },
-    total: 12,
+     roll: { expression: "2d6", rolls: [5, 5], total: 10 },
+     total: 10,
   });
 
   const martialDamage = applyAttackDamage(
@@ -321,7 +321,7 @@ test("Martial Arts ignora metade do SP da armadura (arredondando para cima)", ()
   );
   assert.strictEqual(martialDamage.result.armorSPBefore, 6, "ceil(11 / 2) = 6");
   assert.strictEqual(martialDamage.result.damageAbsorbed, 6);
-  assert.strictEqual(martialDamage.result.damageToHP, 6, "12 − 6");
+  assert.strictEqual(martialDamage.result.damageToHP, 4, "10 − 6");
 
   const brawlingDamage = applyAttackDamage(
     target,
@@ -334,7 +334,7 @@ test("Martial Arts ignora metade do SP da armadura (arredondando para cima)", ()
     11,
     "Brawling não ignora SP",
   );
-  assert.strictEqual(brawlingDamage.result.damageToHP, 1, "12 − 11");
+  assert.strictEqual(brawlingDamage.result.damageToHP, 0, "10 − 11");
 
   const weaponDamage = applyAttackDamage(target, buildDamage("melee"), "body");
   assert.ok("character" in weaponDamage);

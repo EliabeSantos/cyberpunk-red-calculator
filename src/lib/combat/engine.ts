@@ -39,7 +39,7 @@
  * Módulo puro: sem React, Next, DOM, `localStorage`, Supabase, `gmStorage`,
  * `client-only` nem componente algum (testado em `combat-purity.test.ts`).
  */
-import { calculateWoundThreshold, getWoundPenalty, getCriticalInjuryModifiers } from "@/lib/calculations";
+import { getWoundPenalty, getCriticalInjuryModifiers } from "@/lib/calculations";
 import { criticalInjuryTables, rollCriticalInjuryDetail, type CriticalInjuryRoll } from "@/data/criticalInjuries";
 import { getCatalogItem } from "@/data/items";
 import { armorSlotForLocation, hitLocations } from "@/types/combat";
@@ -50,7 +50,6 @@ import {
   applyDamage,
   ENEMY_DAMAGE_POLICY,
   PLAYER_DAMAGE_POLICY,
-  woundThresholdCrossed,
 } from "@/lib/combat/damage";
 import type { ArmorRule, DamagePolicy } from "@/lib/combat/damage";
 import type {
@@ -187,23 +186,19 @@ export function execute(
   // que separa exatamente os dois adapters existentes — a ficha rola Critical
   // Injury hoje, encontro/mesa não —, então é ele que decide aqui também.
   const tracksInjuries = target.combat.deathSave !== undefined;
-  const threshold = calculateWoundThreshold(target.combat.hp.max);
   const legSpecial = location === "leg" && outcome.damageToHP > 0;
   const brokenLeg = legSpecial ? criticalInjuryTables.body.find((injury) => injury.name === "Broken Leg") : undefined;
   const hpAfterSpecial = brokenLeg ? outcome.hpAfter - brokenLeg.bonusDamage : outcome.hpAfter;
-  const isDeadAfterSpecial = policy.defeatFromHp ? hpAfterSpecial <= 0 : outcome.isDeadAfter;
-  const crossedThreshold = woundThresholdCrossed(outcome.hpBefore, hpAfterSpecial, threshold);
   if (brokenLeg) {
     injuries.push(brokenLeg);
     addedInjury = { type: "critical_injury_added", participantId: target.id, injury: brokenLeg };
   }
 
-  // O gatilho é SÓ este: limiar de ferimento cruzado por quem rastreia lesões.
-  // `AttackResult.critical` (dado natural 10) NÃO entra aqui — crítico de
-  // ataque ≠ Critical Injury (F1.8D.4 mantém os dois separados).
+  // O único gatilho de Critical Injury é 2+ resultados 6 nos dados de dano.
+  // Wound Threshold/Seriously Wounded, HP 0 e Mortal Wound são estados
+  // independentes e não geram uma lesão.
   const criticalFromDamageDice = (action.damageRolls ?? []).filter((roll) => roll === 6).length >= 2;
-  const criticalTrigger = action.damageRolls ? criticalFromDamageDice : crossedThreshold;
-  if (tracksInjuries && criticalTrigger && !brokenLeg) {
+  if (tracksInjuries && criticalFromDamageDice) {
     // `undefined` de propósito: a ficha também não passa as lesões existentes
     // (os três `rollCriticalInjury(..., undefined, rng)` de `src/lib/damage.ts`),
     // então o motor reproduz o comportamento atual — a correção do duplicado é
@@ -222,15 +217,19 @@ export function execute(
     };
   }
 
+  const criticalInjuryBonusDamage = injuryOutcome?.injury.bonusDamage ?? 0;
+  const hpAfterCriticalInjury = hpAfterSpecial - criticalInjuryBonusDamage;
+  const finalIsDead = policy.defeatFromHp ? hpAfterCriticalInjury <= 0 : outcome.isDeadAfter;
+
   /* ---------------------- mudanças + estado (imutável) ---------------------- */
 
   const changes: CombatStateChange[] = [];
-  if (hpAfterSpecial !== outcome.hpBefore) {
+  if (hpAfterCriticalInjury !== outcome.hpBefore) {
     changes.push({
       type: "hp_changed",
       participantId: target.id,
       before: outcome.hpBefore,
-      after: hpAfterSpecial,
+      after: hpAfterCriticalInjury,
     });
   }
   if (outcome.wornArmorSPAfter !== target.combat.armor[slot]) {
@@ -243,12 +242,12 @@ export function execute(
     });
   }
   if (addedInjury) changes.push(addedInjury);
-  if (isDeadAfterSpecial !== outcome.isDeadBefore) {
+  if (finalIsDead !== outcome.isDeadBefore) {
     changes.push({
       type: "is_dead_changed",
       participantId: target.id,
       before: outcome.isDeadBefore,
-      after: isDeadAfterSpecial,
+      after: finalIsDead,
     });
   }
 
@@ -264,7 +263,7 @@ export function execute(
           ...participant,
           combat: {
             ...participant.combat,
-            hp: { ...participant.combat.hp, current: hpAfterSpecial },
+            hp: { ...participant.combat.hp, current: hpAfterCriticalInjury },
             armor,
             criticalInjuries: injuries,
             // F1.7.1 (Decisão A): o estado resultante REFLETE a derrota que o
@@ -274,7 +273,7 @@ export function execute(
             // jogador continua preservada: `PLAYER_DAMAGE_POLICY` devolve
             // `isDeadAfter = isDeadBefore`, então ficha a 0 HP segue viva
             // (quem derruba personagem é o Death Save, fora deste motor).
-            isDead: isDeadAfterSpecial,
+            isDead: finalIsDead,
           },
         },
   );
@@ -298,17 +297,17 @@ export function execute(
     rawDamage: outcome.damage,
     armorValue: outcome.armorSPBefore,
     damageAbsorbed: outcome.damageAbsorbed,
-    damageAfterArmor: outcome.damageToHP,
+    damageAfterArmor: outcome.damageToHP + criticalInjuryBonusDamage,
     hpBefore: outcome.hpBefore,
-    hpAfter: hpAfterSpecial,
+    hpAfter: hpAfterCriticalInjury,
     woundPenalty: getWoundPenalty({
       // `CombatHealth` do contrato × `CombatStats` da ficha — mesmo recorte
       // documentado no F1.8C (`resolveAttackModifiers`): `getWoundPenalty`
       // lê só hp/isDead e, pelo `cyberware`, o Pain Editor.
       combat: {
         ...target.combat,
-        hp: { ...target.combat.hp, current: outcome.hpAfter },
-        isDead: isDeadAfterSpecial,
+        hp: { ...target.combat.hp, current: hpAfterCriticalInjury },
+        isDead: finalIsDead,
       } as unknown as CombatStats,
       cyberware: toCyberwareItems(target.cyberware),
     }),

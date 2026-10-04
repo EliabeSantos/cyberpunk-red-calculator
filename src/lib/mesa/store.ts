@@ -686,6 +686,8 @@ function toCombatant(row: CombatantRow): MesaCombatant {
     name: row.name,
     sourceKey: row.source_key ?? null,
     supplies: row.supplies ?? null,
+    armor: row.combat_armor ?? null,
+    criticalInjuries: row.critical_injuries ?? [],
     ammoByWeapon: row.combat_ammo ?? null,
     initiative: row.initiative,
     initiativeDetail: row.initiative_detail ?? null,
@@ -1830,6 +1832,13 @@ export async function syncCombatHp(input: {
     : await findOwnCombatant(combat.id, participant.id);
   if (!row) return { updated: false };
 
+  // Durante um combate ativo, HP de personagens só muda por uma resolução
+  // server-side (ataque/dano/cura quando existir). O espelho local não pode
+  // sobrescrever silenciosamente o estado autoritativo da Mesa.
+  if (!key) {
+    throw new MesaError("Durante o combate, o HP da Mesa é autoritativo.", 409, "mesa_authoritative");
+  }
+
   const max = hpMax ?? row.hp_max;
   const clamped = Math.max(-999, Math.min(max, hp));
 
@@ -2866,7 +2875,11 @@ export async function registerRoll(input: {
   if (!combat) return { registered: false, debited: false };
 
   const roll = parsed.roll;
-  const actionType = MESA_ROLL_ACTION[roll.type];
+  // O cliente não envia custo numérico confiável. O servidor deriva o custo
+  // apenas do contexto semântico validado pelo parser.
+  const actionType: CombatActionType | null = roll.type === "skill_check" && roll.skillCheckContext === "action"
+    ? "other"
+    : MESA_ROLL_ACTION[roll.type];
 
   const combatants = (await query(
     db().from("mesa_combatants").select("*").eq("combat_id", combat.id),

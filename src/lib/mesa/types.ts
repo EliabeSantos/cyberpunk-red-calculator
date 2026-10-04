@@ -63,6 +63,10 @@ export interface MesaCombatant {
   sourceKey: string | null;
   /** `null` em personagens e em inimigos sem mochila (`mesa_combatants.supplies`). */
   supplies: MesaSupplies | null;
+  /** Estado mutável de armadura durante o combate. */
+  armor: { head: number; body: number } | null;
+  /** Critical Injuries persistidas pelo Combat Engine. */
+  criticalInjuries: import("@/types/character").CriticalInjury[];
   /** Munição atual por `weaponId`, mantida pelo servidor. */
   ammoByWeapon?: Record<string, number> | null;
   initiative: number | null;

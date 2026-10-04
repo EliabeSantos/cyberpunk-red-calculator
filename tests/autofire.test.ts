@@ -324,7 +324,7 @@ test("defesa por Evasion passa pelo mesmo canal do ataque normal", () => {
 
 test("pipeline: ataque autofire → Weapon Damage → Damage Engine → Critical Injury", () => {
   const state = estado([atacante([arma({ damage: "2d6" })]), alvo({ deathSave: true })]);
-  const rng = createTestRandomSource([9, 5, 5, 3, 4, 9]);
+  const rng = createTestRandomSource([9, 6, 6, 3, 4, 9]);
 
   // 1) ATAQUE (autofire) — 7 + 6 + 9 = 22 > DV 10 → hit; 9 ≠ 10 → sem crítico.
   const atk = ok(execute(state, ataque(), rng));
@@ -342,7 +342,7 @@ test("pipeline: ataque autofire → Weapon Damage → Damage Engine → Critical
   const weaponRoll = rollWeaponDamage(atk.state.participants[0], attackResult, rng);
   assert.equal(weaponRoll.ok, true, "o dano da arma não sabe o que é autofire");
   assert.ok(weaponRoll.ok);
-  assert.equal(weaponRoll.roll.total, 10);
+   assert.equal(weaponRoll.roll.total, 12);
 
   // 4) DANO — o MESMO Damage Engine do F1.8D.1: 30 → 20 cruza o limiar (20).
   const d = ok(
@@ -354,17 +354,18 @@ test("pipeline: ataque autofire → Weapon Damage → Damage Engine → Critical
         targetId: ALVO_ID,
         amount: weaponRoll.roll.total,
         hitLocation: loc,
+        damageRolls: weaponRoll.roll.rolls,
       } satisfies CombatAction,
       rng,
     ),
   );
   const dmg = damageOk(d);
-  assert.equal(dmg.rawDamage, 10, "sem multiplicador — nenhuma regra de dano existe");
+   assert.equal(dmg.rawDamage, 12, "sem multiplicador — nenhuma regra de dano existe");
   assert.equal(dmg.hitLocation, "body");
-  assert.equal(dmg.hpAfter, 20);
+   assert.equal(dmg.hpAfter, 13, "12 de dano + 5 da Critical Injury");
 
   // 5) CRITICAL INJURY — 2 valores, decidida pelo Damage Engine (F1.8D.4).
-  assert.ok(dmg.criticalInjury, "limiar cruzado → lesão exposta pelo Damage Engine");
+   assert.ok(dmg.criticalInjury, "2+ seis → lesão exposta pelo Damage Engine");
   const added = d.changes.filter((c) => c.type === "critical_injury_added");
   assert.equal(added.length, 1, "UMA lesão, sem gatilho parcial de autofire");
 

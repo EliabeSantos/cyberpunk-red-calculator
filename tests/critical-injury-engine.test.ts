@@ -158,7 +158,7 @@ function ataque(overrides: Partial<AttackAction> = {}): AttackAction {
 function dano(
   targetId: string,
   amount: number,
-  { actorId = null, hitLocation }: { actorId?: string | null; hitLocation?: HitLocation } = {},
+  { actorId = null, hitLocation, damageRolls }: { actorId?: string | null; hitLocation?: HitLocation; damageRolls?: number[] } = {},
 ): CombatAction {
   return {
     type: "damage",
@@ -166,6 +166,7 @@ function dano(
     targetId,
     amount,
     ...(hitLocation ? { hitLocation } : {}),
+    ...(damageRolls ? { damageRolls } : {}),
   };
 }
 
@@ -245,14 +246,14 @@ test("limiar não atingido → nenhuma lesão, nenhum 2d6 e damageResult sem cri
  * 2 — Threshold atingido
  * ========================================================================== */
 
-test("limiar atravessado → lesão explícita no damageResult, 2d6 exatos e estado", () => {
+test("2+ seis → uma lesão explícita no damageResult, 2d6 exatos e estado", () => {
   const state = estadoComLimiar(true);
   const rng = createTestRandomSource([3, 4, 9]);
 
-  const result = execute(state, dano(ALVO_ID, 20), rng);
+  const result = execute(state, dano(ALVO_ID, 20, { damageRolls: [6, 6, 3] }), rng);
   const dmg = danoOk(result);
 
-  assert.equal(dmg.hpAfter, 10, "30 → 10 cruza o limiar de 20");
+   assert.equal(dmg.hpAfter, 5, "30 − 20 de dano − 5 de Critical Injury");
 
   const inj = lesao(dmg);
   assert.equal(inj.roll.expression, "2d6");
@@ -280,7 +281,7 @@ test("limiar atravessado → lesão explícita no damageResult, 2d6 exatos e est
 
 test("determinismo: duas execuções com RNGs INDEPENDENTES → resultados equivalentes", () => {
   const roda = (sequencia: number[]) =>
-    execute(estadoComLimiar(true), dano(ALVO_ID, 20), createTestRandomSource(sequencia));
+    execute(estadoComLimiar(true), dano(ALVO_ID, 20, { damageRolls: [6, 6, 3] }), createTestRandomSource(sequencia));
 
   const r1 = roda([3, 4]);
   const r2 = roda([3, 4]);
@@ -345,7 +346,7 @@ test("localização: head usa a tabela head; corpo/braço/perna usam a tabela bo
     const state = estadoComLimiar(true);
     const rng = createTestRandomSource([3, 4, 9]);
 
-    const result = execute(state, dano(ALVO_ID, 20, { hitLocation: loc }), rng);
+    const result = execute(state, dano(ALVO_ID, 20, { hitLocation: loc, damageRolls: [6, 6, 3] }), rng);
     const dmg = danoOk(result);
     assert.equal(dmg.hitLocation, loc, "a localização declarada é a exposta no resultado");
     if (loc === "leg") {
@@ -384,8 +385,8 @@ test("persistência: lesão prévia intacta, nova entra UMA vez e modificadores 
   ]);
   const rng = createTestRandomSource([3, 4, 9]);
 
-  // 1) DANO — limiar cruza e a nova lesão (roll 7) é DIFERENTE da prévia (roll 4).
-  const d = ok(execute(state, dano(ALVO_ID, 20), rng));
+  // 1) DANO — 2+ seis e a nova lesão (roll 7) é DIFERENTE da prévia (roll 4).
+  const d = ok(execute(state, dano(ALVO_ID, 20, { damageRolls: [6, 6, 3] }), rng));
   const nova = lesao(danoOk(d));
   assert.equal(nova.injury.name, "Foreign Object");
 
@@ -442,12 +443,12 @@ test("pipeline: ataque → arma → localização → dano → Critical Injury",
   const roll = totalDano(rollWeaponDamage(atk.state.participants[0], attackResult, rng));
   assert.equal(roll, 10);
 
-  // 4) DANO — Head damage doubles after Armor: 30 → 10.
-  const d = ok(execute(atk.state, dano(ALVO_ID, roll, { actorId: ATACANTE_ID, hitLocation: loc }), rng));
+  // 4) DANO — Head damage doubles after Armor e 2+ seis geram uma lesão.
+  const d = ok(execute(atk.state, dano(ALVO_ID, roll, { actorId: ATACANTE_ID, hitLocation: loc, damageRolls: [6, 6, 3] }), rng));
   const dmg = danoOk(d);
   assert.equal(dmg.rawDamage, 10, "a rolagem da arma chega intacta");
   assert.equal(dmg.hitLocation, "head");
-  assert.equal(dmg.hpAfter, 10, "30 − (10 × 2)");
+  assert.equal(dmg.hpAfter, 5, "30 − (10 × 2) − 5");
 
   // 5) CRITICAL INJURY — 2 valores, roll 7 → a lesão que o pipeline expôs.
   const inj = lesao(dmg);

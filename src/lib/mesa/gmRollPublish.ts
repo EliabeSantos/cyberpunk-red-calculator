@@ -16,7 +16,7 @@
  */
 import { getActiveMembership } from "@/lib/mesa/membershipStore";
 import { sendMesaRoll } from "@/lib/mesa/client";
-import type { MesaRollSummary } from "@/lib/mesa/rollPolicy";
+import type { MesaRollSummary, SkillCheckActionContext } from "@/lib/mesa/rollPolicy";
 
 const MAX_ACTOR = 60;
 
@@ -27,6 +27,7 @@ function build(
   expression: string,
   total: number,
   rolls: number[],
+  skillCheckContext?: SkillCheckActionContext,
 ): MesaRollSummary {
   return {
     type,
@@ -34,6 +35,7 @@ function build(
     expression: expression.slice(0, 120),
     total: Math.round(total),
     rolls: rolls.filter((v) => Number.isFinite(v)).slice(0, 40),
+    ...(type === "skill_check" ? { skillCheckContext: skillCheckContext ?? "action" } : {}),
   };
 }
 
@@ -66,7 +68,7 @@ export function publishMesaGmSkill(
 ): void {
   const m = getActiveMembership();
   if (!m) return;
-  publish(m.sessionId, build(actor, "skill_check", label, expression, total, rolls), key);
+  publish(m.sessionId, build(actor, "skill_check", label, expression, total, rolls, "action"), key);
 }
 
 /**

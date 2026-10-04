@@ -124,3 +124,14 @@ test("SkillCheckResult has correct type structure", () => {
     assert.strictEqual(typeof result.total, "number");
   }
 });
+
+test("Skill Check registra o contexto semântico, sem usar a Skill para decidir custo", () => {
+  const character = characterWithStat(7, "athletics", 4);
+  const free = rollSkillCheck(character, "athletics");
+  const action = rollSkillCheck(character, "athletics", { actionContext: "action" });
+  assert.ok("character" in free && "character" in action);
+  if ("character" in free && "character" in action) {
+    assert.equal(free.character.rollHistory[0]?.skillCheckContext, "free");
+    assert.equal(action.character.rollHistory[0]?.skillCheckContext, "action");
+  }
+});

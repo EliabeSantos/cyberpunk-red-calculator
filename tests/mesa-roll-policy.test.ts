@@ -102,8 +102,8 @@ test("summarizeRoll normaliza valores sujos sem lançar erro", () => {
 
 test("a política de custo bate com o Combat Engine", () => {
   assert.equal(getActionCost(MESA_ROLL_ACTION.attack!), 1);
-  assert.equal(getActionCost(MESA_ROLL_ACTION.skill_check!), 1);
   assert.equal(getActionCost(MESA_ROLL_ACTION.evasion!), 1);
+  assert.equal(MESA_ROLL_ACTION.skill_check, null);
 
   // Dano, dano recebido e rolagem livre não podem comer Action.
   assert.equal(MESA_ROLL_ACTION.damage, null);
@@ -120,12 +120,60 @@ test("ataque rola na ficha e debita 1 Action da mesa", () => {
   assert.equal(after.state.movementRemaining, before.movementRemaining);
 });
 
-test("perícia e Evasion também custam 1 Action", () => {
-  for (const kind of ["skill_check", "evasion"] as const) {
-    const result = spendFor(kind, economy());
-    assert.equal(result.debited, true, kind);
-    assert.equal(result.state.actionsRemaining, ACTIONS_PER_TURN - 1, kind);
-  }
+test("Skill Check gratuito não debita Action", () => {
+  const before = economy({ actionsRemaining: 1 });
+  const result = spendFor("skill_check", before);
+  assert.equal(result.debited, false);
+  assert.equal(result.state.actionsRemaining, 1);
+});
+
+test("Skill Check contextual como ação debita 1 Action", () => {
+  const actionType = "other" as const;
+  const result = resolveAction({
+    combatStatus: "active",
+    initiativeStarted: true,
+    activeCombatantId: "combatente-1",
+    actorRole: "player",
+    actorOwnsCombatant: true,
+    combatant: { id: "combatente-1", isDead: false, ...economy({ actionsRemaining: 1 }) },
+    actionType,
+    meters: 0,
+  });
+  assert.deepEqual(result, { ok: true, cost: 1 });
+  assert.equal(applyAction(economy({ actionsRemaining: 1 }), actionType).actionsRemaining, 0);
+});
+
+test("Evasion continua custando 1 Action", () => {
+  const result = spendFor("evasion", economy());
+  assert.equal(result.debited, true);
+  assert.equal(result.state.actionsRemaining, ACTIONS_PER_TURN - 1);
+});
+
+test("Skill Check como ação sem Action é recusado sem ficar negativo", () => {
+  const result = resolveAction({
+    combatStatus: "active",
+    initiativeStarted: true,
+    activeCombatantId: "combatente-1",
+    actorRole: "player",
+    actorOwnsCombatant: true,
+    combatant: { id: "combatente-1", isDead: false, ...economy({ actionsRemaining: 0 }) },
+    actionType: "other",
+    meters: 0,
+  });
+  assert.deepEqual(result, { ok: false, reason: "insufficient_actions" });
+  assert.equal(applyAction(economy({ actionsRemaining: 0 }), "other").actionsRemaining, 0);
+});
+
+test("contexto inválido ou actionCost arbitrário não é aceito como Skill Check", () => {
+  assert.equal(parseMesaRoll({
+    type: "skill_check", label: "Perícia", expression: "1d10", total: 7, rolls: [7], skillCheckContext: "discount",
+  }).ok, false);
+  const parsed = parseMesaRoll({
+    type: "skill_check", label: "Perícia", expression: "1d10", total: 7, rolls: [7], actionCost: 0,
+    skillCheckContext: "action",
+  });
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) assert.equal(parsed.roll.skillCheckContext, "action");
 });
 
 test("dano e rolagem livre não mexem no orçamento", () => {

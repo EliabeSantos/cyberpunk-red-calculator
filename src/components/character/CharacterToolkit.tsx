@@ -15,6 +15,7 @@ import { useMesaState } from "@/lib/mesa/useMesaState";
 import type { PlayerAttackSetup } from "@/components/combat/AttackActions";
 import { publishMesaHp } from "@/lib/mesa/hpPublish";
 import { publishMesaRoll } from "@/lib/mesa/rollPublish";
+import { syncMesaCharacterState } from "@/lib/mesa/characterSync";
 import type { Character } from "@/types/character";
 
 type Screen = "sheet" | "creator";
@@ -35,6 +36,13 @@ export default function CharacterToolkit({ initialJoinCode }: Props) {
   const memberships = useSyncExternalStore(subscribeToMembership, getMembershipSnapshot, getServerMembershipSnapshot);
   const activeMembership = memberships.activeJoinCode ? memberships.entries[memberships.activeJoinCode] ?? null : null;
   const mesa = useMesaState(activeMembership?.sessionId ?? null);
+  const mesaCombatActive = Boolean(
+    mesa.state?.combat?.status === "active" &&
+    character &&
+    mesa.state.combatants.some(
+      (entry) => entry.characterId === character.id && entry.participantId === mesa.state?.viewer.participantId,
+    ),
+  );
 
   const playerAttack = useMemo<PlayerAttackSetup | undefined>(() => {
     const state = mesa.state;
@@ -70,19 +78,32 @@ export default function CharacterToolkit({ initialJoinCode }: Props) {
     setReady(true);
   }, []);
 
+  // O snapshot já foi validado pelo servidor. Esta convergência local não usa
+  // handleUpdate, portanto não gera um POST de retorno nem loop de espelho.
+  useEffect(() => {
+    if (!character || !mesa.state) return;
+    const synchronized = syncMesaCharacterState(character, mesa.state);
+    if (synchronized === character) return;
+    upsertCharacter(synchronized);
+    setCharacter(synchronized);
+  }, [character, mesa.state]);
+
   function handleDiscordConsent(consent: DiscordConsent) {
     setDiscordConsent(consent);
     setDiscordConsentState(consent);
   }
 
   function handleUpdate(updated: Character) {
-    const newRoll = findNewRollEntry(character, updated);
-    if (newRoll) notifyDiscordRoll(newRoll, updated);
+    const next = mesaCombatActive && mesa.state
+      ? syncMesaCharacterState(updated, mesa.state)
+      : updated;
+    const newRoll = findNewRollEntry(character, next);
+    if (newRoll) notifyDiscordRoll(newRoll, next);
     publishMesaRoll(newRoll);
-    publishMesaHp(character, updated);
-    upsertCharacter(updated);
-    setCharacter(updated);
-    void maybePushSheet(updated);
+    if (!mesaCombatActive) publishMesaHp(character, next);
+    upsertCharacter(next);
+    setCharacter(next);
+    if (!mesaCombatActive) void maybePushSheet(next);
   }
 
   // O painel da mesa renderiza mesmo durante o carregamento: quem chega pelo
@@ -103,8 +124,12 @@ export default function CharacterToolkit({ initialJoinCode }: Props) {
         onSaved={(saved) => {
           // Editar a ficha também muda vida (HP máximo, morte): espelha igual ao
           // caminho normal, sem depender de nenhuma outra parte do salvamento.
-          publishMesaHp(character, saved);
-          setCharacter(saved);
+           const next = mesaCombatActive && mesa.state
+             ? syncMesaCharacterState(saved, mesa.state)
+             : saved;
+           if (!mesaCombatActive) publishMesaHp(character, next);
+           upsertCharacter(next);
+           setCharacter(next);
           setScreen("sheet");
         }}
       />

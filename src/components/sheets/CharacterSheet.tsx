@@ -244,8 +244,8 @@ export default function CharacterSheet({
     onUpdate(resolution.character);
     setLastDamage(damageRoll);
   }
-  function handleRollSkillCheck(character: Character, skillId: string) {
-    const resolution = rollSkillCheck(character, skillId);
+  function handleRollSkillCheck(character: Character, skillId: string, actionContext: "free" | "action" = "free") {
+    const resolution = rollSkillCheck(character, skillId, { actionContext });
     if ("error" in resolution) return;
     // Show immediate visual feedback with the dice roll
     setRollingSkill({ id: skillId, roll: resolution.result.diceRoll });
@@ -558,6 +558,16 @@ export default function CharacterSheet({
               ) : (
                 "🎲"
               )}
+            </button>
+            <button
+              type="button"
+              className="skill-roll-btn"
+              onClick={() => handleRollSkillCheck(character, id, "action")}
+              aria-label={`Rolar ${skill.name} como ação`}
+              title="Rolar como ação (custa 1 Action)"
+              disabled={rollingSkill?.id === id}
+            >
+              Ação
             </button>
           </div>
         </div>

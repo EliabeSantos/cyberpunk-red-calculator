@@ -207,8 +207,8 @@ test("dado: explosão (10 → +1 dado) e fumble (1 → −1 dado) idênticos nos
  * ========================================================================== */
 
 test("divergência REGRA (fixada, não corrigida): lesão de HP conta no standalone e não conta na defesa do ataque", () => {
-  // HP 20/40 → Seriously Wounded → getWoundPenalty = −2.
-  const ferido = { combat: { hp: { current: 20, max: 40 }, ...saudePadrao } };
+  // HP 19/40 → Seriously Wounded → getWoundPenalty = −2.
+  const ferido = { combat: { hp: { current: 19, max: 40 }, ...saudePadrao } };
 
   const ar = attackOk(execute(estado(ferido), ataque({ type: "evasion" }), createTestRandomSource([4, 5, 9])));
   const er = evasionOk(execute(estado(ferido), acao(), createTestRandomSource([5, 9])));

@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { createEmptyCharacter } from "../src/types/character.ts";
 import { applyReceivedDamage, applyAttackDamage, rollDamage } from "../src/lib/damage.ts";
-import { calculateWoundThreshold, calculateMaximumHitPoints } from "../src/lib/calculations.ts";
+import { calculateHPStatus, calculateWoundThreshold, calculateMaximumHitPoints } from "../src/lib/calculations.ts";
 import { checkCriticalInjuryFromDamage, rollCriticalInjury } from "../src/data/criticalInjuries.ts";
 import { rollDice } from "../src/lib/dice.ts";
 
@@ -15,12 +15,20 @@ function createTestCharacter(hpMax = 40, hpCurrent = 40) {
   return character;
 }
 
-test("calculateWoundThreshold returns half max HP rounded down", () => {
+test("calculateWoundThreshold returns half max HP rounded up", () => {
   assert.strictEqual(calculateWoundThreshold(40), 20);
-  assert.strictEqual(calculateWoundThreshold(35), 17);
+  assert.strictEqual(calculateWoundThreshold(35), 18);
   assert.strictEqual(calculateWoundThreshold(30), 15);
-  assert.strictEqual(calculateWoundThreshold(21), 10);
-  assert.strictEqual(calculateWoundThreshold(1), 0);
+  assert.strictEqual(calculateWoundThreshold(21), 11);
+  assert.strictEqual(calculateWoundThreshold(1), 1);
+});
+
+test("Seriously Wounded usa comparação estrita HP < threshold", () => {
+  assert.equal(calculateHPStatus(21, 40, false), "normal");
+  assert.equal(calculateHPStatus(20, 40, false), "normal");
+  assert.equal(calculateHPStatus(19, 40, false), "seriously_wounded");
+  assert.equal(calculateHPStatus(0, 40, false), "mortally_wounded");
+  assert.equal(calculateHPStatus(-1, 40, false), "mortally_wounded");
 });
 
 test("checkCriticalInjuryFromDamage detects two or more 6s", () => {
@@ -62,7 +70,7 @@ test("applyReceivedDamage does not trigger Seriously Wounded when damage doesn't
   }
 });
 
-test("applyReceivedDamage triggers Seriously Wounded when crossing threshold", () => {
+test("applyReceivedDamage enters Seriously Wounded without generating Critical Injury", () => {
   const character = createTestCharacter(40, 25); // HP 25, Wound Threshold 20
   const result = applyReceivedDamage(character, 10, "body"); // HP 15, crosses 20
   
@@ -72,8 +80,8 @@ test("applyReceivedDamage triggers Seriously Wounded when crossing threshold", (
     assert.strictEqual(result.result.hpAfter, 15);
     assert.strictEqual(result.result.woundThreshold, 20);
     assert.strictEqual(result.result.crossedWoundThreshold, true);
-    assert.strictEqual(result.result.criticalInjuryTriggered, true);
-    assert.ok(result.result.criticalInjury);
+    assert.strictEqual(result.result.criticalInjuryTriggered, false);
+    assert.equal(result.result.criticalInjury, undefined);
     assert.strictEqual(result.result.location, "body");
   }
 });
@@ -110,11 +118,9 @@ test("applyReceivedDamage preserves existing critical injuries and adds new one"
   
   assert.ok("character" in result);
   if ("character" in result) {
-    assert.strictEqual(result.character.combat.criticalInjuries.length, 2);
+    assert.strictEqual(result.character.combat.criticalInjuries.length, 1);
     assert.strictEqual(result.character.combat.criticalInjuries[0].name, "Existing injury");
-    // The new injury should be a valid CriticalInjury object with a name
-    assert.ok(result.character.combat.criticalInjuries[1].name);
-    assert.ok(result.character.combat.criticalInjuries[1].effect);
+    assert.equal(result.result.criticalInjuryTriggered, false);
   }
 });
 
@@ -140,10 +146,13 @@ test("applyAttackDamage detects Critical Injury from damage dice (two or more 6s
     // Critical Injury from dice is in criticalInjuryFromDiceResult
     assert.ok(result.result.criticalInjuryFromDiceResult);
     assert.strictEqual(result.result.criticalInjuryFromDiceResult?.location, "body");
+    assert.strictEqual(result.character.combat.criticalInjuries.length, 1);
+    assert.strictEqual(result.result.hpAfter, 23, "12 dano após Armor + 5 de Critical Injury");
+    assert.strictEqual(result.result.damageToHP, 17);
   }
 });
 
-test("applyAttackDamage triggers both Seriously Wounded and Critical Injury from dice", () => {
+test("applyAttackDamage com threshold e 2+ seis gera exatamente uma Critical Injury", () => {
   const character = createTestCharacter(40, 25); // Near threshold
   // Mock a damage roll with two 6s (total 12)
   const mockDamageRoll = {
@@ -162,8 +171,26 @@ test("applyAttackDamage triggers both Seriously Wounded and Critical Injury from
     assert.strictEqual(result.result.crossedWoundThreshold, true);
     assert.strictEqual(result.result.criticalInjuryFromDice, true);
     assert.strictEqual(result.result.criticalInjuryTriggered, true);
-    // Should have two injuries recorded
-    assert.strictEqual(result.character.combat.criticalInjuries.length, 2);
+    assert.strictEqual(result.character.combat.criticalInjuries.length, 1);
+    assert.strictEqual(result.result.hpAfter, 8, "12 dano + 5 bônus de Critical Injury");
+  }
+});
+
+test("applyAttackDamage com três 6 gera exatamente uma Critical Injury e +5 HP", () => {
+  const character = createTestCharacter(40, 40);
+  const result = applyAttackDamage(character, {
+    attackId: "test",
+    attackName: "Test Weapon",
+    weaponId: "test-weapon",
+    damageDice: "3d6",
+    roll: { expression: "3d6", rolls: [6, 6, 6], total: 18 },
+    total: 18,
+  } as import("../src/types/attack.ts").DamageRollResult, "body");
+
+  assert.ok("character" in result);
+  if ("character" in result) {
+    assert.equal(result.character.combat.criticalInjuries.length, 1);
+    assert.equal(result.result.hpAfter, 17);
   }
 });
 

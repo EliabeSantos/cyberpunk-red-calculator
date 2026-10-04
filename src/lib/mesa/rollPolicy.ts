@@ -13,7 +13,9 @@
  */
 
 import type { CombatActionType } from "@/lib/combatEngine";
+import type { SkillCheckActionContext } from "@/lib/combat/contract";
 import type { RollHistoryEntry } from "@/types/character";
+export type { SkillCheckActionContext } from "@/lib/combat/contract";
 
 /** Tipos do histórico da ficha que têm significado dentro da mesa. */
 export type MesaRollKind =
@@ -46,7 +48,7 @@ export function isMesaRollKind(value: unknown): value is MesaRollKind {
  */
 export const MESA_ROLL_ACTION: Record<MesaRollKind, CombatActionType | null> = {
   attack: "attack",
-  skill_check: "other",
+  skill_check: null,
   evasion: "other",
   damage: null,
   received_damage: null,
@@ -60,6 +62,7 @@ export interface MesaRollSummary {
   expression: string;
   total: number;
   rolls: number[];
+  skillCheckContext?: SkillCheckActionContext;
 }
 
 const MAX_LABEL = 60;
@@ -90,7 +93,14 @@ export function summarizeRoll(
     expression: expression.slice(0, MAX_EXPRESSION),
     total: Number.isFinite(total) ? Math.round(total) : 0,
     rolls: rolls.filter((value) => Number.isFinite(Number(value))).slice(0, MAX_ROLLS),
+    ...(entry.type === "skill_check" && isSkillCheckActionContext((entry as { skillCheckContext?: unknown }).skillCheckContext)
+      ? { skillCheckContext: (entry as { skillCheckContext: SkillCheckActionContext }).skillCheckContext }
+      : {}),
   };
+}
+
+export function isSkillCheckActionContext(value: unknown): value is SkillCheckActionContext {
+  return value === "free" || value === "action" || value === "reaction";
 }
 
 export type ParseMesaRollResult =
@@ -108,6 +118,12 @@ export function parseMesaRoll(raw: unknown): ParseMesaRollResult {
   }
   const roll = summarizeRoll(raw as Partial<RollHistorySlice>);
   if (!roll) return { ok: false, reason: "Tipo de rolagem que não vai para a mesa." };
+  if (roll.type === "skill_check") {
+    const context = (raw as { skillCheckContext?: unknown }).skillCheckContext;
+    if (context !== undefined && !isSkillCheckActionContext(context)) {
+      return { ok: false, reason: "Contexto de Skill Check inválido." };
+    }
+  }
   if (Math.abs(roll.total) > MAX_TOTAL) return { ok: false, reason: "Total de rolagem fora do intervalo." };
   return { ok: true, roll };
 }

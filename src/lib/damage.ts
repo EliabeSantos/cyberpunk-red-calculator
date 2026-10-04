@@ -40,7 +40,7 @@ export interface DamageApplicationResult {
   criticalInjuryTriggered: boolean;
   criticalInjuryFromDice: boolean;
   criticalInjury?: CriticalInjury;
-  /** Critical Injury causada por dois ou mais 6 nos dados de dano (separada da do Wound Threshold). */
+  /** Critical Injury causada por dois ou mais 6 nos dados de dano. */
   criticalInjuryFromDiceResult?: CriticalInjury;
   armorSPBefore: number;
   /** true quando Artes Marciais cortou o SP da armadura pela metade (arredondado para cima). */
@@ -98,22 +98,18 @@ export function applyReceivedDamage(
   // O ataque com rolagem de dano deve usar applyAttackDamage abaixo
   const criticalInjuryFromDice = false;
 
-  // Critical Injury por cruzamento de Wound Threshold
-  let criticalInjury: DamageApplicationResult["criticalInjury"] | undefined;
-  let criticalInjuryTriggered = false;
-
-  if (crossedWoundThreshold) {
-    const injury = rollCriticalInjury(hitLocation, undefined, rng);
-    criticalInjury = injury;
-    criticalInjuryTriggered = true;
-  }
+  // Dano manual não possui dados de dano; portanto não pode gerar Critical
+  // Injury. Wound Threshold determina somente o estado de ferimento.
+  const criticalInjury: DamageApplicationResult["criticalInjury"] = undefined;
+  const criticalInjuryTriggered = false;
+  const hpAfterCriticalInjury = hpAfter;
 
   // Inicializa Death Save DC quando HP chega a 0 ou abaixo
   let newDeathSaveDC = character.combat.deathSaveDC;
   let newDeathSaveFailures = character.combat.deathSaveFailures;
   // Política `player`: o dano nunca muda `isDead` (o Death Save é quem mata).
   const newIsDead = outcome.isDeadAfter;
-  if (hpAfter <= 0 && hpBefore > 0 && !newIsDead) {
+  if (hpAfterCriticalInjury <= 0 && hpBefore > 0 && !newIsDead) {
     // Primeira vez que chega a 0 ou abaixo: DC = BODY
     newDeathSaveDC = character.stats.BODY;
     newDeathSaveFailures = 0;
@@ -135,7 +131,7 @@ export function applyReceivedDamage(
     damageAbsorbed,
     damageToHP,
     hpBefore,
-    hpAfter,
+     hpAfter: hpAfterCriticalInjury,
   };
 
   const updatedCharacter: Character = {
@@ -143,7 +139,7 @@ export function applyReceivedDamage(
     combat: {
       ...character.combat,
       armor: { ...character.combat.armor, [slot]: wornArmorSPAfter },
-      hp: { ...character.combat.hp, current: hpAfter },
+       hp: { ...character.combat.hp, current: hpAfterCriticalInjury },
       criticalInjuries: criticalInjuryTriggered && criticalInjury
         ? [...character.combat.criticalInjuries, criticalInjury]
         : character.combat.criticalInjuries,
@@ -157,7 +153,7 @@ export function applyReceivedDamage(
   const result: DamageApplicationResult = {
     damage: amount,
     hpBefore,
-    hpAfter,
+    hpAfter: hpAfterCriticalInjury,
     woundThreshold,
     crossedWoundThreshold,
     location: hitLocation,
@@ -198,23 +194,12 @@ export function applyAttackDamage(
   const { hpBefore, hpAfter, armorSPBefore, armorSPAfter, damageAbsorbed, damageToHP, wornArmorSPAfter } = outcome;
 
   const woundThreshold = calculateWoundThreshold(character.combat.hp.max);
-  const crossedWoundThreshold = woundThresholdCrossed(hpBefore, hpAfter, woundThreshold);
-
   // Verifica Critical Injury pelos dados de dano (dois ou mais 6)
   const criticalInjuryFromDice = checkCriticalInjuryFromDamage(damageRoll.roll.rolls);
 
-  let criticalInjury: DamageApplicationResult["criticalInjury"] | undefined;
+  const criticalInjury: DamageApplicationResult["criticalInjury"] = undefined;
   let criticalInjuryTriggered = false;
 
-  // Critical Injury por cruzamento de Wound Threshold
-  if (crossedWoundThreshold) {
-    const injury = rollCriticalInjury(hitLocation, undefined, rng);
-    criticalInjury = injury;
-    criticalInjuryTriggered = true;
-  }
-
-  // Se também houve Critical Injury pelos dados, rola uma segunda injury
-  // (regra: cada Critical Injury separada)
   let criticalInjuryFromDiceResult: DamageApplicationResult["criticalInjuryFromDiceResult"] | undefined;
   if (criticalInjuryFromDice) {
     const injury = rollCriticalInjury(hitLocation, undefined, rng);
@@ -224,19 +209,20 @@ export function applyAttackDamage(
 
   // Combina as injuries para o histórico
   const newInjuries: CriticalInjury[] = [];
-  if (criticalInjury) {
-    newInjuries.push(criticalInjury);
-  }
   if (criticalInjuryFromDiceResult) {
     newInjuries.push(criticalInjuryFromDiceResult);
   }
+
+  const criticalInjuryBonusDamage = criticalInjuryFromDiceResult?.bonusDamage ?? 0;
+  const hpAfterCriticalInjury = hpAfter - criticalInjuryBonusDamage;
+  const crossedWoundThreshold = woundThresholdCrossed(hpBefore, hpAfterCriticalInjury, woundThreshold);
 
   // Inicializa Death Save DC quando HP chega a 0 ou abaixo
   let newDeathSaveDC = character.combat.deathSaveDC;
   let newDeathSaveFailures = character.combat.deathSaveFailures;
   // Política `player`: o dano nunca muda `isDead` (o Death Save é quem mata).
   const newIsDead = outcome.isDeadAfter;
-  if (hpAfter <= 0 && hpBefore > 0 && !newIsDead) {
+  if (hpAfterCriticalInjury <= 0 && hpBefore > 0 && !newIsDead) {
     newDeathSaveDC = character.stats.BODY;
     newDeathSaveFailures = 0;
   }
@@ -257,7 +243,7 @@ export function applyAttackDamage(
     damageAbsorbed,
     damageToHP,
     hpBefore,
-    hpAfter,
+     hpAfter: hpAfterCriticalInjury,
   };
 
   const updatedCharacter: Character = {
@@ -265,7 +251,7 @@ export function applyAttackDamage(
     combat: {
       ...character.combat,
       armor: { ...character.combat.armor, [slot]: wornArmorSPAfter },
-      hp: { ...character.combat.hp, current: hpAfter },
+      hp: { ...character.combat.hp, current: hpAfterCriticalInjury },
       criticalInjuries: newInjuries.length > 0
         ? [...character.combat.criticalInjuries, ...newInjuries]
         : character.combat.criticalInjuries,
@@ -279,7 +265,7 @@ export function applyAttackDamage(
   const result: DamageApplicationResult = {
     damage: totalDamage,
     hpBefore,
-    hpAfter,
+    hpAfter: hpAfterCriticalInjury,
     woundThreshold,
     crossedWoundThreshold,
     location: hitLocation,
@@ -291,7 +277,7 @@ export function applyAttackDamage(
     spHalvedByMartialArts,
     armorSPAfter,
     damageAbsorbed,
-    damageToHP,
+    damageToHP: damageToHP + criticalInjuryBonusDamage,
   };
 
   return { character: updatedCharacter, result };
@@ -481,4 +467,3 @@ export function rollFirstAid(
     },
   };
 }
-

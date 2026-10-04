@@ -238,18 +238,18 @@ test("RNG → rollDamage → número de dano, sem RNG na aplicação (§14)", ()
 
 test("a Critical Injury injetável atravessa a ficha sem mudar a regra (§10)", () => {
   const character = createEmptyCharacter("rng-ci");
-  // 30 → 10 com limite de seriously wounded em 20 (floor(40 / 2)): atravessa.
+  // 30 → 10 com threshold 20: fica Seriously Wounded, sem Critical Injury.
   character.combat.hp = { current: 30, max: 40 };
 
   const um = applyReceivedDamage(character, 20, "body", createTestRandomSource([4, 3]));
   assert.ok(!("error" in um));
   assert.equal(um.result.crossedWoundThreshold, true, "o limite foi atravessado, como sempre");
-  assert.equal(um.result.criticalInjury?.name, "Foreign Object");
+  assert.equal(um.result.criticalInjury, undefined);
   assert.equal(um.result.hpAfter, 10, "a aplicação de dano não mudou");
 
   const dois = applyReceivedDamage(character, 20, "body", createTestRandomSource([4, 3]));
   assert.ok(!("error" in dois));
-  assert.equal(dois.result.criticalInjury?.name, um.result.criticalInjury?.name);
+  assert.equal(dois.result.criticalInjury, undefined);
 });
 
 /* -------------------------------------------------------------------------- *

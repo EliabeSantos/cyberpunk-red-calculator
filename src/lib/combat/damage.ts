@@ -147,8 +147,8 @@ export function isDefeatedBy(policy: DamagePolicy, hp: number, isDeadBefore: boo
 }
 
 /**
- * O HP atravessou o limiar de Seriously Wounded? — `hpBefore` acima e
- * `hpAfter` embaixo do `threshold`, que quem chama calcula com
+ * O HP entrou no estado Seriously Wounded? — `hpBefore` no limiar/acima e
+ * `hpAfter` abaixo do `threshold`, que quem chama calcula com
  * `calculateWoundThreshold(maxHp)` (daí o parâmetro: o módulo continua sem
  * imports e sem rolagem).
  *
@@ -156,7 +156,7 @@ export function isDefeatedBy(policy: DamagePolicy, hp: number, isDeadBefore: boo
  * `applyAttackDamage`; agora ficha e motor perguntam à mesma fonte.
  */
 export function woundThresholdCrossed(hpBefore: number, hpAfter: number, threshold: number): boolean {
-  return hpBefore > threshold && hpAfter <= threshold;
+  return hpBefore >= threshold && hpAfter < threshold;
 }
 
 /**

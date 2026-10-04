@@ -385,9 +385,9 @@ export interface DamageResult {
   /** Fonte única: `getWoundPenalty` sobre o HP resultante (0, −2 ou 0 por Pain Editor). */
   woundPenalty: number;
   /**
-   * Lesão crítica GERADA por este dano (F1.8D.4) — presente só quando o
-   * participante rastreia lesões (`deathSave !== undefined`) E o limiar de
-   * ferimento foi cruzado; ausente = nenhuma lesão, pelo motivo que for.
+    * Lesão crítica GERADA por este dano (F1.8D.4) — presente só quando o
+    * participante rastreia lesões (`deathSave !== undefined`) E os dados de
+    * dano contêm 2 ou mais resultados 6; ausente = nenhuma lesão.
    *
    * Reusa o tipo `CriticalInjuryRoll` (lesão + o 2d6 que a produziu) e devolve
    * a MESMA lesão de `critical_injury_added` em `changes` (idêntica por
@@ -467,7 +467,10 @@ export interface SkillCheckAction {
   actorId: CombatantId;
   skillId: string;
   modifiers?: AttackModifier[];
+  actionContext?: SkillCheckActionContext;
 }
+
+export type SkillCheckActionContext = "free" | "action" | "reaction";
 
 export interface MoveAction {
   type: "move";
