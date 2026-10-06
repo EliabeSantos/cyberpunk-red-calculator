@@ -8,19 +8,23 @@
  */
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
-import { ACTIONS_PER_TURN, resolveAction, type CombatActionType } from "@/lib/combatEngine";
+import { ACTIONS_PER_TURN, type CombatActionType } from "@/lib/combatEngine";
 import {
+  applyPlayerDamage,
+  applyPlayerHealing,
   endCombat,
   endTurn,
   finishSession,
   performAction,
+  moveMesa,
   removeCombatant,
   rollInitiative,
   updateCombatant,
   MesaApiError,
 } from "@/lib/mesa/client";
+import { evaluateMesaAction } from "@/lib/mesa/actionGate";
 import { denialMessage } from "@/lib/mesa/messages";
 import { isHealingSupply } from "@/data/enemySupplies";
 import type { MesaCombatant, MesaState } from "@/lib/mesa/types";
@@ -42,10 +46,15 @@ function metersFrom(raw: string): number {
 
 export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinished, onNotice, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
+  const movePending = useRef(false);
   const [conditionDraft, setConditionDraft] = useState<{ id: string; value: string } | null>(null);
   // Rascunho de movimento identificado por combatente+rodada: um valor digitado
   // no turno A nunca vaza para o turno B (sem useEffect, só derivação no render).
   const [moveDraft, setMoveDraft] = useState<{ key: string; value: string } | null>(null);
+  // F1.12.1/F1.12.2 — quantidade digitada pelo Mestre, por combatente, para o
+  // DANO e para a CURA. O número NUNCA vira HP final: ele vira a INTENÇÃO que
+  // os gateways server-side resolvem.
+  const [amountDraft, setAmountDraft] = useState<{ id: string; value: string } | null>(null);
 
   const combat = state.combat;
   const combatants = state.combatants;
@@ -58,7 +67,8 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
   // Campo de movimento: o jogador digita os metros que quer andar neste turno.
   const moveKey = `${active?.id ?? ""}:${combat?.round ?? 0}`;
   const moveDraftValue = moveDraft?.key === moveKey ? moveDraft.value : "";
-  const moveMeters = metersFrom(moveDraftValue);
+  const moveMeters = !isGM && (!Number.isSafeInteger(Number(moveDraftValue)) || moveDraftValue.trim() === "")
+    ? 0 : metersFrom(moveDraftValue);
 
   async function run(action: () => Promise<void>, successMessage?: string) {
     setBusy(true);
@@ -75,47 +85,30 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
   }
 
   function canPerform(actionType: CombatActionType, target: MesaCombatant, meters = 0): boolean {
-    if (!combat || combat.status !== "active" || !combat.initiativeStarted) return false;
-    const result = resolveAction({
-      combatStatus: combat.status,
-      initiativeStarted: combat.initiativeStarted,
-      activeCombatantId: combat.activeCombatantId,
-      actorRole: state.viewer.role ?? "player",
-      actorOwnsCombatant: target.participantId === state.viewer.participantId,
-      combatant: {
-        id: target.id,
-        isDead: target.isDead,
-        actionsMax: target.actionsMax,
-        actionsRemaining: target.actionsRemaining,
-        movementMax: target.movementMax,
-        movementRemaining: target.movementRemaining,
-      },
-      actionType,
-      meters,
-    });
-    return result.ok;
+    // MESMA checagem do servidor (`resolveAction`), compartilhada com a tela
+    // do Player — F1.12.3 evitou que cada tela reescrevesse este mapeamento.
+    return evaluateMesaAction({ state, combatant: target, actionType, meters }).ok;
+  }
+
+  /**
+   * Quantia digitada pelo Mestre para um combatente (F1.12.1/F1.12.2): vazio,
+   * inválido ou não-positivo → 0, o que mantém os botões [ DANO ]/[ CURAR ]
+   * desabilitados. O número NUNCA vira HP final — ele só vira a intenção de um
+   * gateway server-side.
+   */
+  function draftAmount(combatant: MesaCombatant): number {
+    const raw = amountDraft?.id === combatant.id ? amountDraft.value : "";
+    const value = Math.floor(Number(raw));
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  function draftValid(combatant: MesaCombatant): boolean {
+    return draftAmount(combatant) > 0;
   }
 
   function denialFor(actionType: CombatActionType, meters = 0): string {
     if (!combat || !active) return denialMessage("combat_not_started");
-    const result = resolveAction({
-      combatStatus: combat.status,
-      initiativeStarted: combat.initiativeStarted,
-      activeCombatantId: combat.activeCombatantId,
-      actorRole: state.viewer.role ?? "player",
-      actorOwnsCombatant: active.participantId === state.viewer.participantId,
-      combatant: {
-        id: active.id,
-        isDead: active.isDead,
-        actionsMax: active.actionsMax,
-        actionsRemaining: active.actionsRemaining,
-        movementMax: active.movementMax,
-        movementRemaining: active.movementRemaining,
-      },
-      actionType,
-      meters,
-    });
-    return result.ok ? "" : denialMessage(result.reason);
+    return evaluateMesaAction({ state, combatant: active, actionType, meters }).message;
   }
 
   // --- Combate não iniciado -------------------------------------------------
@@ -227,8 +220,13 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
                   }
                   busy={busy}
                   onClick={() => {
-                    setMoveDraft(null);
-                    void run(() => performAction(sessionId, active.id, "move", moveMeters));
+                    if (movePending.current || busy) return;
+                    movePending.current = true;
+                    void run(async () => {
+                      if (isGM) await performAction(sessionId, active.id, "move", moveMeters);
+                      else await moveMesa({ sessionId, actorCombatantId: active.id, distance: moveMeters });
+                      setMoveDraft(null);
+                    }).finally(() => { movePending.current = false; });
                   }}
                 />
               </div>
@@ -239,14 +237,16 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
                 busy={busy}
                 onClick={() => run(() => performAction(sessionId, active.id, "item"))}
               />
-              <button
-                type="button"
-                className="mesa-ghost mesa-end-turn"
-                disabled={busy}
-                onClick={() => run(() => endTurn(sessionId), "Turno finalizado.")}
-              >
-                [ FINALIZAR TURNO ]
-              </button>
+              {isGM && (
+                <button
+                  type="button"
+                  className="mesa-ghost mesa-end-turn"
+                  disabled={busy}
+                  onClick={() => run(() => endTurn(sessionId), "Turno finalizado.")}
+                >
+                  [ FINALIZAR TURNO ]
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -273,6 +273,9 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
                 <EnemySupplyChips combatant={combatant} />
               </div>
 
+              {/* Conditions são deliberadamente somente leitura para Players.
+                  Não há gateway de Player: hoje elas são rótulos sem modelo
+                  mecânico próprio e são controladas pelo GM/servidor. */}
               <div className="mesa-combatant-conditions">
                 {combatant.conditions.map((condition) => (
                   <button
@@ -295,25 +298,95 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
 
               {isGM && (
                 <div className="mesa-gm-tools">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      run(() => updateCombatant(sessionId, combatant.id, { hpCurrent: combatant.hpCurrent - 1 }))
-                    }
-                  >
-                    −
-                  </button>
-                  <span>HP {combatant.hpCurrent}</span>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      run(() => updateCombatant(sessionId, combatant.id, { hpCurrent: combatant.hpCurrent + 1 }))
-                    }
-                  >
-                    +
-                  </button>
+                  {combatant.kind === "character" ? (
+                    // F1.12.1 + F1.12.2: HP de PERSONAGEM durante o combate é
+                    // autoritativo no servidor — o Mestre só envia a QUANTIA e
+                    // o gateway decide o resto.
+                    //
+                    //   [ DANO ]  → Player Damage Gateway (Damage Engine:
+                    //               armadura, ablação, lesão)
+                    //   [ CURAR ] → Player Healing Gateway (min(hp + amount, máx))
+                    //
+                    // O antigo "+" (alteração direta de HP) NÃO existe aqui.
+                    // Medkit/First Aid/cura entre Players continuam fora do
+                    // escopo — esta rota é só a intenção de cura do Mestre.
+                    <div className="mesa-external-damage">
+                      <span>HP {combatant.hpCurrent}</span>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        value={amountDraft?.id === combatant.id ? amountDraft.value : ""}
+                        onChange={(event) => setAmountDraft({ id: combatant.id, value: event.target.value })}
+                        placeholder="quant."
+                        aria-label={`Quantia em ${combatant.name}`}
+                        disabled={busy}
+                      />
+                      <button
+                        type="button"
+                        disabled={busy || !draftValid(combatant)}
+                        title="Dano externo resolvido pelo servidor: armadura, ablação e lesões seguem o Damage Engine."
+                        onClick={() => {
+                          const amount = draftAmount(combatant);
+                          if (amount <= 0) return;
+                          void run(async () => {
+                            await applyPlayerDamage(sessionId, {
+                              targetCombatantId: combatant.id,
+                              hpBefore: combatant.hpCurrent,
+                              amount,
+                              sourceContext: "ajuste do Mestre",
+                            });
+                            // Limpa só depois de aplicar: falhou, o rascunho fica.
+                            setAmountDraft(null);
+                          }, "Dano externo aplicado.");
+                        }}
+                      >
+                        [ DANO ]
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || !draftValid(combatant)}
+                        title="Cura autoritativa: o servidor lê o HP atual da Mesa e aplica min(hp + quantia, hp máximo)."
+                        onClick={() => {
+                          const amount = draftAmount(combatant);
+                          if (amount <= 0) return;
+                          void run(async () => {
+                            await applyPlayerHealing(sessionId, {
+                              targetCombatantId: combatant.id,
+                              amount,
+                              sourceContext: "ajuste do Mestre",
+                            });
+                            // Limpa só depois de aplicar: falhou, o rascunho fica.
+                            setAmountDraft(null);
+                          }, "Cura aplicada.");
+                        }}
+                      >
+                        [ CURAR ]
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          run(() => updateCombatant(sessionId, combatant.id, { hpCurrent: combatant.hpCurrent - 1 }))
+                        }
+                      >
+                        −
+                      </button>
+                      <span>HP {combatant.hpCurrent}</span>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          run(() => updateCombatant(sessionId, combatant.id, { hpCurrent: combatant.hpCurrent + 1 }))
+                        }
+                      >
+                        +
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     disabled={busy}

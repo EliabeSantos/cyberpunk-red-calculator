@@ -32,6 +32,7 @@ export async function POST(request: Request, context: Context): Promise<Response
       enemies: body.enemies,
       encounter: body.encounter,
       restart: body.restart,
+      gmParticipation: body.gmParticipation,
     });
     await publishMesaState(id);
     return ok();

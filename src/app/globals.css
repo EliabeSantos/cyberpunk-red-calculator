@@ -3422,6 +3422,9 @@
 .player-mesa-state { max-width: 34rem; margin: 15vh auto 0; }
 .player-mesa-state h1 { margin: .4rem 0 .65rem; }
 .player-mesa-state-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+/* F1.12.6 — entrada direta pelo convite: título, dica e detalhe empilhados. */
+.player-mesa-join-error { display: grid; gap: .3rem; }
+.player-mesa-join-error small { color: #d59a88; font-size: .68rem; }
 .player-mesa-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .85rem; }
 .player-mesa-section-heading strong { font-size: .95rem; }
 .player-mesa-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .45rem; }
@@ -3462,6 +3465,109 @@
 .player-mesa-events li { display: flex; gap: .7rem; padding: .45rem 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); font-size: .75rem; }
 .player-mesa-events time { flex: 0 0 auto; color: var(--muted); font: .65rem var(--font-geist-mono), monospace; }
 .player-mesa-notice { margin: 0 0 .8rem; padding: .65rem .75rem; border: 1px solid #8a6d1f; background: #241d0c; color: #ffd97a; font-size: .8rem; }
+
+/* --- F1.12.3: Player Table (tela completa em /mesa/[id]) ------------------- */
+.player-mesa-grid-table { margin-top: .2rem; }
+.player-mesa-column { display: grid; align-content: start; gap: .8rem; min-width: 0; }
+.player-mesa-column > .player-mesa-panel:first-child { margin-top: 0; }
+
+/* Faixa de turno — a resposta de "é meu turno?" num olhar. */
+.player-mesa-turnstatus { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-top: .4rem; padding: 1rem; border: 1px solid var(--line); background: var(--panel); }
+.player-mesa-turnstatus.tone-live { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.player-mesa-turnstatus.tone-alert { border-color: #6b3a31; box-shadow: inset 3px 0 0 #ff987b; }
+.player-mesa-turnstatus.tone-wait { box-shadow: inset 3px 0 0 #3d4742; }
+.player-mesa-turnstatus-main { display: grid; gap: .3rem; min-width: 0; }
+.player-mesa-turnstatus-main strong { font-size: clamp(1rem, 3vw, 1.4rem); letter-spacing: -.02em; }
+.player-mesa-turnstatus.tone-live .player-mesa-turnstatus-main strong { color: var(--accent); }
+.player-mesa-turnstatus.tone-alert .player-mesa-turnstatus-main strong { color: #ff987b; }
+.player-mesa-turnstatus-main p { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.5; }
+.player-mesa-budget { display: flex; flex-wrap: wrap; gap: .4rem; }
+.player-mesa-budget > span { display: grid; gap: .2rem; padding: .45rem .6rem; border: 1px solid var(--line); background: #0a120c; color: var(--muted); font: 700 .55rem var(--font-geist-mono), monospace; letter-spacing: .1em; }
+.player-mesa-budget > span b { color: var(--foreground); font-size: .85rem; letter-spacing: 0; }
+.player-mesa-condition-chip { color: var(--accent) !important; }
+.player-mesa-hp-chip .player-mesa-hp-bar { display: block; width: 100%; height: .25rem; margin-top: .2rem; background: #1c231f; overflow: hidden; }
+.player-mesa-hp-bar { display: block; height: .35rem; background: #1c231f; overflow: hidden; }
+.player-mesa-hp-bar i { display: block; height: 100%; background: var(--accent); transition: width .2s ease; }
+.player-mesa-hp-bar i.hp-wounded { background: #e0b040; }
+.player-mesa-hp-bar i.hp-critical, .player-mesa-hp-bar i.hp-dead { background: #ff987b; }
+.hp-ok { color: var(--accent); }
+.hp-wounded { color: #e0b040; }
+.hp-critical, .hp-dead { color: #ff987b; }
+
+/* Painel do próprio personagem */
+.player-mesa-hp-block { display: grid; gap: .5rem; margin-bottom: .85rem; }
+.player-mesa-hp-values { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.player-mesa-hp-values b { font-size: 1.9rem; line-height: 1; letter-spacing: -.04em; }
+.player-mesa-hp-values span { color: var(--muted); font: .75rem var(--font-geist-mono), monospace; }
+.player-mesa-hp-values em { font: 700 .6rem var(--font-geist-mono), monospace; font-style: normal; letter-spacing: .12em; }
+.player-mesa-hp-bar-lg { height: .5rem; }
+.player-mesa-detail { margin-top: .9rem; padding-top: .75rem; border-top: 1px solid var(--line); }
+.player-mesa-detail h3 { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; margin: 0 0 .5rem; color: var(--muted); font: 700 .62rem var(--font-geist-mono), monospace; letter-spacing: .12em; text-transform: uppercase; }
+.player-mesa-detail h3 span { color: var(--foreground); }
+.player-mesa-injuries { display: grid; gap: .35rem; margin: 0; padding: 0; list-style: none; }
+.player-mesa-injuries li { display: grid; gap: .15rem; padding: .5rem .6rem; border-left: 2px solid #ff987b; background: #0a120c; }
+.player-mesa-injuries strong { font-size: .78rem; }
+.player-mesa-injuries small { color: var(--muted); font: .62rem var(--font-geist-mono), monospace; }
+.player-mesa-conditions { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0; }
+.player-mesa-conditions span, .player-mesa-initiative-conditions span { padding: .2rem .45rem; border: 1px solid var(--line); background: #0a120c; color: var(--muted); font: 700 .58rem var(--font-geist-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
+
+/* Iniciativa / elenco */
+.player-mesa-initiative { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+.player-mesa-initiative li { border: 1px solid var(--line); background: #0a120c; }
+.player-mesa-initiative li.is-active { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.player-mesa-initiative li.is-you { border-left-color: var(--accent); }
+.player-mesa-initiative li.is-selected { border-color: var(--accent); background: #101a10; }
+.player-mesa-initiative li.is-dead { opacity: .55; }
+.player-mesa-initiative li > button, .player-mesa-initiative li > div { display: grid; grid-template-columns: 2.4rem minmax(0, 1fr) auto; gap: .7rem; align-items: center; width: 100%; padding: .6rem .7rem; border: 0; background: transparent; color: var(--foreground); text-align: left; font-size: .78rem; }
+.player-mesa-initiative li > button { cursor: pointer; }
+.player-mesa-initiative li > button:hover { background: rgb(255 255 255 / 5%); }
+.player-mesa-initiative-num { color: var(--accent); font: 700 .9rem var(--font-geist-mono), monospace; text-align: center; }
+.player-mesa-initiative-name { display: grid; gap: .15rem; min-width: 0; }
+.player-mesa-initiative-name small { color: var(--muted); font-size: .64rem; }
+.player-mesa-initiative-hp { display: grid; gap: .15rem; text-align: right; font: 700 .78rem var(--font-geist-mono), monospace; }
+.player-mesa-initiative-hp small { color: var(--muted); font-size: .58rem; font-weight: 600; letter-spacing: .06em; }
+.player-mesa-initiative-conditions { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0 .7rem .55rem 3.8rem; }
+
+/* Ações do Player */
+.player-mesa-actions { display: grid; gap: .9rem; align-content: start; }
+.player-mesa-actions .player-mesa-section-heading { margin-bottom: 0; }
+.player-mesa-weapon-ammo { grid-column: 1 / -1; color: var(--muted); font: .65rem var(--font-geist-mono), monospace; }
+.player-mesa-attack-button { grid-column: 1 / -1; min-height: 2.6rem; }
+.player-mesa-turn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding-top: .8rem; border-top: 1px solid var(--line); }
+.player-mesa-move { display: flex; gap: .4rem; }
+.player-mesa-move input { width: 5.5rem; min-height: 2.35rem; padding: .5rem .6rem; border: 1px solid var(--line); background: #0a120c; color: var(--foreground); font: .8rem var(--font-geist-mono), monospace; }
+.player-mesa-end-turn { margin-left: auto; }
+
+/* Registro / eventos */
+.player-mesa-log { display: grid; gap: .9rem; }
+.player-mesa-log .player-mesa-section-heading { margin-bottom: 0; }
+.player-mesa-rolls ul { display: grid; gap: .3rem; margin: .45rem 0 0; padding: 0; list-style: none; }
+.player-mesa-rolls li { color: var(--foreground); font-size: .75rem; line-height: 1.5; }
+.player-mesa-events-list { display: grid; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+.player-mesa-events-list li { display: flex; gap: .7rem; padding: .45rem 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); font-size: .75rem; line-height: 1.5; }
+.player-mesa-events-list time { flex: 0 0 4.2rem; color: var(--muted); font: .62rem var(--font-geist-mono), monospace; }
+.player-mesa-log-toggle { justify-self: start; }
+
+/* F1.12.5 — Skill Check */
+.player-mesa-skillcheck-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; align-items: end; }
+.player-mesa-skillcheck-form label { display: grid; gap: .3rem; color: var(--muted); font: 700 .62rem var(--font-geist-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
+.player-mesa-skillcheck-form select { min-width: 0; padding: .65rem; border: 1px solid var(--line); background: #0a120c; color: var(--foreground); font: .8rem var(--font-geist-mono), monospace; }
+.player-mesa-skillcheck-button { grid-column: 1 / -1; min-height: 2.45rem; }
+.player-mesa-skillcheck-result { margin-top: .8rem; display: grid; gap: .25rem; padding: .75rem; border-left: 2px solid var(--accent); background: #0a120c; font-size: .78rem; }
+.player-mesa-skillcheck-result strong { color: var(--accent); font-size: .88rem; }
+.player-mesa-skillcheck-result span { color: var(--muted); font: .68rem var(--font-geist-mono), monospace; }
+.player-mesa-skillcheck-result small { color: var(--muted); font: .62rem var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: .08em; }
+
+@media (max-width: 680px) {
+  .player-mesa-skillcheck-form { grid-template-columns: 1fr; }
+}
+
+/* Secundário: jogadores + vínculo de ficha */
+.player-mesa-secondary { margin-top: .8rem; }
+.player-mesa-secondary > summary { cursor: pointer; color: var(--muted); font: 700 .68rem var(--font-geist-mono), monospace; letter-spacing: .12em; text-transform: uppercase; }
+.player-mesa-secondary > summary:hover { color: var(--accent); }
+.player-mesa-secondary[open] > summary { margin-bottom: .9rem; }
+
 @media (max-width: 680px) {
   .player-mesa-header { flex-direction: column; }
   .player-mesa-header-meta { justify-content: flex-start; }
@@ -3471,6 +3577,21 @@
   .player-mesa-attack-form { grid-template-columns: 1fr; }
   .player-mesa-combatants li > button, .player-mesa-combatants li > div { grid-template-columns: minmax(0, 1fr) auto; }
   .player-mesa-combatants li > button > span:last-child, .player-mesa-combatants li > div > span:last-child { grid-column: 2; }
+
+  /* F1.12.3 — no celular as colunas desaparecem e a ORDEM vira vertical:
+     quem sou eu → meu HP → o que fazer → quem atacar → equipamento → registro. */
+  .player-mesa-column { display: contents; }
+  .player-mesa-self { order: 1; }
+  .player-mesa-actions { order: 2; }
+  .player-mesa-initiative-panel { order: 3; }
+  .player-mesa-weapons { order: 4; }
+  .player-mesa-budget { width: 100%; }
+  .player-mesa-budget > span { flex: 1 1 auto; }
+  .player-mesa-turn-actions { flex-direction: column; align-items: stretch; }
+  .player-mesa-move { width: 100%; }
+  .player-mesa-move input { flex: 1 1 auto; width: auto; }
+  .player-mesa-end-turn { margin-left: 0; }
+  .player-mesa-initiative-conditions { padding-left: .7rem; }
 }
 .mesa-start-hint { display: grid; gap: .7rem; justify-items: start; }
 
@@ -3693,6 +3814,10 @@
 .mesa-gm-tools span { color: var(--accent); font: 700 .72rem var(--font-geist-mono), monospace; }
 .mesa-gm-tools form { display: flex; gap: .25rem; }
 .mesa-gm-tools input { width: 7rem; padding: .2rem .4rem; background: #0a120c; border: 1px solid var(--line); color: var(--foreground); font-size: .7rem; }
+/* F1.12.1 — dano externo de Personagem: o HP não é editável, o valor digitado
+   vira intenção enviada ao Player Damage Gateway. */
+.mesa-external-damage { display: flex; align-items: center; gap: .35rem; }
+.mesa-external-damage input { width: 4.5rem; padding: .2rem .4rem; background: #0a120c; border: 1px solid var(--line); color: var(--foreground); font-size: .7rem; }
 .mesa-gm-combat-actions { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 
 .mesa-enemies { display: grid; gap: .6rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
@@ -3835,3 +3960,32 @@
 .epc-ammo-value small { color: var(--muted); font-weight: 400; font-size: .65rem; }
 .epc-ammo-bar { height: .45rem; background: #1a1f1a; border-radius: 2px; overflow: hidden; }
 .epc-ammo-fill { height: 100%; transition: width .3s ease, background-color .3s ease; border-radius: 2px; }
+
+/* ── F1.13.1 — Mochila autoritativa do Player na Mesa ──────────────────────
+   Lista puramente derivada de `mesa_combatants.supplies.inventory` (sem cópia
+   local): cada linha é nome à esquerda e quantidade à direita, em mono, para
+   bater visualmente com o resto dos números da mesa. */
+.player-mesa-inventory-list { display: grid; gap: .35rem; margin: 0; padding: 0; list-style: none; }
+.player-mesa-inventory-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .7rem;
+  padding: .5rem .6rem;
+  border: 1px solid var(--line);
+  background: #0a120c;
+}
+.player-mesa-inventory-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
+.player-mesa-inventory-qty { color: var(--accent); font: 700 .78rem var(--font-geist-mono), monospace; }
+
+/* ── F1.13.2 — botão [Usar] do item de cura ────────────────────────────────
+   Só aparece para o que o servidor já reconhece como item de cura. O visual
+   apenas evita cliques repetidos: quem manda é a rota item-heal. */
+.player-mesa-inventory-use {
+  flex: 0 0 auto;
+  padding: .18rem .55rem;
+  font: 700 .7rem/1 var(--font-geist-mono), monospace;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.player-mesa-inventory-use:disabled { opacity: .45; cursor: not-allowed; }

@@ -15,21 +15,20 @@ export default function SkillAllocation({ character, onChange }: Props) {
   const skillsByStat = statNames
     .map((stat) => [stat, Object.entries(skillDefinitions).filter(([, definition]) => definition.stat === stat)] as const)
     .filter(([, skills]) => skills.length > 0)
-    .sort((a, b) => a[1].length - b[1].length);
+    // Largest-first (LPT): distribuir blocos grandes antes evita que eles
+    // acabem concentrados no mesmo trilho depois dos blocos menores.
+    .sort((a, b) => b[1].length - a[1].length);
 
-  // Balance stats into 2 columns to minimize vertical waste
-  const col1: typeof skillsByStat = [];
-  const col2: typeof skillsByStat = [];
-  let col1Count = 0;
-  let col2Count = 0;
+  // Balance stats into 4 columns to minimize vertical waste on wide screens.
+  // CSS collapses the rails to 2/1 columns at narrower breakpoints.
+  const columns: (typeof skillsByStat)[] = [[], [], [], []];
+  const columnCounts = [0, 0, 0, 0];
   for (const item of skillsByStat) {
-    if (col1Count <= col2Count) {
-      col1.push(item);
-      col1Count += item[1].length;
-    } else {
-      col2.push(item);
-      col2Count += item[1].length;
-    }
+    const target = columnCounts.indexOf(Math.min(...columnCounts));
+    columns[target].push(item);
+    // Cada grupo também tem um cabeçalho; contar esse custo deixa a altura
+    // estimada mais próxima da altura visual real da seção.
+    columnCounts[target] += item[1].length + 1;
   }
 
   function renderStatGroup([stat, skills]: readonly [AttributeName, readonly [string, typeof skillDefinitions[string]][]]) {
@@ -89,12 +88,11 @@ export default function SkillAllocation({ character, onChange }: Props) {
 
   return (
     <div className="skill-allocation-balanced">
-      <div className="skill-allocation-column">
-        {col1.map(renderStatGroup)}
-      </div>
-      <div className="skill-allocation-column">
-        {col2.map(renderStatGroup)}
-      </div>
+      {columns.map((column, index) => (
+        <div className="skill-allocation-column" key={index}>
+          {column.map(renderStatGroup)}
+        </div>
+      ))}
     </div>
   );
 }

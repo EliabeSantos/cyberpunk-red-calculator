@@ -34,6 +34,7 @@ export async function POST(request: Request, context: Context): Promise<Response
       token: tokenFrom(request),
       roll: body.roll,
       key: body.key,
+      resolutionId: body.resolutionId,
     });
     if (result.registered) await publishMesaState(id);
     return ok(result);

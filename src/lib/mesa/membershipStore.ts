@@ -23,6 +23,27 @@ export interface StoredMembership {
   entries: Record<string, MesaEntry>;
 }
 
+/**
+ * Códigos de erro do servidor que significam "esta assinatura local já não
+ * vale mais" — o participante não existe mais, a Mesa não existe mais ou a
+ * sessão foi encerrada.
+ *
+ * Fonte ÚNICA (F1.12.8): a navegação para a tela dedicada remove assinaturas
+ * obsoletas quando confirma que a sessão não existe mais.
+ * na sua varredura de montagem e o `resolveActiveMesa` antes de levar o
+ * jogador para `/mesa/<uuid>`. É só uma lista de códigos — quem decide a
+ * remoção continua sendo `removeMembership` aqui embaixo, e nenhuma regra de
+ * stale handling muda por causa desta exportação.
+ *
+ * Qualquer outro erro (queda de rede, 5xx, `missing_token`) NÃO está aqui de
+ * propósito: o vínculo só cai por pedido ou por decisão do servidor.
+ */
+export const STALE_CODES: ReadonlySet<string> = new Set([
+  "not_participant",
+  "session_not_found",
+  "session_finished",
+]);
+
 const TOKEN_KEY = "cyberpunk-red-toolkit:mesa-player:v1";
 const MEMBERSHIP_KEY = "cyberpunk-red-toolkit:mesa-membership:v1";
 const CHANGE_EVENT = "cyberpunk-red-toolkit:mesa-changed";

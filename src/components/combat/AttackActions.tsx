@@ -27,7 +27,6 @@ export interface PlayerAttackContext extends PlayerAttackSetup {
   onWeaponDamage: (roll: DiceResult) => void;
   onDamageResult: (result: DamageResult) => void;
   onDamageError: (message: string) => void;
-  onAmmoAfter: (weaponId: string, ammoAfter: number) => void;
   onError: (message: string) => void;
 }
 
@@ -146,9 +145,9 @@ function PlayerAttackActions({ character, onUpdate, onResult, weaponAttackModes,
         if (response.weaponDamage) mesaAttack.onWeaponDamage(response.weaponDamage);
         if (response.damageResult) mesaAttack.onDamageResult(response.damageResult);
         if (response.damageError) mesaAttack.onDamageError(response.damageError.message);
-        if (availableAttack.context.weaponId && response.ammoAfter !== undefined) {
-          mesaAttack.onAmmoAfter(availableAttack.context.weaponId, response.ammoAfter);
-        }
+        // Ammo is authoritative on the server. The refresh below is the only
+        // path that projects the new value back into the sheet; do not apply
+        // `response.ammoAfter` optimistically here.
         await mesaAttack.onRefresh();
       } catch (caught) {
         mesaAttack.onError(caught instanceof MesaApiError ? caught.message : "Falha no ataque.");

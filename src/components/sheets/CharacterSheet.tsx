@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import {
@@ -16,6 +16,18 @@ import {
 } from "@/lib/progression";
 import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
 import { applyHealingItem, getItemHealAmount, isHealingItem } from "@/lib/healing";
+import { stableItemId } from "@/data/supplyItems";
+import {
+  healingButtonState,
+  performHealingItemClick,
+  performInitiativeRoll,
+  localCombatMutationRefusal,
+  type HealingLocalOutcome,
+  type HealingNotice,
+  type MesaInitiativeContext,
+  type PlayerHealingSetup,
+  type SheetMesaMode,
+} from "@/lib/mesa/sheetAuthority";
 import { applyReceivedDamage, rollDamageForLastAttack, applyAttackDamage, rollDeathSave, applyFirstAid, rollFirstAid } from "@/lib/damage";
 import { getSkillBase, calculateEmpFromHumanity, calculateWoundThreshold, calculateHPStatus } from "@/lib/calculations";
 import { rollEvasion, reloadWeapon } from "@/lib/attacks";
@@ -61,8 +73,35 @@ type CharacterSheetProps = {
   onDiscordConsentChange: (consent: DiscordConsent) => void;
   /** Contexto seguro da mesa; ausente mantém o ataque local legado. */
   playerAttack?: PlayerAttackSetup;
-  /** Combate integrado ativo sem contexto server-side completo. */
+  /**
+   * F1.13.5 — bloqueio derivado de `sheetMesaMode()` (fonte única de
+   * autoridade): presente ⇔ a ficha está em `"mesa-combat"` mas sem o
+   * contexto de ataque da Mesa — aí o ataque é recusado em vez de rolar
+   * local. Ausente ⇔ ataque da Mesa (com contexto) ou ataque local de sempre.
+   */
   playerAttackUnavailable?: boolean;
+  /**
+   * F1.13.4 — contexto do **combate ativo da Mesa** para itens de cura.
+   * Presente ⇔ a Mesa é a autoridade: o clique em "✚ Usar" vira
+   * `POST /combat/item-heal` e NENHUMA mutação local acontece.
+   * Ausente ⇔ fluxo local de sempre (ficha standalone / Mesa sem combate).
+   */
+  playerHealing?: PlayerHealingSetup;
+  /**
+   * F1.14.2 — contexto do **Player Initiative Gateway**. Presente ⇔ a ficha
+   * está em `"mesa-combat"`: o clique em "🎲 Rolar" rola localmente, manda a
+   * intenção pro servidor e NÃO escreve em `character`. Ausente ⇔ fluxo local
+   * de sempre (ficha standalone / Mesa sem combate / Mestre).
+   */
+  playerInitiative?: MesaInitiativeContext;
+  /** F1.15 — Death Save server-authoritative durante `mesa-combat`. */
+  playerDeathSave?: { isBusy(): boolean; setBusy(busy: boolean): void; roll(): Promise<import("@/lib/mesa/client").MesaDeathSaveResult> };
+  /** Orçamento lido da Mesa, usado somente para exibir "Movido (m)". */
+  mesaMovement?: { max: number; remaining: number };
+  /** Modo já decidido por `sheetMesaMode()` no escopo da ficha. */
+  sheetMesaMode: SheetMesaMode;
+  /** Gateways existentes; ausentes em modo Mesa significam recusa segura. */
+  playerReload?: { reloadWeapon: (weaponId: string) => Promise<void> };
 };
 const statOrder: AttributeName[] = [
   "INT",
@@ -101,6 +140,12 @@ export default function CharacterSheet({
   onDiscordConsentChange,
   playerAttack,
   playerAttackUnavailable,
+  playerHealing,
+  playerInitiative,
+  playerDeathSave,
+  mesaMovement,
+  sheetMesaMode,
+  playerReload,
 }: CharacterSheetProps) {
   const [ipToGrant, setIpToGrant] = useState(0);
   const [lastHumanityLoss, setLastHumanityLoss] =
@@ -116,10 +161,21 @@ export default function CharacterSheet({
   const [hitLocation, setHitLocation] = useState<HitLocation>("body");
   const [combatError, setCombatError] = useState("");
   const [healNotice, setHealNotice] = useState<{ text: string; isError: boolean } | null>(null);
+  /**
+   * F1.13.4 — um POST de item de cura em voo (modo Mesa). O `ref` é a trava
+   * real contra spam: o `state` só desabilita o botão no re-render seguinte.
+   */
+  const healingBusyRef = useRef(false);
+  const [healingBusy, setHealingBusy] = useState(false);
   const [equipError, setEquipError] = useState("");
   const [cyberwareNotice, setCyberwareNotice] = useState("");
   const [lastQuickhack, setLastQuickhack] = useState<QuickhackRollResult | null>(null);
   const [lastInitiative, setLastInitiative] = useState<InitiativeRollResult | null>(null);
+  /**
+   * F1.14.2 — erro do registro de iniciativa na Mesa. O valor exibido nunca é
+   * este: ele vem do estado da Mesa (`character.combat.initiative`).
+   */
+  const [initiativeError, setInitiativeError] = useState("");
   /** Estado do turno alimenta os requisitos dos Special Moves — o app não conta rodadas (ver PENDENCIAS.md). */
   const [turnState, setTurnState] = useState<TurnState>(DEFAULT_TURN_STATE);
   const [specialMoveOutcome, setSpecialMoveOutcome] = useState<SpecialMoveResolution | { error: string } | null>(null);
@@ -154,6 +210,13 @@ export default function CharacterSheet({
   const initiativeRerollCyberware = installedCyberwareEffects.find(
     (entry) => entry.action?.type === "reroll_initiative" && entry.actionEnabled,
   );
+  /**
+   * F1.14.2 — iniciativa autoritativa da Mesa, já projetada na ficha por
+   * `syncMesaCharacterState`. Em `mesa-combat` este É o valor exibido: a ficha
+   * não tem rolagem própria durante o combate da Mesa. Fora dele, `null` e o
+   * `lastInitiative` local continua mandando como sempre.
+   */
+  const mesaInitiative = sheetMesaMode === "mesa-combat" ? (character.combat.initiative ?? null) : null;
 
   // Gaveta do nav (mobile): ESC fecha e o scroll da página trava enquanto aberta.
   useEffect(() => {
@@ -189,18 +252,24 @@ export default function CharacterSheet({
     .filter(([, skills]) => skills.length > 0)
     .sort((a, b) => a[1].length - b[1].length);
   
-  // Balance categories into 2 columns to minimize vertical waste
+  // Balance categories into 3 columns to minimize vertical waste on Full HD.
+  // CSS flattens these rails back into a 2/1-column flow on smaller screens.
   const col1: typeof skillsByCategory = [];
   const col2: typeof skillsByCategory = [];
+  const col3: typeof skillsByCategory = [];
   let col1Count = 0;
   let col2Count = 0;
+  let col3Count = 0;
   for (const item of skillsByCategory) {
-    if (col1Count <= col2Count) {
+    if (col1Count <= col2Count && col1Count <= col3Count) {
       col1.push(item);
       col1Count += item[1].length;
-    } else {
+    } else if (col2Count <= col3Count) {
       col2.push(item);
       col2Count += item[1].length;
+    } else {
+      col3.push(item);
+      col3Count += item[1].length;
     }
   }
   const availableQuickhacks = getQuickhacksForCharacter(character);
@@ -208,6 +277,14 @@ export default function CharacterSheet({
   const isNetRunner = character.primaryRole === "netrunner" ||
     character.roleAbilities.some((ra) => ra.abilityId === "interface" && ra.rank > 0);
   const availableIP = character.ip;
+  function refuseLocalMutation(mutation: Parameters<typeof localCombatMutationRefusal>[1]): boolean {
+    const refusal = localCombatMutationRefusal(sheetMesaMode, mutation);
+    if (refusal) {
+      setCombatError(refusal);
+      return true;
+    }
+    return false;
+  }
   function grantIP() {
     const updated = grantImprovementPoints(character, ipToGrant);
     if (updated !== character) {
@@ -238,6 +315,7 @@ export default function CharacterSheet({
     if (updated) onUpdate(updated);
   }
   function rollDamage() {
+    if (refuseLocalMutation("damage-result")) return;
     const resolution = rollDamageForLastAttack(character);
     if ("error" in resolution) return;
     const damageRoll = resolution.result;
@@ -277,23 +355,51 @@ export default function CharacterSheet({
     onUpdate(resolution.character);
     setTimeout(() => setRollingEvasion(null), 2000);
   }
+  /**
+   * F1.14.2 — rota do clique em "🎲 Rolar".
+   *
+   * Fora de `mesa-combat` o fluxo é EXATAMENTE o de sempre: rolagem → indicador
+   * → resultado → `onUpdate`. Dentro dele, `performInitiativeRoll` manda SÓ a
+   * intenção pro servidor e NUNCA chama `onUpdate` — o valor novo chega pelo
+   * estado da Mesa (`syncMesaCharacterState` → `character.combat.initiative`).
+   * Falha → erro na seção e o estado local anterior permanece intacto.
+   */
   function rollInitiative(consumeCyberwareId?: string) {
-    // Cálculo morava aqui dentro; agora passa pelo motor para valer lesão/lesão grave
-    // e para os testes exercitarem o mesmo caminho da ficha.
-    const outcome = rollInitiativeRoll(character);
-    setRollingInitiative(outcome.result.diceRoll);
-    setLastInitiative(outcome.result);
-
-    // Peça ativada para repetir Iniciativa (Reflex Tuner): usar desliga a peça.
-    const nextCharacter = consumeCyberwareId
-      ? deactivateCyberware(outcome.character, consumeCyberwareId)
-      : outcome.character;
-    onUpdate(nextCharacter);
-    setTimeout(() => setRollingInitiative(null), 2000);
+    const pending = performInitiativeRoll({
+      mesa: playerInitiative,
+      local: () => {
+        // Cálculo morava aqui dentro; agora passa pelo motor para valer lesão/lesão grave
+        // e para os testes exercitarem o mesmo caminho da ficha.
+        const outcome = rollInitiativeRoll(character);
+        // Peça ativada para repetir Iniciativa (Reflex Tuner): usar desliga a peça.
+        const nextCharacter = consumeCyberwareId
+          ? deactivateCyberware(outcome.character, consumeCyberwareId)
+          : outcome.character;
+        return { result: outcome.result, character: nextCharacter };
+      },
+      update: (next) => onUpdate(next),
+      showRoll: setRollingInitiative,
+      showResult: setLastInitiative,
+      notify: (notice) => setInitiativeError(notice.isError ? notice.text : ""),
+    });
+    if (!playerInitiative) {
+      // Indicador da rolagem local: mesmo tempo de sempre. No modo Mesa ele é
+      // limpo pelo próprio fluxo quando o POST termina.
+      setTimeout(() => setRollingInitiative(null), 2000);
+    }
+    void pending;
   }
 
   /** Usa um Special Move: os requisitos já estão validados; o ataque entra no fluxo normal da ficha. */
   function useSpecialMove(move: SpecialMove) {
+    if (move.kind !== "passive") {
+      const refusal = localCombatMutationRefusal(sheetMesaMode, "attack-result");
+      if (refusal) {
+        setSpecialMoveOutcome({ error: refusal });
+        setCombatError(refusal);
+        return;
+      }
+    }
     const outcome = resolveSpecialMove(character, move, turnState, { headAim: Boolean(specialMoveHeadAim[move.id]) });
     setSpecialMoveOutcome(outcome);
     if ("error" in outcome) return;
@@ -316,6 +422,10 @@ export default function CharacterSheet({
   const allSpecialMovesOpen = specialMoveAvailability.every((entry) => openSpecialMoves[entry.move.id]);
   /** Ação disparada por botão no card de cyberware (ex.: Nano Repair → +2 HP). */
   function handleCyberwareAction(cyberwareId: string) {
+    if (refuseLocalMutation("hp")) {
+      setCyberwareNotice("Durante o combate da Mesa o HP é definido pelo servidor — esta ação foi bloqueada.");
+      return;
+    }
     const outcome = runCyberwareAction(character, cyberwareId);
     if ("error" in outcome) {
       setCyberwareNotice(outcome.error);
@@ -325,6 +435,7 @@ export default function CharacterSheet({
     onUpdate(outcome.character);
   }
   function addManualCriticalInjury() {
+    if (refuseLocalMutation("critical-injuries")) return;
     const name = manualInjuryName.trim();
     if (!name) return;
     const table = manualInjuryLocation === "head" ? headCriticalInjuries : bodyCriticalInjuries;
@@ -342,6 +453,7 @@ export default function CharacterSheet({
     setManualInjuryName("");
   }
   function removeCriticalInjury(index: number) {
+    if (refuseLocalMutation("critical-injuries")) return;
     const updated = character.combat.criticalInjuries.filter((_, i) => i !== index);
     const woundThreshold = calculateWoundThreshold(character.combat.hp.max);
     // Se o personagem está Seriously Wounded ou pior, restaura HP para acima do threshold
@@ -358,6 +470,7 @@ export default function CharacterSheet({
     });
   }
   function handleFullHeal() {
+    if (refuseLocalMutation("hp")) return;
     onUpdate({
       ...character,
       combat: {
@@ -372,7 +485,20 @@ export default function CharacterSheet({
     setLastDeathSave(null);
     setLastFirstAidRoll(null);
   }
-  function handleReload(weaponId: string) {
+  async function handleReload(weaponId: string) {
+    if (sheetMesaMode === "mesa-combat") {
+      if (!playerReload) {
+        setReloadError(localCombatMutationRefusal(sheetMesaMode, "ammo") ?? "Combate da Mesa indisponível: reload não executado.");
+        return;
+      }
+      setReloadError("");
+      try {
+        await playerReload.reloadWeapon(weaponId);
+      } catch (caught) {
+        setReloadError(caught instanceof Error ? caught.message : "Não foi possível recarregar a arma.");
+      }
+      return;
+    }
     const resolution = reloadWeapon(character, weaponId);
     if ("error" in resolution) { setReloadError(resolution.error); return; }
     setReloadError("");
@@ -382,11 +508,40 @@ export default function CharacterSheet({
     return ["handgun", "smg", "rifle", "shotgun", "heavy_weapons", "shoulder_arms", "sniper"].includes(weapon.skill ?? "");
   }
   function receiveDamage() {
+    if (refuseLocalMutation("damage-result")) return;
     const resolution = applyReceivedDamage(character, Number(receivedDamage), hitLocation);
     if ("error" in resolution) { setCombatError(resolution.error); return; }
     setCombatError(""); setReceivedDamage(""); onUpdate(resolution.character);
   }
+  /**
+   * F1.13.4 — durante o combate da Mesa, HP/death state são do servidor.
+   *
+   * Os três fluxos locais de First Aid/Death Save escreviam na ficha
+   * (`roll local → decrement → onUpdate`) e a sincronização da Mesa só os
+   * desfazia depois — no caso da rolagem com medkit, consumindo o item sem
+   * curar nada. Em vez de um rollback silêncico, a ficha diz que esta ação não
+   * roda aqui. Não é regra nova: é o mesmo `mesa_authoritative` que o servidor
+   * já aplica ao HP. Fora do combate (`playerHealing` ausente) nada muda.
+   */
+  function refuseDuringMesaCombat(): boolean {
+    const refusal = localCombatMutationRefusal(sheetMesaMode, "hp");
+    if (refusal === null) return false;
+    setFirstAidMessage(refusal);
+    return true;
+  }
   function handleDeathSave() {
+    if (playerDeathSave) {
+      if (playerDeathSave.isBusy()) return;
+      playerDeathSave.setBusy(true);
+      setRollingDeathSave(true);
+      setLastDeathSave(null);
+      void playerDeathSave.roll()
+        .then((result) => setLastDeathSave(result))
+        .catch((error) => setFirstAidMessage(error instanceof Error ? error.message : "Não foi possível rolar a Death Save."))
+        .finally(() => { playerDeathSave.setBusy(false); setRollingDeathSave(false); });
+      return;
+    }
+    if (refuseDuringMesaCombat()) return;
     setRollingDeathSave(true);
     setLastDeathSave(null);
     const resolution = rollDeathSave(character);
@@ -395,6 +550,7 @@ export default function CharacterSheet({
     setTimeout(() => setRollingDeathSave(false), 1500);
   }
   function handleFirstAid() {
+    if (refuseDuringMesaCombat()) return;
     const resolution = applyFirstAid(character);
     if (resolution.restored) {
       setFirstAidMessage("First Aid bem-sucedido! Personagem retornado para 1 HP.");
@@ -405,6 +561,7 @@ export default function CharacterSheet({
     }
   }
   function handleRollFirstAid() {
+    if (refuseDuringMesaCombat()) return;
     // Verifica se tem medkit no inventário
     const hasAdvancedMedkit = character.inventory.some((item) => item.catalogItemId === "advanced_medkit" && item.quantity > 0);
     const hasBasicMedkit = character.inventory.some((item) => item.catalogItemId === "basic_medkit" && item.quantity > 0);
@@ -460,17 +617,53 @@ export default function CharacterSheet({
     setLastHumanityLoss(result.cyberwareInstallation?.humanityLoss ?? null);
   }
   function handleUseHealingItem(inventoryItemId: string) {
-    const result = applyHealingItem(character, inventoryItemId);
-    if ("error" in result) {
-      setHealNotice({ text: result.error, isError: true });
+    const item = character.inventory.find((entry) => entry.id === inventoryItemId);
+    if (!item) return;
+    // Identidade: id ESTÁVEL (F1.13.2) — o rótulo serve só para exibir.
+    const itemId = stableItemId(item.name);
+
+    /** Sucesso some sozinho em 3 s; erro fica até a próxima ação (sempre foi assim). */
+    const notify = (notice: HealingNotice) => {
+      setHealNotice(notice);
+      if (!notice.isError) setTimeout(() => setHealNotice(null), 3000);
+    };
+
+    // F1.13.4 — modo Mesa: o servidor é a autoridade e NÃO existe caminho
+    // local. Nem item, nem HP são alterados aqui; o estado novo chega pela
+    // sincronização da Mesa depois que o `refresh` roda.
+    if (sheetMesaMode === "mesa-combat" && !playerHealing) {
+      notify({
+        text: "Combate da Mesa indisponível: o item não foi consumido e o HP não mudou.",
+        isError: true,
+      });
       return;
     }
-    setHealNotice({
-      text: `${result.itemName} usado: ${result.restored > 0 ? `+${result.restored} HP` : "HP já está no máximo"}${result.stabilized ? " · Estabilizado" : ""}.`,
-      isError: false,
+
+    const mesa = playerHealing
+      ? {
+          isBusy: () => healingBusyRef.current,
+          setBusy: (busy: boolean) => {
+            healingBusyRef.current = busy;
+            setHealingBusy(busy);
+          },
+          useItem: playerHealing.useItem,
+        }
+      : undefined;
+
+    void performHealingItemClick({
+      itemId,
+      mesa,
+      local: (): HealingLocalOutcome => {
+        const result = applyHealingItem(character, inventoryItemId);
+        if ("error" in result) return { error: result.error };
+        return {
+          text: `${result.itemName} usado: ${result.restored > 0 ? `+${result.restored} HP` : "HP já está no máximo"}${result.stabilized ? " · Estabilizado" : ""}.`,
+          character: result.character,
+        };
+      },
+      update: onUpdate,
+      notify,
     });
-    onUpdate(result.character);
-    setTimeout(() => setHealNotice(null), 3000);
   }
   function openHumanityAdjust() {
     setHumanityAdjustValue(String(character.humanity.current));
@@ -484,6 +677,20 @@ export default function CharacterSheet({
     if ("error" in resolution) return;
     setHumanityAdjustOpen(false);
     onUpdate(resolution.character);
+  }
+  function removeInventoryItem(inventoryItemId: string) {
+    if (refuseLocalMutation("inventory")) return;
+    onUpdate({ ...character, inventory: character.inventory.filter((item) => item.id !== inventoryItemId) });
+  }
+  function removeArmor(location: "head" | "body") {
+    if (refuseLocalMutation("armor")) return;
+    onUpdate({
+      ...character,
+      combat: {
+        ...character.combat,
+        armor: { ...character.combat.armor, [location]: 0 },
+      },
+    });
   }
   function closeHumanityAdjust() {
     setHumanityAdjustOpen(false);
@@ -558,16 +765,6 @@ export default function CharacterSheet({
               ) : (
                 "🎲"
               )}
-            </button>
-            <button
-              type="button"
-              className="skill-roll-btn"
-              onClick={() => handleRollSkillCheck(character, id, "action")}
-              aria-label={`Rolar ${skill.name} como ação`}
-              title="Rolar como ação (custa 1 Action)"
-              disabled={rollingSkill?.id === id}
-            >
-              Ação
             </button>
           </div>
         </div>
@@ -926,7 +1123,7 @@ export default function CharacterSheet({
                 <small>Cabeça</small>
                 <strong>{character.combat.armor.head} SP</strong>
                 {character.combat.armor.head > 0 && (
-                  <button type="button" className="equip-item" onClick={() => onUpdate({ ...character, combat: { ...character.combat, armor: { ...character.combat.armor, head: 0 } } })}>
+                   <button type="button" className="equip-item" onClick={() => removeArmor("head")}>
                     Remover
                   </button>
                 )}
@@ -935,7 +1132,7 @@ export default function CharacterSheet({
                 <small>Corpo e membros</small>
                 <strong>{character.combat.armor.body} SP</strong>
                 {character.combat.armor.body > 0 && (
-                  <button type="button" className="equip-item" onClick={() => onUpdate({ ...character, combat: { ...character.combat, armor: { ...character.combat.armor, body: 0 } } })}>
+                   <button type="button" className="equip-item" onClick={() => removeArmor("body")}>
                     Remover
                   </button>
                 )}
@@ -958,10 +1155,15 @@ export default function CharacterSheet({
                     type="button"
                     className="initiative-roll-btn"
                     onClick={() => rollInitiative()}
-                    disabled={rollingInitiative !== null}
+                    disabled={rollingInitiative !== null || mesaInitiative !== null}
+                    title={
+                      mesaInitiative !== null
+                        ? "Sua iniciativa já foi registrada nesta luta."
+                        : undefined
+                    }
                   >
                     {rollingInitiative !== null ? (
-                      <span className="rolling-indicator">🎲 {rollingInitiative}</span>
+                      <span className="rolling-indicator">{sheetMesaMode === "mesa-combat" ? "⏳ Enviando..." : `🎲 ${rollingInitiative}`}</span>
                     ) : (
                       "🎲 Rolar"
                     )}
@@ -978,14 +1180,24 @@ export default function CharacterSheet({
                     </button>
                   )}
                 </div>
-                {lastInitiative && (
-                  <div className="initiative-result" role="status">
-                    <span className="initiative-result-formula">
-                      {lastInitiative.expression}
-                    </span>
-                    <span className="initiative-result-total">{lastInitiative.total}</span>
-                  </div>
+                {sheetMesaMode === "mesa-combat" ? (
+                  mesaInitiative !== null ? (
+                    <div className="initiative-result" role="status">
+                      <span className="initiative-result-formula">Iniciativa registrada na Mesa</span>
+                      <span className="initiative-result-total">{mesaInitiative}</span>
+                    </div>
+                  ) : null
+                ) : (
+                  lastInitiative && (
+                    <div className="initiative-result" role="status">
+                      <span className="initiative-result-formula">
+                        {lastInitiative.expression}
+                      </span>
+                      <span className="initiative-result-total">{lastInitiative.total}</span>
+                    </div>
+                  )
                 )}
+                {initiativeError && <p className="form-error">{initiativeError}</p>}
               </div>
               <div className="evasion-section">
                 <div className="evasion-header">
@@ -1054,14 +1266,6 @@ export default function CharacterSheet({
                       onWeaponDamage: setLastMesaWeaponDamage,
                       onDamageResult: setLastMesaDamage,
                       onDamageError: setCombatError,
-                      onAmmoAfter: (weaponId, ammoAfter) => {
-                        onUpdate({
-                          ...character,
-                          weapons: character.weapons.map((weapon) =>
-                            weapon.id === weaponId ? { ...weapon, ammo: ammoAfter } : weapon,
-                          ),
-                        });
-                      },
                       onError: setCombatError,
                     }
                   : undefined
@@ -1304,7 +1508,9 @@ export default function CharacterSheet({
                     type="number"
                     min={0}
                     step={1}
-                    value={turnState.movedMeters}
+                     value={sheetMesaMode === "mesa-combat" ? Math.max(0, (mesaMovement?.max ?? 0) - (mesaMovement?.remaining ?? 0)) : turnState.movedMeters}
+                     disabled={sheetMesaMode === "mesa-combat"}
+                     title={sheetMesaMode === "mesa-combat" ? "Movimento registrado pelo servidor da Mesa." : undefined}
                     onChange={(event) => setTurnState((previous) => ({ ...previous, movedMeters: Math.max(0, Number(event.target.value) || 0) }))}
                   />
                 </label>
@@ -1494,7 +1700,7 @@ export default function CharacterSheet({
             {character.combat.criticalInjuries.length > 0 ? (
               <>
                 <div className="injury-actions-bar">
-                  <button type="button" className="full-heal-btn" onClick={handleFullHeal}>
+                  <button type="button" className="full-heal-btn" onClick={handleFullHeal} disabled={sheetMesaMode === "mesa-combat"}>
                     ✚ Full Heal (HP Máx + Limpar tudo)
                   </button>
                 </div>
@@ -1503,7 +1709,7 @@ export default function CharacterSheet({
                     <div className="cic-top">
                       <div className="cic-badge">{hitLocationLabels[injury.location]}</div>
                       <span className="cic-name">{injury.name}</span>
-                      <button type="button" className="cic-curar-btn" onClick={() => removeCriticalInjury(idx)}>
+                       <button type="button" className="cic-curar-btn" onClick={() => removeCriticalInjury(idx)} disabled={sheetMesaMode === "mesa-combat"}>
                         ✕ Curar
                       </button>
                     </div>
@@ -1550,7 +1756,7 @@ export default function CharacterSheet({
             ) : (
               <EmptyState>Nenhuma lesão crítica.</EmptyState>
             )}
-            <h3>Adicionar lesão manual</h3>
+            <h3>{sheetMesaMode === "mesa-combat" ? "Lesões críticas — somente leitura da Mesa" : "Adicionar lesão manual"}</h3>
             <div className="damage-input-section injury-input-section">
               <div className="damage-input-row">
                 <label className="damage-label">
@@ -1560,6 +1766,7 @@ export default function CharacterSheet({
                     value={manualInjuryLocation}
                     onChange={(event) => { setManualInjuryLocation(event.target.value as HitLocation); setManualInjuryName(""); }}
                     className="damage-select"
+                    disabled={sheetMesaMode === "mesa-combat"}
                   >
                     {hitLocations.map((location) => (
                       <option key={location} value={location}>{hitLocationLabels[location]}</option>
@@ -1573,6 +1780,7 @@ export default function CharacterSheet({
                     value={manualInjuryName}
                     onChange={(event) => setManualInjuryName(event.target.value)}
                     className="damage-select"
+                    disabled={sheetMesaMode === "mesa-combat"}
                   >
                     <option value="">— Selecionar —</option>
                     {(manualInjuryLocation === "head" ? headCriticalInjuries : bodyCriticalInjuries).map((inj) => (
@@ -1589,13 +1797,14 @@ export default function CharacterSheet({
                   onChange={(event) => setManualInjuryName(event.target.value)}
                   placeholder="Nome da lesão..."
                   className="damage-input injury-text-input"
+                  disabled={sheetMesaMode === "mesa-combat"}
                 />
               </label>
               <button
                 type="button"
                 className="apply-injury-button"
                 onClick={addManualCriticalInjury}
-                disabled={!manualInjuryName.trim()}
+                disabled={sheetMesaMode === "mesa-combat" || !manualInjuryName.trim()}
               >
                 ➕ Adicionar Lesão
               </button>
@@ -1644,6 +1853,19 @@ export default function CharacterSheet({
             </div>
             <div className="skills-column">
             {col2.map(([category, skills]) => (
+              <div className="skill-category-card" key={category}>
+                <div className="skill-category-header">
+                  <h3>{categoryNames[category]}</h3>
+                  <span className="skill-count">{skills.length}</span>
+                </div>
+                <div className="skill-list">
+                  {skills.map(([id, skill]) => skillCard(id, skill))}
+                </div>
+              </div>
+            ))}
+            </div>
+            <div className="skills-column">
+            {col3.map(([category, skills]) => (
               <div className="skill-category-card" key={category}>
                 <div className="skill-category-header">
                   <h3>{categoryNames[category]}</h3>
@@ -1894,6 +2116,21 @@ export default function CharacterSheet({
               {character.inventory.map((item) => {
                 const catalogItem = item.catalogItemId ? getCatalogItem(item.catalogItemId) : null;
                 const healAmount = isHealingItem(item) ? getItemHealAmount(item) : null;
+                // Camada de leitura: id ESTÁVEL do item (F1.13.2) e se a Mesa
+                // o acompanha — a ficha não ganha uma segunda fonte de verdade.
+                const itemId = stableItemId(item.name);
+                const mesaTracked = playerHealing?.isTracked(itemId) ?? false;
+                const healingButton =
+                  healAmount === null
+                    ? null
+                    : healingButtonState({
+                        healAmount,
+                        isDead: character.combat.isDead,
+                        atFullHp: character.combat.hp.current >= character.combat.hp.max,
+                        busy: healingBusy,
+                        mesa: playerHealing,
+                        itemId,
+                      });
                 return (
                   <div key={item.id} className="inventory-card">
                     <div className="inventory-card-header">
@@ -1902,15 +2139,15 @@ export default function CharacterSheet({
                         <span className="inventory-name">{item.name}</span>
                       </div>
                       <div className="inventory-card-actions">
-                        {healAmount !== null && (
+                        {healingButton && (
                           <button
                             type="button"
                             className="inventory-action-btn use"
                             onClick={() => handleUseHealingItem(item.id)}
-                            disabled={character.combat.isDead || character.combat.hp.current >= character.combat.hp.max}
-                            title={`Restaura ${healAmount} HP`}
+                            disabled={healingButton.disabled}
+                            title={healingButton.title}
                           >
-                            ✚ Usar (+{healAmount} HP)
+                            {healingButton.label}
                           </button>
                         )}
                         {item.catalogItemId && (
@@ -1934,7 +2171,13 @@ export default function CharacterSheet({
                         <button
                           type="button"
                           className="inventory-action-btn remove"
-                          onClick={() => onUpdate({ ...character, inventory: character.inventory.filter((i) => i.id !== item.id) })}
+                          onClick={() => removeInventoryItem(item.id)}
+                          disabled={playerHealing !== undefined && mesaTracked}
+                          title={
+                            playerHealing !== undefined && mesaTracked
+                              ? "Quantidade em disputa na Mesa — o item sai só quando o combate acabar."
+                              : "Remover da ficha"
+                          }
                         >
                           ×
                         </button>

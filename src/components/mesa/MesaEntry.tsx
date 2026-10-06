@@ -2,16 +2,27 @@
 
 /**
  * Entrada do modo online no layout atual: um item no nav da ficha
- * (**Mesa online**) que abre o modal de conexão — duas rotas ("Criar uma mesa"
- * e "Entrar com código") no formato de painel de operador, com as mesas deste
- * navegador listadas embaixo.
+ * (**Mesa online**) que, no fluxo de entrada, abre o modal de conexão — duas
+ * rotas ("Criar uma mesa" e "Entrar com código") no formato de painel de
+ * operador, com as mesas deste navegador listadas embaixo.
  *
  * O modal é um diálogo de verdade: fecha no ESC, no clique no fundo e no ✕,
  * trava o scroll da página enquanto está aberto e devolve o foco para quem o
  * abriu.
  *
- * Criar/entrar NÃO navega para outra tela: a sala abre como painel por cima da
- * ficha (`MesaRoomDock`), então o jogador continua na sessão principal.
+ * F1.12.7 — o botão PRIMEIRO pergunta se há Mesa ativa (ver `resolveActiveMesa`):
+ *
+ *     clica "Mesa" → Mesa ativa de JOGADOR confirmada?  SIM → /mesa/<sessionId>
+ *                                               (modal NÃO é renderizado)
+ *                                                  NÃO → fluxo de sempre, abaixo
+ *
+ * A assinatura que decide é a mesma de sempre (`membershipStore`): nenhuma
+ * cópia de Mesa é criada aqui. Se ela estiver expirada/encerrada, a limpeza é a
+ * infraestrutura existente (`removeMembership`) e o jogador cai no fluxo de
+ * entrada — nunca num redirect para uma Mesa inválida. O Mestre segue abrindo o
+ * dock, que é onde os controles dele moram.
+ *
+ * Criar/entrar navega para a tela dedicada da Mesa assim que a sessão existe.
  *
  * Enquanto houver assinatura local, o botão do nav vira um indicador de
  * **conectado** (`● Mesa 8F4K2`) — visível mesmo com o painel fechado, porque
@@ -27,32 +38,30 @@
  * funcionando sem rede. Este componente só adiciona uma porta para a mesa.
  */
 
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { resolveActiveMesa } from "@/lib/mesa/activeMesa";
 import { createMesa, joinMesa, leaveMesa, MesaApiError } from "@/lib/mesa/client";
+import { defaultMesaDisplayName } from "@/lib/mesa/displayName";
 import { JOIN_CODE_PLACEHOLDER, normalizeJoinCode } from "@/lib/mesa/joinCode";
 import {
   getMembershipSnapshot,
   getServerMembershipSnapshot,
   subscribeToMembership,
 } from "@/lib/mesa/membershipStore";
-import { openMesa } from "@/lib/mesa/mesaUiStore";
-import { getActiveCharacter } from "@/lib/storage";
+import { playerMesaHref } from "@/lib/mesa/mesaRoute";
 import { ArrowLeftIcon, ChevronRightIcon, PlusIcon, RadioIcon, XIcon } from "@/components/icons";
 
 type Panel = "closed" | "home" | "create" | "join";
 
-function defaultDisplayName(): string {
-  const character = getActiveCharacter();
-  return character?.identity.player || character?.identity.name || "";
-}
-
 export default function MesaEntry() {
+  const router = useRouter();
   const [panel, setPanel] = useState<Panel>("closed");
   const [sessionName, setSessionName] = useState("");
   // Inicialização preguiçosa: este componente só monta depois do carregamento
   // da ficha no cliente, então não há risco de divergência de hidratação.
-  const [displayName, setDisplayName] = useState(defaultDisplayName);
+  const [displayName, setDisplayName] = useState(defaultMesaDisplayName);
   const [joinCode, setJoinCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -73,6 +82,8 @@ export default function MesaEntry() {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const previousPanel = useRef<Panel>("closed");
+  /** Trava contra duplo clique enquanto a checagem da Mesa ativa não responde. */
+  const openingRef = useRef(false);
 
   // O modal se comporta como diálogo: ESC fecha, o fundo trava o scroll da
   // página e o foco volta para o botão que o abriu (navegar entre os painéis
@@ -103,6 +114,37 @@ export default function MesaEntry() {
     previousPanel.current = panel;
   }, [panel]);
 
+  /**
+   * Botão principal do nav: decide entre a tela da Mesa e o fluxo de entrada.
+   *
+   * A checagem é um `GET` do MESMO estado que a tela do Player leria; só depois
+   * de saber o resultado é que algo é renderizado — com Mesa ativa o modal nunca
+   * chega a montar (`panel` continua `"closed"`), então não há flash de modal
+   * antes do redirect.
+   *
+   * `router.push` (não `replace`): o mesmo padrão do link "Abrir tela da mesa"
+   * da tela dedicada — o jogador precisa conseguir voltar para a ficha pelo
+   * histórico. O `replace` ficou reservado para o redirect do convite
+   * `/mesa/<CODE>` (F1.12.6), onde voltar ao convite criaria um laço.
+   */
+  async function handleOpenMesa() {
+    if (openingRef.current) return;
+    openingRef.current = true;
+    try {
+      const decision = await resolveActiveMesa();
+      if (decision.kind === "navigate") {
+        router.push(decision.href);
+        return;
+      }
+      setPanel("home");
+    } catch {
+      // `resolveActiveMesa` nunca lança; mesmo assim o botão não pode ficar morto.
+      setPanel("home");
+    } finally {
+      openingRef.current = false;
+    }
+  }
+
   async function handleCreate(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
@@ -110,8 +152,7 @@ export default function MesaEntry() {
     try {
       const result = await createMesa({ name: sessionName, displayName });
       setPanel("closed");
-      // A sala abre como painel sobre a ficha: o jogador não sai desta tela.
-      openMesa(result.session.joinCode);
+      router.push(playerMesaHref(result.session.id));
     } catch (caught) {
       setError(caught instanceof MesaApiError ? caught.message : "Não foi possível criar a mesa.");
       setBusy(false);
@@ -128,9 +169,9 @@ export default function MesaEntry() {
     setError(null);
     setBusy(true);
     try {
-      await joinMesa({ joinCode: code, displayName });
+      const result = await joinMesa({ joinCode: code, displayName });
       setPanel("closed");
-      openMesa(code);
+      router.push(playerMesaHref(result.session.id));
     } catch (caught) {
       setError(caught instanceof MesaApiError ? caught.message : "Não foi possível entrar na mesa.");
       setBusy(false);
@@ -139,7 +180,8 @@ export default function MesaEntry() {
 
   function openKnownMesa(joinCode: string) {
     setPanel("closed");
-    openMesa(joinCode);
+    const mesa = mesas.find((entry) => entry.joinCode === joinCode);
+    if (mesa) router.push(playerMesaHref(mesa.sessionId));
   }
 
   /** Um dos dois caminhos de saída da mesa: o próprio jogador pede. */
@@ -331,7 +373,7 @@ export default function MesaEntry() {
         type="button"
         ref={triggerRef}
         className={activeCode ? "mesa-nav-connected" : undefined}
-        onClick={() => setPanel("home")}
+        onClick={() => void handleOpenMesa()}
       >
         <span className="mesa-nav-icon" aria-hidden="true">
           {activeCode ? <span className="mesa-nav-dot" /> : <RadioIcon />}

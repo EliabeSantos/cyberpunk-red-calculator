@@ -21,6 +21,8 @@ export const DENIAL_MESSAGES: Record<string, string> = {
   invalid_action: "Ação inválida.",
   movement_exhausted: "Você já gastou todo o movimento deste turno.",
   combatant_defeated: "Este combatente está fora do combate.",
+  action_conflict: "O estado do turno mudou. Atualize a Mesa e tente novamente.",
+  turn_conflict: "O turno mudou. Atualize a Mesa.",
 };
 
 export const ACTION_LABELS: Record<CombatActionType, string> = {

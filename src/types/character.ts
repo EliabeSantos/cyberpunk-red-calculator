@@ -12,7 +12,12 @@ export interface CharacterIdentity { name: string; player: string; role: string;
 /** O nível é a única pontuação persistida da perícia; Base é sempre derivada do STAT. */
 export interface Skill { name: string; stat: AttributeName; category: import("@/data/skills").SkillCategory; costMultiplier: 1 | 2; level: number; specialization?: string; }
 export type Skills = Record<string, Skill>;
-export interface CombatStats { hp: { current: number; max: number }; stamina: { current: number; max: number }; armor: { head: number; body: number }; criticalInjuries: CriticalInjury[]; deathSaveDC: number; deathSaveFailures: number; isDead: boolean; }
+export interface CombatStats { hp: { current: number; max: number }; stamina: { current: number; max: number }; armor: { head: number; body: number }; criticalInjuries: CriticalInjury[]; deathSaveDC: number; deathSaveFailures: number; isDead: boolean; /**
+ * F1.14.2 — iniciativa autoritativa da Mesa (`mesa_combatants.initiative`).
+ * Projeção do estado da Mesa para a ficha (via `syncMesaCharacterState`);
+ * a ficha NUNCA a grava por conta própria durante `mesa-combat`.
+ * `undefined`/`null` = ninguém registrou ainda.
+ */ initiative?: number | null; }
 export interface Weapon { id: string; catalogItemId?: string; name: string; damage: string; rateOfFire?: number; magazine?: number; ammo?: number; skill?: string; attackType?: import("@/types/attack").AttackType; }
 export interface CyberwareItem { id: string; /** Referência ao catálogo: é ela que permite resolver efeitos, requisitos e remoção. */ catalogItemId?: string; name: string; humanityLoss?: string; installedAt: string; isBorgware?: boolean; /** Armas integradas criadas na instalação (ex.: Mantis Blades), removidas junto com o cyberware. */ integratedWeaponIds?: string[]; /** Índice do estágio de ativação ativo; undefined = inativo (toggle manual). */ activeStage?: number; }
 export interface InventoryItem { id: string; name: string; quantity: number; category?: string; catalogItemId?: string; notes?: string; }

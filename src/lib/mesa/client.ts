@@ -9,7 +9,7 @@
  * (`cyberpunk-red-toolkit:characters:v1`); aqui só mandamos uma CÓPIA quando
  * o jogador vincula o personagem a uma mesa.
  */
-import type { MesaBattle, MesaParticipant, MesaSession, MesaState } from "@/lib/mesa/types";
+import type { MesaBattle, MesaParticipant, MesaSession, MesaState, PlayerDamageOutcome, PlayerHealingOutcome, PlayerInitiativeOutcome } from "@/lib/mesa/types";
 import type { AttackResult, DamageResult } from "@/lib/combat/contract";
 import type { DiceResult } from "@/lib/dice";
 import type { MesaRollSummary } from "@/lib/mesa/rollPolicy";
@@ -146,6 +146,8 @@ export interface StartCombatOptions {
    * rodando).
    */
   restart?: boolean;
+  /** Materializa o Mestre somente como controlador, sem seu personagem. */
+  gmParticipation?: "character" | "gm_only";
 }
 
 export async function startCombat(
@@ -159,6 +161,7 @@ export async function startCombat(
       enemies,
       encounter: options.encounter ?? null,
       restart: options.restart ?? false,
+      gmParticipation: options.gmParticipation ?? "character",
     },
   });
 }
@@ -194,6 +197,31 @@ export async function performAction(
     method: "POST",
     body: { combatantId, actionType, meters },
   });
+}
+
+/** F1.14.3 — só a intenção; o servidor aplica resolveAction/applyAction. */
+export async function moveMesa(input: {
+  sessionId: string;
+  actorCombatantId: string;
+  distance: number;
+  resolutionId?: string;
+}): Promise<{ combatantId: string; distance: number; movementRemaining: number; actionsRemaining: number; committed: boolean }> {
+  const { sessionId, ...intent } = input;
+  return api(`/api/mesa/${sessionId}/combat/move`, {
+    method: "POST",
+    body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() },
+  });
+}
+
+/** Metadados privados para a tela de controle do GM (não entram no snapshot Player). */
+export interface MesaControlMetadata {
+  combatantId: string;
+  weapons: import("@/lib/combat/contract").CombatWeapon[];
+}
+
+export async function fetchMesaControlMetadata(sessionId: string): Promise<MesaControlMetadata[]> {
+  const result = await api<{ combatants: MesaControlMetadata[] }>(`/api/mesa/${sessionId}/combat/control`);
+  return Array.isArray(result.combatants) ? result.combatants : [];
 }
 
 /** Envia apenas intenção; o resultado é produzido pelo servidor/Combat Engine. */
@@ -236,6 +264,8 @@ export async function reloadMesa(input: {
   sessionId: string;
   resolutionId?: string;
   weaponId: string;
+  /** Necessário somente quando o GM controla um inimigo. */
+  actorCombatantId?: string;
 }): Promise<{
   weaponId: string;
   ammoBefore: number;
@@ -249,12 +279,115 @@ export async function reloadMesa(input: {
     body: {
       resolutionId: input.resolutionId ?? crypto.randomUUID(),
       weaponId: input.weaponId,
+      ...(input.actorCombatantId ? { actorCombatantId: input.actorCombatantId } : {}),
+    },
+  });
+}
+
+export async function consumeMesaItem(input: {
+  sessionId: string;
+  resolutionId?: string;
+  actorCombatantId: string;
+  itemId: string;
+  amount: number;
+}): Promise<{
+  combatantId: string;
+  itemId: string;
+  itemName: string;
+  quantityBefore: number;
+  quantityAfter: number;
+  consumed: number;
+  actionsBefore: number;
+  actionsAfter: number;
+}> {
+  return api(`/api/mesa/${input.sessionId}/combat/item-consume`, {
+    method: "POST",
+    body: {
+      resolutionId: input.resolutionId ?? crypto.randomUUID(),
+      actorCombatantId: input.actorCombatantId,
+      itemId: input.itemId,
+      amount: input.amount,
+    },
+  });
+}
+
+/**
+ * F1.13.2 — usa um item de cura na Mesa (server-authoritative, atômico).
+ *
+ * Só manda intenção: `itemId` (id estável) do combatente do próprio jogador.
+ * Cura, HP final, quantidade restante e Action debitada são resolvidos pelo
+ * servidor numa única transação.
+ */
+/**
+ * F1.13.2 — resultado da resolução atômica do item de cura.
+ *
+ * É a única "confirmação" que a ficha recebe: ela NÃO aplica nada por conta
+ * própria, só mostra o que o servidor registrou.
+ */
+export interface MesaItemHealResult {
+  combatantId: string;
+  itemId: string;
+  itemName: string;
+  quantityBefore: number;
+  quantityAfter: number;
+  hpBefore: number;
+  hpAfter: number;
+  hpMax: number;
+  restored: number;
+  actionsBefore: number;
+  actionsAfter: number;
+  committed: boolean;
+}
+
+/**
+ * F1.13.2/F1.13.4 — **intenção** de usar um item de cura (nunca dano, nunca
+ * HP final, nunca quantidade): o servidor valida, consome, cura e registra em
+ * uma única transação.
+ */
+export async function applyMesaHealingItem(input: {
+  sessionId: string;
+  resolutionId?: string;
+  actorCombatantId: string;
+  itemId: string;
+}): Promise<MesaItemHealResult> {
+  return api(`/api/mesa/${input.sessionId}/combat/item-heal`, {
+    method: "POST",
+    body: {
+      resolutionId: input.resolutionId ?? crypto.randomUUID(),
+      actorCombatantId: input.actorCombatantId,
+      itemId: input.itemId,
     },
   });
 }
 
 export async function endTurn(sessionId: string): Promise<void> {
   await api(`/api/mesa/${sessionId}/combat/turn`, { method: "POST", body: {} });
+}
+
+export interface MesaDeathSaveResult {
+  combatantId: string;
+  diceRoll: number;
+  dc: number;
+  success: boolean;
+  failuresAfter: number;
+  characterDied: boolean;
+  deathSaveDC: number;
+  committed: boolean;
+}
+
+/** F1.15 — envia somente a intenção; rolagem e morte são do servidor. */
+export async function rollMesaDeathSave(input: {
+  sessionId: string;
+  actorCombatantId: string;
+  resolutionId?: string;
+}): Promise<MesaDeathSaveResult> {
+  return api(`/api/mesa/${input.sessionId}/combat/death-save`, {
+    method: "POST",
+    body: {
+      resolutionId: input.resolutionId ?? crypto.randomUUID(),
+      actorCombatantId: input.actorCombatantId,
+    },
+  });
 }
 
 /**
@@ -269,14 +402,15 @@ export async function sendMesaRoll(
   sessionId: string,
   roll: MesaRollSummary,
   key?: string | null,
+  resolutionId = crypto.randomUUID(),
 ): Promise<void> {
   await api(`/api/mesa/${sessionId}/combat/roll`, {
     method: "POST",
-    body: { roll, key: key || undefined },
+    body: { roll, key: key || undefined, resolutionId },
   });
 }
 
-/** Atualização de vida enviada pela ORIGEM (ficha do jogador / encontro do GM). */
+/** Atualização de vida da origem; durante combate ativo, Player não pode espelhar HP. */
 export interface MesaHpUpdate {
   hp: number;
   /** HP máximo — só a ficha envia; o servidor ajusta a coluna junto. */
@@ -350,6 +484,135 @@ export interface MesaEngineDamageResult {
   updated: boolean;
   hp: number | null;
   isDead: boolean | null;
+}
+
+/**
+ * F1.12.1 — intenção de dano EXTERNO sobre um PERSONAGEM (Player Damage
+ * Gateway). Só isto sai do navegador: HP/Armor/lesão/morte são calculados e
+ * persistidos no servidor. `finalHp`/`finalArmor`/`isDead` são RECUSADOS lá
+ * (400 `client_authority_forbidden`) — não tente enviá-los.
+ */
+export interface PlayerDamageIntent {
+  /** Linha de `mesa_combatants` do alvo (kind = "character"). */
+  targetCombatantId: string;
+  /** HP que ESTE cliente viu antes do dano — pré-condição/CAS no servidor. */
+  hpBefore: number;
+  /** Dano bruto a resolver no Damage Engine (a armadura decide o resto). */
+  amount: number;
+  /** Local de impacto (padrão: corpo). */
+  hitLocation?: "head" | "body" | "leg" | "held_item";
+  /** Dados individuais da rolagem — habilita o gatilho de Critical Injury. */
+  damageRolls?: number[];
+  /** Variante legada `ignore` de armadura (mesmo caminho do ataque). */
+  ignoreArmor?: boolean;
+  /** Classe da fonte: "explosion" | "fall" | "chooh2" | "trap" | ... */
+  sourceType?: string;
+  /** Contexto curto de cena — vira texto do evento do combate. */
+  sourceContext?: string;
+  /**
+   * Identidade desta intenção. Reutilize a MESMA ao repetir a chamada: o
+   * servidor devolve o resultado já gravado sem aplicar dano de novo.
+   */
+  resolutionId?: string;
+}
+
+/**
+ * Player Damage Gateway — `POST /api/mesa/[id]/combat/player-damage`.
+ *
+ * LANÇA em recusa (409 `stale_hp`/`hp_conflict`, 400, rede): o chamador decide
+ * o fallback. `200 {updated:false}` (sem combate ativo/alvo) é sucesso
+ * silencioso, igual ao caminho do inimigo.
+ */
+export async function applyPlayerDamage(
+  sessionId: string,
+  intent: PlayerDamageIntent,
+): Promise<PlayerDamageOutcome> {
+  return api(`/api/mesa/${sessionId}/combat/player-damage`, {
+    method: "POST",
+    body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() },
+  });
+}
+
+/**
+ * F1.12.2 — intenção de CURA sobre um PERSONAGEM (Player Healing Gateway).
+ * Só isto sai do navegador: o servidor lê o HP atual da Mesa e aplica
+ * `min(hpAtual + amount, hpMax)`. `hpAfter`/`finalHp` são RECUSADOS lá
+ * (400 `client_authority_forbidden`) — não tente enviá-los.
+ */
+export interface PlayerHealingIntent {
+  /** Linha de `mesa_combatants` do alvo (kind = "character"). */
+  targetCombatantId: string;
+  /** Inteiro > 0. O servidor decide quanto disso entra na conta. */
+  amount: number;
+  /** Classe da fonte (rótulo, vira texto de evento): "gm_adjust" | ... */
+  sourceType?: string;
+  /** Contexto curto de cena — vira texto do evento do combate. */
+  sourceContext?: string;
+  /**
+   * Identidade desta intenção. Reutilize a MESMA ao repetir a chamada: o
+   * servidor devolve o resultado já gravado sem curar de novo.
+   */
+  resolutionId?: string;
+}
+
+/**
+ * Player Healing Gateway — `POST /api/mesa/[id]/combat/player-heal`.
+ *
+ * LANÇA em recusa (410 sessão encerrada, 409 combate inativo, 400/404, rede):
+ * o chamador decide o fallback. `200 {updated:false}` é o alvo já estar no
+ * máximo — sucesso, sem efeito.
+ */
+export async function applyPlayerHealing(
+  sessionId: string,
+  intent: PlayerHealingIntent,
+): Promise<PlayerHealingOutcome> {
+  return api(`/api/mesa/${sessionId}/combat/player-heal`, {
+    method: "POST",
+    body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() },
+  });
+}
+
+/**
+ * F1.14.2 — intenção de INICIATIVA do PRÓPRIO personagem (Player Initiative
+ * Gateway). Só isto sai do navegador: a rolagem roda no RNG da ficha e o
+ * servidor grava o total em `mesa_combatants.initiative`.
+ *
+ * `initiativeOrder`, `activeCombatant`, `turn`, `actionsRemaining` e demais
+ * campos derivados são RECUSADOS lá (400 `client_authority_forbidden`) —
+ * ordem e turno continuam sendo da rolagem coletiva do Mestre.
+ */
+export interface PlayerInitiativeIntent {
+  /** Linha de `mesa_combatants` do PRÓPRIO combatante (kind = "character"). */
+  actorCombatantId: string;
+  /** Total inteiro rolado pela ficha: 1d10 + REF + mods (limites do projeto). */
+  initiative: number;
+  /**
+   * Identidade desta intenção. Reutilize a MESMA ao repetir a chamada: o
+   * servidor devolve o resultado já gravado sem gravar de novo.
+   */
+  resolutionId?: string;
+}
+
+export type MesaInitiativeResult = PlayerInitiativeOutcome & { committed: boolean };
+
+/**
+ * Player Initiative Gateway — `POST /api/mesa/[id]/combat/initiative`.
+ *
+ * LANÇA em recusa (410 sessão encerrada, 409 combate/rolagem/conflito, 400/403,
+ * rede): o chamador decide o fallback. Em sucesso o valor exibido na ficha não
+ * é o deste retorno — é o que chega depois pelo estado da Mesa.
+ */
+export async function registerMesaInitiative(input: {
+  sessionId: string;
+  actorCombatantId: string;
+  initiative: number;
+  resolutionId?: string;
+}): Promise<MesaInitiativeResult> {
+  const { sessionId, ...intent } = input;
+  return api(`/api/mesa/${sessionId}/combat/initiative`, {
+    method: "POST",
+    body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() },
+  });
 }
 
 export async function addEnemies(sessionId: string, enemies: unknown[]): Promise<void> {

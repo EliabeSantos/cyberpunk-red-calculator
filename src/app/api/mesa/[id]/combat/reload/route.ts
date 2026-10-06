@@ -18,6 +18,7 @@ export async function POST(request: Request, context: Context): Promise<Response
       token: tokenFrom(request),
       resolutionId: body.resolutionId,
       weaponId: body.weaponId,
+      actorCombatantId: body.actorCombatantId,
     });
     if (outcome.committed) await publishMesaState(id);
     return ok({ ...outcome.result });

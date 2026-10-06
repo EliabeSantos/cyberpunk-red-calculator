@@ -101,6 +101,7 @@ export default function MesaEncounterStart({ enemies, encounter, battle, onStart
   // Só para reagir a criar/entrar noutra aba: o valor é lido no clique.
   useSyncExternalStore(subscribeToMembership, getMembershipSnapshot, getServerMembershipSnapshot);
   const [busy, setBusy] = useState(false);
+  const [gmParticipation, setGmParticipation] = useState<"character" | "gm_only">("character");
 
   async function handleStart(mode: "start" | "restart") {
     const mesa = findGmMesa();
@@ -111,18 +112,18 @@ export default function MesaEncounterStart({ enemies, encounter, battle, onStart
       if (mode === "restart") {
         try {
           // Mesma partida ainda ativa aqui → o servidor recomeça sem fechar.
-          await startCombat(mesa.sessionId, enemies, { encounter, restart: true });
+          await startCombat(mesa.sessionId, enemies, { encounter, restart: true, gmParticipation });
         } catch (caught) {
           // Quem tem o combate ativo é OUTRO encontro: encerra e entra com este.
           if (caught instanceof MesaApiError && caught.code === "combat_already_active") {
             await endCombat(mesa.sessionId);
-            await startCombat(mesa.sessionId, enemies, encounter ? { encounter } : {});
+            await startCombat(mesa.sessionId, enemies, encounter ? { encounter, gmParticipation } : { gmParticipation });
           } else {
             throw caught;
           }
         }
       } else {
-        await startCombat(mesa.sessionId, enemies, encounter ? { encounter } : {});
+        await startCombat(mesa.sessionId, enemies, encounter ? { encounter, gmParticipation } : { gmParticipation });
       }
 
       onStarted?.({
@@ -182,6 +183,31 @@ export default function MesaEncounterStart({ enemies, encounter, battle, onStart
 
   return (
     <div className="mesa-encounter-start">
+      <fieldset className="mesa-gm-participation">
+        <legend>Participação do Mestre</legend>
+        <label>
+          <input
+            type="radio"
+            name="gm-participation"
+            value="gm_only"
+            checked={gmParticipation === "gm_only"}
+            onChange={() => setGmParticipation("gm_only")}
+            disabled={busy}
+          />
+          GM only — controlar inimigos
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="gm-participation"
+            value="character"
+            checked={gmParticipation === "character"}
+            onChange={() => setGmParticipation("character")}
+            disabled={busy}
+          />
+          Usar meu personagem
+        </label>
+      </fieldset>
       <button
         type="button"
         className="gm-button gm-button-small mesa-start-primary"

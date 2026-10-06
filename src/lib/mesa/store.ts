@@ -28,7 +28,10 @@ import {
 } from "@/lib/combatEngine";
 import { getCyberwareMoveModifier } from "@/lib/cyberwareEffects";
 import { ENEMY_DAMAGE_POLICY, isDefeatedBy } from "@/lib/combat/damage";
-import { isAmmoRelevantToWeapons, planReload, applyReload } from "@/data/enemySupplies";
+import { resolveDeathSave } from "@/lib/damage";
+import { getSupplyHealAmount, isAmmoRelevantToWeapons, planReload, applyReload } from "@/data/enemySupplies";
+import { findSupplyEntry, normalizeSupplyInventory, resolveSupplyItemId, stableItemId } from "@/data/supplyItems";
+import { clampHealing } from "@/lib/healing";
 import { execute } from "@/lib/combat/engine";
 import { rollWeaponDamage } from "@/lib/combat/weaponDamage";
 import { resolveHitLocation } from "@/lib/combat/hitLocation";
@@ -55,11 +58,16 @@ import type {
   MesaSession,
   MesaState,
   MesaSupplies,
+  PlayerDamageOutcome,
+  PlayerHealingOutcome,
+  PlayerDeathSaveOutcome,
+  PlayerInitiativeOutcome,
 } from "@/lib/mesa/types";
 import { DatabaseQueryError, getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { ACTION_LABELS, DENIAL_MESSAGES } from "@/lib/mesa/messages";
 import {
   formatRollEvent,
+  formatPlayerRollEvent,
   MESA_ROLL_ACTION,
   parseMesaRoll,
   planRollDebit,
@@ -133,7 +141,11 @@ function requireResolutionId(raw: unknown): string {
   return raw.trim();
 }
 
-async function storedAttackResolution(sessionId: string, resolutionId: string, combatId?: string): Promise<AttackResolutionRow | null> {
+async function storedAttackResolution<T = IntegratedAttackResponse>(
+  sessionId: string,
+  resolutionId: string,
+  combatId?: string,
+): Promise<AttackResolutionRow<T> | null> {
   let request = db()
     .from("mesa_attack_resolutions")
     .select("combat_id,status,claim_token,result")
@@ -143,14 +155,18 @@ async function storedAttackResolution(sessionId: string, resolutionId: string, c
   return (await query(
     request.order("created_at", { ascending: false }).limit(1).maybeSingle(),
     "Falha ao consultar a resolução do ataque",
-  )) as AttackResolutionRow | null;
+  )) as AttackResolutionRow<T> | null;
 }
 
-async function waitForAttackResolution(sessionId: string, resolutionId: string, combatId?: string): Promise<IntegratedAttackResponse> {
+async function waitForAttackResolution<T = IntegratedAttackResponse>(
+  sessionId: string,
+  resolutionId: string,
+  combatId?: string,
+): Promise<T> {
   // Uma requisição concorrente pode encontrar o claim antes do commit. Ela não
   // executa o Engine: aguarda o commit atômico da requisição dona do claim.
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const row = await storedAttackResolution(sessionId, resolutionId, combatId);
+    const row = await storedAttackResolution<T>(sessionId, resolutionId, combatId);
     if (row?.status === "committed" && row.result) return row.result;
     if (row?.status === "failed") {
       throw new MesaError("A resolução deste ataque falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
@@ -165,7 +181,7 @@ async function waitForAttackResolution(sessionId: string, resolutionId: string, 
         p_resolution_id: resolutionId,
       }),
       "Falha ao verificar a resolução interrompida",
-    )) as Array<{ status: "missing" | "processing" | "committed" | "failed"; result: IntegratedAttackResponse | null }> | null;
+    )) as Array<{ status: "missing" | "processing" | "committed" | "failed"; result: T | null }> | null;
     const state = recovered?.[0];
     if (state?.status === "committed" && state.result) return state.result;
     if (state?.status === "failed") {
@@ -217,11 +233,11 @@ async function waitForReloadResolution(sessionId: string, resolutionId: string, 
 
 function databaseResolutionError(error: unknown): MesaError | null {
   if (!(error instanceof Error)) return null;
-  const code = ["action_conflict", "hp_conflict", "resolution_in_progress", "resolution_not_claimed", "resolution_failed"].find((candidate) =>
+  const code = ["action_conflict", "hp_conflict", "death_save_conflict", "resolution_in_progress", "resolution_not_claimed", "resolution_failed"].find((candidate) =>
     error.message.includes(candidate),
   );
   if (!code) return null;
-  const status = code === "hp_conflict" || code === "action_conflict" || code === "resolution_in_progress" || code === "resolution_failed" ? 409 : 500;
+  const status = code === "hp_conflict" || code === "action_conflict" || code === "death_save_conflict" || code === "resolution_in_progress" || code === "resolution_failed" ? 409 : 500;
   return new MesaError(code === "hp_conflict" ? "A vida do alvo mudou entre a resolução e a persistência." : "A resolução concorrente não pôde ser aplicada.", status, code);
 }
 
@@ -536,6 +552,7 @@ interface SessionRow {
   status: MesaSession["status"];
   join_code: string;
   created_at: string;
+  updated_at?: string;
 }
 
 interface ParticipantRow {
@@ -559,6 +576,7 @@ interface CombatRow {
   initiative_started: boolean;
   event_log: MesaEvent[] | null;
   created_at: string;
+  updated_at?: string;
 }
 
 interface CombatantRow {
@@ -584,6 +602,8 @@ interface CombatantRow {
   hp_current: number;
   hp_max: number;
   is_dead: boolean;
+  death_save_dc?: number;
+  death_save_failures?: number;
   conditions: string[] | null;
   sort_order: number;
 }
@@ -602,18 +622,25 @@ interface IntegratedAttackOutcome {
   committed: boolean;
 }
 
-interface AttackResolutionRow {
+/**
+ * Linha da resolução durável (`mesa_attack_resolutions`).
+ *
+ * O payload é genérico de propósito: a MESMA infraestrutura claim/commit/
+ * release serve ao ataque (F1.7.16) e ao Player Damage Gateway (F1.12.1) — o
+ * que muda é o formato do `result`, nunca a máquina de estados.
+ */
+interface AttackResolutionRow<T> {
   combat_id: string;
   status: "processing" | "committed" | "failed";
   claim_token: string;
-  result: IntegratedAttackResponse | null;
+  result: T | null;
 }
 
-interface AttackResolutionClaim {
+interface AttackResolutionClaim<T> {
   claimed: boolean;
   status: "processing" | "committed" | "failed";
   claim_token: string;
-  result: IntegratedAttackResponse | null;
+  result: T | null;
 }
 
 interface ReloadResolutionRow {
@@ -698,6 +725,8 @@ function toCombatant(row: CombatantRow): MesaCombatant {
     hpCurrent: row.hp_current,
     hpMax: row.hp_max,
     isDead: row.is_dead,
+    deathSaveDC: row.death_save_dc ?? 0,
+    deathSaveFailures: row.death_save_failures ?? 0,
     conditions: Array.isArray(row.conditions) ? row.conditions : [],
     sortOrder: row.sort_order,
   };
@@ -725,6 +754,9 @@ export function combatParticipantFromRow(row: CombatantRow): CombatParticipant |
       conditions: (row.conditions ?? []).map((name) => ({ id: name, name })),
       initiative: row.initiative,
       isDead: row.is_dead,
+      deathSave: row.kind === "character"
+        ? { dc: row.death_save_dc ?? 0, failures: row.death_save_failures ?? 0 }
+        : undefined,
     },
     economy: {
       actionsMax: row.actions_max,
@@ -745,18 +777,27 @@ function ammoStateForParticipant(participant: CombatParticipant | null): Record<
   return entries.length > 0 ? Object.fromEntries(entries) : null;
 }
 
-/** Materializa somente munição relevante, nunca o inventário completo da ficha. */
+/** Materializa munição relevante E itens de cura: os dois são mochila da Mesa. */
 function suppliesForCharacter(
   sheet: Character,
   snapshot: CombatState["participants"][number] | null,
 ): MesaSupplies {
   const weapons = snapshot?.weapons ?? [];
-  return {
-    inventory: (sheet.inventory ?? [])
-      .filter((item) => isAmmoRelevantToWeapons(item.name, weapons))
-      .map((item) => ({ item: item.name, quantity: Math.max(0, Math.floor(item.quantity)) }))
-      .filter((item) => item.quantity > 0),
-  };
+  // Munição entra pelo critério já existente (alimenta uma arma do snapshot);
+  // cura entra pela MESMA regra que o botão [Usar] vai usar no servidor
+  // (`getSupplyHealAmount`) — inclusão e uso nunca podem discordar.
+  const inventory = (sheet.inventory ?? [])
+    .filter(
+      (item) =>
+        isAmmoRelevantToWeapons(item.name, weapons) || getSupplyHealAmount(item.name) !== null,
+    )
+    .map((item) => ({
+      itemId: stableItemId(item.name),
+      item: item.name,
+      quantity: Math.max(0, Math.floor(item.quantity)),
+    }))
+    .filter((item) => item.quantity > 0 && item.itemId.length > 0);
+  return { inventory: normalizeSupplyInventory(inventory) };
 }
 
 // ---------------------------------------------------------------------------
@@ -805,6 +846,21 @@ export function requireGM(actor: Actor): void {
 }
 
 /**
+ * Exige papel de Jogador (F1.14.2) — o Player Initiative Gateway registra a
+ * iniciativa do PRÓPRIO combatente; o Mestre continua com a rolagem coletiva
+ * (`rollInitiativeForAll`) e não entra por este caminho.
+ */
+export function requirePlayer(actor: Actor): void {
+  if (actor.participant.role !== "player") {
+    throw new MesaError(
+      "Este registro é dos Jogadores: o Mestre usa a rolagem de iniciativa da Mesa.",
+      403,
+      "player_only",
+    );
+  }
+}
+
+/**
  * Autoridade do ator para o endpoint de ataque integrado.
  *
  * `actorId` identifica apenas uma linha de `mesa_combatants`; ele nunca define
@@ -829,6 +885,16 @@ export function authorizeCombatAttackActor(
   if (combatant.participant_id !== actor.participant.id) {
     throw new MesaError("Você não pode controlar este combatente.", 403, "combatant_not_owned");
   }
+}
+
+/** Decide quais participantes viram combatants sem criar um "GM fake". */
+export function shouldMaterializeParticipantInCombat(
+  role: MesaParticipant["role"],
+  characterId: string | null,
+  gmParticipation: "character" | "gm_only" = "character",
+): boolean {
+  if (!characterId) return false;
+  return !(role === "gm" && gmParticipation === "gm_only");
 }
 
 /**
@@ -884,8 +950,16 @@ export async function getMesaState(sessionId: string, viewerParticipantId: strin
   if (!sessionRow) throw new MesaError("Mesa não encontrada.", 404, "session_not_found");
 
   const viewerRow = (participantsRow ?? []).find((row) => row.id === viewerParticipantId);
+  const stateVersion = [
+    (sessionRow as SessionRow).updated_at,
+    combatRow ? (combatRow as CombatRow).updated_at : null,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .sort()
+    .at(-1);
 
   return {
+    ...(stateVersion ? { stateVersion } : {}),
     session: toSession(sessionRow as SessionRow),
     participants: (participantsRow ?? []).map((row) => toParticipant(row as ParticipantRow)),
     combat: combatRow ? toCombat(combatRow as CombatRow) : null,
@@ -911,6 +985,29 @@ export async function getBroadcastState(sessionId: string): Promise<BroadcastSta
     combat: state.combat,
     combatants: state.combatants,
   };
+}
+
+/**
+ * Metadados de controle que não devem entrar no snapshot compartilhado.
+ * O GM recebe somente as armas materializadas no combat snapshot; Players
+ * continuam vendo apenas a projeção pública de `MesaCombatant`.
+ */
+export async function getMesaControlMetadata(sessionId: string, participantId: string): Promise<{
+  combatantId: string;
+  weapons: NonNullable<CombatParticipant["weapons"]>;
+}[]> {
+  const participant = (await query(
+    db().from("mesa_participants").select("role").eq("id", participantId).eq("session_id", sessionId).maybeSingle(),
+    "Falha ao consultar o controlador",
+  )) as { role: MesaParticipant["role"] } | null;
+  if (!participant || participant.role !== "gm") throw new MesaError("Apenas o Mestre pode consultar o controle do combate.", 403, "gm_only");
+
+  const rows = (await query(
+    db().from("mesa_combatants").select("id,kind,combat_snapshot").eq("session_id", sessionId).eq("kind", "enemy"),
+    "Falha ao consultar metadados de controle",
+  )) as Array<{ id: string; kind: "enemy"; combat_snapshot: CombatParticipant | null }> | null;
+
+  return (rows ?? []).map((row) => ({ combatantId: row.id, weapons: row.combat_snapshot?.weapons ?? [] }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,6 +1183,22 @@ export async function linkCharacter(input: {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireActiveSession(session);
 
+  // F1.14.6 — durante `mesa-combat`, a ficha enviada pelo navegador não pode
+  // virar um bypass para estado mecânico. Embora esta rota grave
+  // `mesa_characters.sheet` (e não diretamente `mesa_combatants`), o snapshot
+  // server-side da ficha é a fonte de cálculos para resoluções futuras. Player
+  // não pode reenviar HP, armor, CI, Death Save, ammo, atributos ou qualquer
+  // outro estado de combate enquanto a Mesa estiver resolvendo o combate.
+  // Fora de combate, o fluxo de vinculação/salvamento permanece inalterado;
+  // GM também preserva o comportamento existente.
+  if (participant.role === "player" && (await getActiveCombat(session.id))) {
+    throw new MesaError(
+      "A ficha está bloqueada durante o combate da Mesa; o estado de combate é atualizado pelos gateways.",
+      409,
+      "mesa_authoritative",
+    );
+  }
+
   if (input.characterId === null || input.characterId === undefined || input.characterId === "") {
     const cleared = (await query(
       db().from("mesa_participants").update({ character_id: null }).eq("id", participant.id).select("*").single(),
@@ -1173,6 +1286,7 @@ export async function appendEvent(combatId: string, event: Omit<MesaEvent, "at">
     "Falha ao consultar o histórico do combate",
   )) as { event_log: MesaEvent[] | null } | null;
   const currentLog = Array.isArray(row?.event_log) ? row.event_log : [];
+  if (event.resolutionId && currentLog.some((entry) => entry.resolutionId === event.resolutionId)) return;
   const next = [...currentLog, { at: new Date().toISOString(), ...event }].slice(-MAX_EVENT_LOG);
   await query(
     db().from("mesa_combats").update({ event_log: next, updated_at: new Date().toISOString() }).eq("id", combatId),
@@ -1236,6 +1350,7 @@ export async function startCombat(input: {
   enemies?: unknown;
   encounter?: unknown;
   restart?: unknown;
+  gmParticipation?: unknown;
 }): Promise<void> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireGM({ session, participant });
@@ -1243,6 +1358,7 @@ export async function startCombat(input: {
 
   const encounter = sanitizeEncounterRef(input.encounter);
   const restart = input.restart === true;
+  const gmOnly = input.gmParticipation === "gm_only";
 
   // 1. Encontro checado ANTES de qualquer escrita: falhou aqui e nada mudou.
   let reuseBattleId: string | null = null;
@@ -1352,6 +1468,7 @@ export async function startCombat(input: {
 
     for (const row of participantsRow) {
       if (!row.character_id) continue;
+      if (!shouldMaterializeParticipantInCombat(row.role, row.character_id, gmOnly ? "gm_only" : "character")) continue;
       const sheet = await loadSheet(row.character_id);
       if (!sheet) continue;
       // MOVE × 2 metros por turno — mesma regra do modo local, calculada aqui.
@@ -1369,8 +1486,10 @@ export async function startCombat(input: {
         movement_max: movement,
         movement_remaining: movement,
         hp_current: sheet.combat.hp.current,
-        hp_max: sheet.combat.hp.max,
-        is_dead: Boolean(sheet.combat.isDead),
+         hp_max: sheet.combat.hp.max,
+         is_dead: Boolean(sheet.combat.isDead),
+         death_save_dc: Math.max(0, Math.floor(sheet.combat.deathSaveDC)),
+         death_save_failures: Math.max(0, Math.floor(sheet.combat.deathSaveFailures)),
         combat_snapshot: snapshot,
         combat_ammo: ammoStateForParticipant(snapshot),
         supplies: suppliesForCharacter(sheet, snapshot),
@@ -1405,8 +1524,10 @@ export async function startCombat(input: {
         movement_max: movement,
         movement_remaining: movement,
         hp_current: enemy.hp,
-        hp_max: enemy.hpMax,
-        is_dead: false,
+         hp_max: enemy.hpMax,
+         is_dead: false,
+         death_save_dc: 0,
+         death_save_failures: 0,
         sort_order: sortOrder++,
       });
     }
@@ -1476,7 +1597,7 @@ function sanitizeSupplies(raw: unknown): MesaSupplies | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const input = raw as Record<string, unknown>;
 
-  const inventory: Array<{ item: string; quantity: number }> = [];
+  const entries: Array<{ item: string; quantity: number }> = [];
   if (Array.isArray(input.inventory)) {
     for (const entry of input.inventory) {
       if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
@@ -1486,10 +1607,18 @@ function sanitizeSupplies(raw: unknown): MesaSupplies | null {
       const name = item.trim().slice(0, 60);
       const qty = Number.isFinite(quantity) ? Math.max(0, Math.min(999, Math.floor(quantity))) : 0;
       if (name.length === 0 || qty === 0) continue;
-      if (inventory.some((existing) => existing.item === name)) continue;
-      inventory.push({ item: name, quantity: qty });
+      // Duplicidade decidida pela IDENTIDADE (id estável), não pelo texto —
+      // e a primeira ocorrência vence: o cliente não amplia estoque repetindo
+      // a linha com outro caixa ou outro rótulo.
+      const itemId = stableItemId(name);
+      if (itemId.length === 0) continue;
+      if (entries.some((existing) => stableItemId(existing.item) === itemId)) continue;
+      entries.push({ item: name, quantity: qty });
     }
   }
+  // F1.13.2 — o `itemId` é SEMPRE derivado no servidor (nunca aceito do
+  // cliente): identidade é função do rótulo + catálogo, não do navegador.
+  const inventory = normalizeSupplyInventory(entries);
 
   const int = (value: unknown): number | null => {
     const parsed = Number(value);
@@ -1625,8 +1754,10 @@ export async function addEnemies(input: {
       movement_max: movement,
       movement_remaining: movement,
       hp_current: enemy.hp,
-      hp_max: enemy.hpMax,
-      is_dead: false,
+       hp_max: enemy.hpMax,
+       is_dead: false,
+       death_save_dc: 0,
+       death_save_failures: 0,
       sort_order: sortOrder++,
     };
   });
@@ -1661,7 +1792,14 @@ export async function removeCombatant(input: {
   }
 }
 
-/** GM ajusta HP, condições, morte ou iniciativa de um combatente. */
+/**
+ * GM ajusta condições, morte ou iniciativa de um combatente — e HP de INIMIGO.
+ *
+ * F1.12.1: durante combate ativo, `hpCurrent`/`isDead` de `kind = "character"`
+ * são RECUSADOS (409 `mesa_authoritative`). Este era o único caminho
+ * client-authoritative que alterava HP de Player na Mesa; o caminho agora é o
+ * Player Damage Gateway (`applyPlayerDamage`, `POST /combat/player-damage`).
+ */
 export async function updateCombatant(input: {
   sessionId: unknown;
   token: unknown;
@@ -1679,6 +1817,21 @@ export async function updateCombatant(input: {
 
   const patch = (typeof input.patch === "object" && input.patch !== null ? input.patch : {}) as Record<string, unknown>;
   const update: Record<string, unknown> = {};
+
+  // F1.12.1 (Fase 9) — durante combate ativo, HP/morte de PERSONAGEM é
+  // autoridade da Mesa: nenhum cliente define o valor final. O caminho é o
+  // Player Damage Gateway (`applyPlayerDamage` → Damage Engine → commit).
+  // Inimigos mantêm o ajuste manual do Mestre: a autoridade de HP de inimigo
+  // é o encontro/espelho (`syncCombatHp`), que já é server-side e fora do
+  // escopo desta etapa.
+  const touchesVitalState = "hpCurrent" in patch || "isDead" in patch;
+  if (touchesVitalState && row.kind === "character" && (await getActiveCombat(session.id))) {
+    throw new MesaError(
+      "Durante o combate, o HP de um Personagem é autoritativo na Mesa: aplique dano pelo gateway de dano externo.",
+      409,
+      "mesa_authoritative",
+    );
+  }
 
   if (typeof patch.hpCurrent === "number" && Number.isFinite(patch.hpCurrent)) {
     const max = row.hp_max;
@@ -1776,9 +1929,10 @@ async function findOwnCombatant(combatId: string, participantId: string): Promis
 /**
  * Sincroniza a VIDA de um combatente com o valor da ORIGEM.
  *
- * Um sentindo só (decisão de 27/09/2026): quem manda é a ficha do jogador e o
- * encontro do Mestre — a mesa apenas exibe; não há escrita de volta na ficha
- * (evita loop e respeita o localStorage do jogador como fonte da verdade).
+ * Fora de combate, a ficha do jogador e o encontro do Mestre podem espelhar a
+ * origem — não há escrita de volta na ficha (evita loop). Durante combate
+ * ativo, porém, a Mesa é autoritativa para personagens: o espelho do Player é
+ * recusado e HP/morte só entram por resolução/gateway server-side.
  *
  * **Precondição `hpBefore` (F1.7.1, Decisão 2)**: quando o chamador envia o HP
  * que a origem acreditava ver ANTES desta mudança, `hp_current`/`is_dead` só
@@ -1792,7 +1946,7 @@ async function findOwnCombatant(combatId: string, participantId: string): Promis
  * navegador continuam funcionando; hoje TODO call site de inimigo envia.
  *
  * Dois caminhos:
- *   • **sem `key`** → o combatente ligado a ESTE participante (qualquer papel);
+ *   • **sem `key`** → o combatente ligado a ESTE participante fora de combate;
  *   • **com `key`** → inimigo pelo `source_key` — somente Mestre, que é quem
  *     aplica dano em `/gm/encounters`.
  *
@@ -2156,6 +2310,747 @@ export async function resolveEnemyDamage(input: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// F1.12.1 — PLAYER DAMAGE GATEWAY (dano externo autoritativo de Player)
+// ---------------------------------------------------------------------------
+
+/**
+ * Prefixo do `resolution_id` gravado em `mesa_attack_resolutions`.
+ *
+ * A infraestrutura de resolução durável (claim/commit/release, F1.7.16) é a
+ * MESMA do ataque; o prefixo é o que impede um `resolutionId` de dano externo
+ * colidir com o de um ataque ou de um reload na mesma mesa/combate.
+ */
+const PLAYER_DAMAGE_RESOLUTION_PREFIX = "player-damage:";
+
+/**
+ * Campos de RESULTADO que um cliente NUNCA pode entregar como autoridade
+ * (F1.12.1, Fase 9). Se algum aparecer no corpo, a intenção é recusada antes
+ * de qualquer leitura: o servidor calcula HP/Armor/CI/morte, o cliente só
+ * descreve o dano que quer resolver.
+ *
+ * `hpBefore` NÃO está na lista: é PRÉ-CONDIÇÃO (CAS verificado contra a linha
+ * do banco), não autoridade — um valor errado recusa a escrita, nunca a impõe.
+ */
+const CLIENT_RESULT_FIELDS = [
+  "finalHp",
+  "finalHP",
+  "hp",
+  "hpCurrent",
+  "hp_current",
+  "hpAfter",
+  "hpMax",
+  "hp_max",
+  "armor",
+  "finalArmor",
+  "combat_armor",
+  "finalCriticalInjury",
+  "finalCriticalInjuries",
+  "criticalInjuries",
+  "critical_injuries",
+  "isDead",
+  "is_dead",
+  "deathSave",
+  "deathSaveDC",
+  "deathSaveFailures",
+];
+
+const NO_PLAYER_DAMAGE: PlayerDamageOutcome = {
+  updated: false,
+  hp: null,
+  isDead: null,
+  armor: null,
+  criticalInjuries: null,
+  damageResult: null,
+};
+
+/**
+ * Recusa o corpo que tenta entregar um RESULTADO pronto (F1.12.1, Fase 9).
+ * Chamado ANTES de autenticar qualquer campo: autoridade vinda do cliente nem
+ * chega perto da resolução. `kind` só muda o texto — a LISTA é a mesma do
+ * dano (F1.12.2): `hpAfter`/`finalHp` são recusados na cura também.
+ */
+function assertIntentOnly(body: unknown, kind: "damage" | "healing" | "initiative" = "damage"): void {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return;
+  const record = body as Record<string, unknown>;
+  const forbidden = CLIENT_RESULT_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(record, field));
+  if (forbidden.length === 0) return;
+  const rule =
+    kind === "healing"
+      ? "Envie apenas a intenção de cura: o HP é calculado aqui."
+      : kind === "initiative"
+        ? "Envie apenas a intenção de rolagem: a iniciativa é gravada aqui."
+        : "Envie apenas a intenção de dano: o HP/Armor/lesão é calculado aqui.";
+  throw new MesaError(
+    `O servidor não aceita autoridade de resultado do cliente (${forbidden.join(", ")}). ${rule}`,
+    400,
+    "client_authority_forbidden",
+  );
+}
+
+/** Texto curto de origem (rótulo do tipo/contexto do dano); ausente → null. */
+function sanitizeSourceText(raw: unknown, max: number): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim().replace(/\s+/g, " ");
+  return value.length > 0 ? value.slice(0, max) : null;
+}
+
+/**
+ * Dados individuais da rolagem de dano — ENTRADA da regra de Critical Injury
+ * (2+ seis), nunca um resultado final. Inválido → recusa; não se inventa dado.
+ */
+function sanitizeDamageRolls(raw: unknown): number[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 20) {
+    throw new MesaError("Dados de dano inválidos.", 400, "invalid_damage_rolls");
+  }
+  return raw.map((value) => {
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 10) {
+      throw new MesaError("Dados de dano inválidos.", 400, "invalid_damage_rolls");
+    }
+    return value;
+  });
+}
+
+/**
+ * F1.12.1 — **Player Damage Gateway**: ponto ÚNICO server-side de dano externo
+ * (ambiental, de cena, de GM, qualquer fonte) aplicado a um PERSONAGEM durante
+ * uma Mesa com combate ativo.
+ *
+ *     intenção (cliente)
+ *       → validação de autoridade + autorização
+ *       → claim da resolução (idempotência durável)
+ *       → linha da Mesa (hp/armor/lesão/morte LIDOS AQUI)
+ *       → engine.execute(state, DamageAction, serverRandom)   ← Damage Engine existente
+ *       → engineDamagePatch (VERBATIM de `changes`)
+ *       → commit_mesa_attack_resolution (transação: patch + evento + status)
+ *       → publishMesaState → Realtime → characterSync → ficha
+ *
+ * ## O que o gateway NÃO faz (F1.12.1, Fases 3 e 4)
+ *
+ * Não existe Armor, ablação, Critical Injury, +5, Mortal Wound ou Hit Location
+ * próprios: tudo continua dentro de `execute`/`applyDamage`, a MESMA fonte que
+ * o ataque integrado usa. `PLAYER_DAMAGE_POLICY` sai do motor pelo TIPO do
+ * alvo (`type === "character"`), então HP pode ficar ≤ 0 sem que a morte mude —
+ * Death Save continua intocado, fora deste escopo.
+ *
+ * F1.14.5: esta é também a autoridade de Critical Injury do personagem Player.
+ * A lesão é produzida pelo mesmo `execute` que resolve o dano (2+ seis e as
+ * demais regras já existentes, inclusive tabela por localização), entra no
+ * mesmo `targetPatch` transacional e chega ao Player por `critical_injuries`.
+ * Não existe POST de Critical Injury escolhida pelo cliente.
+ *
+ * ## Autoridade (Fase 9)
+ *
+ * O cliente envia intenção: `targetCombatantId`, `amount`, `hpBefore`
+ * (pré-condição), `hitLocation?`, `damageRolls?`, `ignoreArmor?`,
+ * `sourceType?`, `sourceContext?`. `finalHp`/`finalArmor`/`criticalInjuries`/
+ * `isDead` são RECUSADOS em 400 (`assertIntentOnly`) — nem são lidos.
+ *
+ * ## Quem pode chamar
+ *
+ * Somente o Mestre (`requireGM`): a fonte externa é decidida pela cena. Dano
+ * de Player contra Player continua no caminho já aprovado
+ * (`attackIntegrated`, `POST /combat/attack`).
+ *
+ * ## Concorrência (Fase 6) e idempotência (Fase 7)
+ *
+ * Concorrência: o MESMO mecanismo do ataque — claim com `claim_token` +
+ * escrita condicional `WHERE hp_current = hp_before AND is_dead = dead_before`
+ * dentro de `commit_mesa_attack_resolution`. Quem perde recebe 409
+ * `hp_conflict`; nunca existe escrita silenciosa por cima.
+ *
+ * Idempotência: DURÁVEL, reutilizando `mesa_attack_resolutions` — mesmo
+ * `resolutionId` devolve o resultado já gravado sem aplicar dano de novo.
+ * O prefixo `player-damage:` mantém o namespace separado do ataque/reload.
+ *
+ * ## Limitação conhecida (Fase 6)
+ *
+ * A RPC de commit também CASa a economia da "linha de ator". Dano externo não
+ * tem ator: passamos o PRÓPRIO ALVO com a economia inalterada (nenhuma Action
+ * ou munição é consumida). Se o alvo executar uma ação exatamente nessa
+ * janela, o commit pode devolver 409 `action_conflict` — falha conservadora,
+ * sem efeito parcial, resolvida por novo `resolutionId`.
+ */
+export async function applyPlayerDamage(input: {
+  sessionId: unknown;
+  token: unknown;
+  /** Corpo cru da intenção: só campos de intenção são lidos; os de resultado recusam. */
+  body: unknown;
+}): Promise<PlayerDamageOutcome> {
+  assertIntentOnly(input.body);
+  const body: Record<string, unknown> =
+    typeof input.body === "object" && input.body !== null && !Array.isArray(input.body)
+      ? (input.body as Record<string, unknown>)
+      : {};
+
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireGM({ session, participant });
+  if (session.status === "finished") return { ...NO_PLAYER_DAMAGE };
+
+  const resolutionId = `${PLAYER_DAMAGE_RESOLUTION_PREFIX}${requireResolutionId(body.resolutionId)}`;
+
+  const combat = await getActiveCombat(session.id);
+  if (!combat) return { ...NO_PLAYER_DAMAGE };
+
+  /* ------------------------- idempotência durável ------------------------ */
+
+  const previous = await storedAttackResolution<PlayerDamageOutcome>(session.id, resolutionId, combat.id);
+  if (previous?.status === "committed" && previous.result) return previous.result;
+  if (previous?.status === "failed") {
+    throw new MesaError("A resolução deste dano falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+  }
+  if (previous?.status === "processing") {
+    return waitForAttackResolution<PlayerDamageOutcome>(session.id, resolutionId, combat.id);
+  }
+
+  const claimRows = (await query(
+    db().rpc("claim_mesa_attack_resolution", {
+      p_session_id: session.id,
+      p_combat_id: combat.id,
+      p_resolution_id: resolutionId,
+    }),
+    "Falha ao reservar a resolução do dano",
+  )) as AttackResolutionClaim<PlayerDamageOutcome>[] | null;
+  const claim = claimRows?.[0];
+  if (!claim) throw new MesaError("Não foi possível reservar a resolução do dano.", 500, "transaction_failed");
+  if (!claim.claimed) {
+    if (claim.status === "committed" && claim.result) return claim.result;
+    if (claim.status === "failed") {
+      throw new MesaError("A resolução deste dano falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+    }
+    return waitForAttackResolution<PlayerDamageOutcome>(session.id, resolutionId, combat.id);
+  }
+  const claimToken = claim.claim_token;
+  let committed = false;
+
+  try {
+    /* ---------------------------- intenção ------------------------------ */
+
+    const targetRowId = typeof body.targetCombatantId === "string" ? body.targetCombatantId.trim() : "";
+    if (!targetRowId) throw new MesaError("Alvo do dano ausente (targetCombatantId).", 400, "target_not_found");
+
+    const rows = (await query(
+      db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
+      "Falha ao consultar os combatentes",
+    )) as CombatantRow[] | null;
+    const targetRow = rows?.find((row) => row.id === targetRowId);
+    if (!targetRow || targetRow.session_id !== session.id) {
+      throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
+    }
+    // Este gateway é de PLAYER: inimigo já tem caminho server-side dedicado
+    // (`POST /combat/damage`, `resolveEnemyDamage`) — não se abre um segundo.
+    if (targetRow.kind !== "character") {
+      throw new MesaError(
+        "Este gateway é para personagens; dano de inimigo passa por /api/mesa/[id]/combat/damage.",
+        400,
+        "not_a_player",
+      );
+    }
+
+    // Pré-condição (CAS de leitura): o cliente declara o HP que VIU. Se a linha
+    // já andou, o dano não é aplicado — protege contra retry e contra estado
+    // defasado do navegador. O commit repete a mesma comparação no WHERE.
+    if (typeof body.hpBefore !== "number" || !Number.isFinite(body.hpBefore)) {
+      throw new MesaError("Dano sem hpBefore (HP do alvo antes deste dano).", 400, "missing_hp_before");
+    }
+    const hpBefore = Math.floor(body.hpBefore);
+    if (targetRow.hp_current !== hpBefore) {
+      throw new MesaError(
+        "HP do alvo não corresponde ao hpBefore desta resolução (já aplicada ou estado mudou).",
+        409,
+        "stale_hp",
+      );
+    }
+
+    if (body.hitLocation !== undefined && !isHitLocation(body.hitLocation)) {
+      throw new MesaError("Local de impacto inválido.", 400, "invalid_action");
+    }
+    const hitLocation = isHitLocation(body.hitLocation) ? body.hitLocation : undefined;
+    const damageRolls = sanitizeDamageRolls(body.damageRolls);
+    const sourceType = sanitizeSourceText(body.sourceType, 40);
+    const sourceContext = sanitizeSourceText(body.sourceContext, 160);
+
+    /* ----------------------- snapshot + Damage Engine -------------------- */
+
+    const participants = (rows ?? [])
+      .map((row) => combatParticipantFromRow(row))
+      .filter((entry): entry is CombatParticipant => entry !== null);
+    const target = participants.find((entry) => entry.id === targetRow.id);
+    if (!target) throw new MesaError("Snapshot de combate do alvo ausente.", 409, "combat_snapshot_missing");
+
+    const state: CombatState = {
+      id: combat.id,
+      status: combat.status,
+      round: combat.round,
+      initiativeStarted: combat.initiative_started,
+      activeParticipantId: combat.active_combatant_id,
+      participants,
+    };
+
+    const action: DamageAction = {
+      type: "damage",
+      // Fonte externa/GM: sem ator — nenhuma Action é consumida por dano de cena.
+      actorId: null,
+      targetId: target.id,
+      amount: Number(body.amount), // validação é do motor (fonte única)
+      ...(hitLocation !== undefined ? { hitLocation } : {}),
+      ...(body.ignoreArmor === true ? { ignoreArmor: true } : {}),
+      ...(damageRolls !== undefined ? { damageRolls } : {}),
+    };
+
+    const result = execute(state, action, serverRandom);
+    if (!result.ok) {
+      const engineError = result.errors?.[0];
+      throw new MesaError(
+        engineError?.message ?? "O motor de combate recusou o dano.",
+        400,
+        engineError?.code ?? "engine_refused",
+      );
+    }
+
+    const patch = engineDamagePatch(result, target.id);
+    const outcome: PlayerDamageOutcome = {
+      updated: true,
+      hp: patch.hp_current ?? targetRow.hp_current,
+      isDead: patch.is_dead ?? targetRow.is_dead,
+      armor: patch.combat_armor ?? targetRow.combat_armor ?? null,
+      criticalInjuries: patch.critical_injuries ?? targetRow.critical_injuries ?? [],
+      damageResult: result.damageResult ?? null,
+    };
+    const eventText = [
+      `Dano externo${sourceType ? ` (${sourceType})` : ""}: ${targetRow.name}`,
+      sourceContext ?? "",
+    ]
+      .filter(Boolean)
+      .join(" — ");
+
+    /* -------------------- commit atômico (Fase 5) ------------------------ */
+
+    // UMA transação cobre patch (HP/Armor/CI/is_dead), evento e status da
+    // resolução. Se qualquer passo falhar, o Postgres desfaz TUDO: HP não
+    // muda, Armor não muda, lesão não muda e o evento não é publicado.
+    const committedResult = (await query(
+        db().rpc("commit_mesa_attack_resolution", {
+        p_session_id: session.id,
+        p_combat_id: combat.id,
+        p_resolution_id: resolutionId,
+        p_claim_token: claimToken,
+        // Dano externo não tem ator: a linha do ALVO carrega a si própria com
+        // a economia inalterada (CAS trivial). Nada é debitado.
+        p_actor_id: targetRow.id,
+        p_target_id: targetRow.id,
+        p_actions_before: targetRow.actions_remaining,
+        p_actions_after: targetRow.actions_remaining,
+        p_ammo_before: targetRow.combat_ammo ?? null,
+        p_ammo_after: targetRow.combat_ammo ?? null,
+        p_target_hp_before: hpBefore,
+        p_target_dead_before: targetRow.is_dead,
+          p_target_patch: patch,
+        p_result: outcome,
+        p_event_text: eventText,
+      }),
+      "Falha ao confirmar o dano externo",
+    )) as PlayerDamageOutcome | null;
+    if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
+    committed = true;
+    return committedResult;
+  } catch (error) {
+    if (!committed) {
+      try {
+        await query(
+          db().rpc("release_mesa_attack_resolution", {
+            p_session_id: session.id,
+            p_combat_id: combat.id,
+            p_resolution_id: resolutionId,
+            p_claim_token: claimToken,
+          }),
+          "Falha ao liberar a resolução do dano",
+        );
+      } catch {
+        // O erro original é mais útil; resolução sem commit não aplicou efeitos.
+      }
+    }
+    throw databaseResolutionError(error) ?? error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// F1.12.2 — PLAYER HEALING GATEWAY (cura autoritativa de Player)
+// ---------------------------------------------------------------------------
+
+/**
+ * Prefixo do `resolution_id` de cura gravado em `mesa_attack_resolutions`.
+ *
+ * A infraestrutura durável (claim/commit/release, F1.7.16) é a MESMA do dano e
+ * do ataque; o prefixo é o que impede um `resolutionId` de cura de colidir com
+ * um de dano externo, de ataque ou de reload na mesma mesa/combate.
+ */
+const PLAYER_HEAL_RESOLUTION_PREFIX = "player-heal:";
+
+/** Limites do rótulo de origem da cura (mesma ordem de grandeza do dano). */
+const HEAL_SOURCE_TYPE_MAX = 40;
+const HEAL_SOURCE_CONTEXT_MAX = 160;
+
+/**
+ * Quantidade de cura — só inteiro POSITIVO. Zero, negativo, fracionário ou
+ * não-numérico são RECUSADOS: nada é arredondado para dentro da conta.
+ */
+function requireHealAmount(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw) || raw <= 0) {
+    throw new MesaError("Valor de cura inválido: informe um número inteiro maior que zero.", 400, "invalid_amount");
+  }
+  return raw;
+}
+
+const PLAYER_DEATH_SAVE_RESOLUTION_PREFIX = "player-death-save:";
+const DEATH_SAVE_FORBIDDEN_FIELDS = [
+  "hp", "hpAfter", "hpCurrent", "hp_current", "finalHp", "isDead", "is_dead", "defeated",
+  "success", "failure", "result", "outcome", "deathSaveResult", "finalResult", "finalValue",
+  "deathSaveDC", "deathSaveFailures", "failuresAfter", "characterDied", "dc", "roll", "diceRoll",
+];
+
+/** F1.15 — o Player envia somente a intenção de rolar a própria Death Save. */
+export async function registerPlayerDeathSave(input: {
+  sessionId: unknown;
+  token: unknown;
+  body: unknown;
+}): Promise<{ result: PlayerDeathSaveOutcome; committed: boolean }> {
+  if (typeof input.body !== "object" || input.body === null || Array.isArray(input.body)) {
+    throw new MesaError("Envie a intenção de Death Save.", 400, "invalid_action");
+  }
+  const body = input.body as Record<string, unknown>;
+  const forbidden = DEATH_SAVE_FORBIDDEN_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(body, field));
+  if (forbidden.length > 0) {
+    throw new MesaError(
+      `O servidor não aceita autoridade de resultado do cliente (${forbidden.join(", ")}).`,
+      400,
+      "client_authority_forbidden",
+    );
+  }
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requirePlayer({ session, participant });
+  requireActiveSession(session);
+  const rawResolutionId = body.resolutionId;
+  if (typeof rawResolutionId !== "string" || rawResolutionId.trim().length < 1 || rawResolutionId.trim().length > 120) {
+    throw new MesaError("ResolutionId inválido.", 400, "invalid_resolution_id");
+  }
+  const resolutionId = `${PLAYER_DEATH_SAVE_RESOLUTION_PREFIX}${rawResolutionId.trim()}`;
+  const actorCombatantId = typeof body.actorCombatantId === "string" ? body.actorCombatantId.trim() : "";
+  if (!actorCombatantId) throw new MesaError("Combatente ausente.", 400, "combatant_not_found");
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+
+  const row = (await query(
+    db().from("mesa_combatants").select("*").eq("id", actorCombatantId).eq("combat_id", combat.id).maybeSingle(),
+    "Falha ao consultar combatente",
+  )) as CombatantRow | null;
+  if (!row || row.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  if (row.participant_id !== participant.id) throw new MesaError("Você não controla este combatente.", 403, "combatant_not_owned");
+  if (row.kind !== "character") throw new MesaError("Death Save exige um personagem.", 400, "not_a_player");
+
+  const replay = (result: PlayerDeathSaveOutcome) => {
+    if (result.combatantId !== actorCombatantId) throw new MesaError("Esta resolução pertence a outro personagem.", 409, "resolution_conflict");
+    return { result, committed: false };
+  };
+  const previous = await storedAttackResolution<PlayerDeathSaveOutcome>(session.id, resolutionId, combat.id);
+  if (previous?.status === "committed" && previous.result) return replay(previous.result);
+  if (previous?.status === "failed") throw new MesaError("Esta resolução de Death Save falhou; não será reexecutada.", 409, "resolution_failed");
+  if (previous?.status === "processing") return replay(await waitForAttackResolution<PlayerDeathSaveOutcome>(session.id, resolutionId, combat.id));
+
+  if (row.is_dead) throw new MesaError("O personagem já está morto.", 409, "death_save_ineligible");
+  if (row.hp_current >= 1) throw new MesaError("Death Save só pode ser rolado com HP menor que 1.", 409, "death_save_ineligible");
+
+  const claimRows = (await query(db().rpc("claim_mesa_attack_resolution", {
+    p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
+  }), "Falha ao reservar a Death Save")) as AttackResolutionClaim<PlayerDeathSaveOutcome>[] | null;
+  const claim = claimRows?.[0];
+  if (!claim) throw new MesaError("Não foi possível reservar a Death Save.", 500, "transaction_failed");
+  if (!claim.claimed) {
+    if (claim.status === "committed" && claim.result) return replay(claim.result);
+    if (claim.status === "failed") throw new MesaError("Esta resolução de Death Save falhou; não será reexecutada.", 409, "resolution_failed");
+    return replay(await waitForAttackResolution<PlayerDeathSaveOutcome>(session.id, resolutionId, combat.id));
+  }
+
+  let committed = false;
+  try {
+    // Dados antigos que chegaram ao combate já mortais podem ter DC 0. A regra
+    // existente inicializa a primeira Death Save com BODY; isto só é aplicado
+    // quando ainda não há falhas, sem confundir uma DC 0 já reduzida.
+    const snapshotBody = typeof row.combat_snapshot?.stats?.BODY === "number" ? row.combat_snapshot.stats.BODY : 0;
+    const currentDc = row.death_save_dc ?? 0;
+    const currentFailures = row.death_save_failures ?? 0;
+    const dcBefore = currentDc === 0 && currentFailures === 0 ? snapshotBody : currentDc;
+    const resolved = resolveDeathSave({ dc: dcBefore, failures: currentFailures }, serverRandom);
+    const outcome: PlayerDeathSaveOutcome = {
+      combatantId: row.id,
+      diceRoll: resolved.diceRoll,
+      dc: resolved.dc,
+      success: resolved.success,
+      failuresAfter: resolved.failuresAfter,
+      characterDied: resolved.characterDied,
+      deathSaveDC: resolved.state.dc,
+      committed: true,
+    };
+    const committedResult = (await query(db().rpc("commit_mesa_death_save_resolution", {
+      p_session_id: session.id,
+      p_combat_id: combat.id,
+      p_resolution_id: resolutionId,
+      p_claim_token: claim.claim_token,
+      p_actor_id: row.id,
+      p_dc_before: currentDc,
+      p_dead_before: row.is_dead,
+      p_failures_before: currentFailures,
+      p_dc_after: resolved.state.dc,
+      p_failures_after: resolved.state.failures,
+      p_dead_after: resolved.characterDied,
+      p_result: outcome,
+      p_event_text: `${row.name}: Death Save ${resolved.success ? "sucesso" : "falha"}`,
+    }), "Falha ao confirmar a Death Save")) as PlayerDeathSaveOutcome | null;
+    if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
+    committed = true;
+    return { result: committedResult, committed: true };
+  } catch (error) {
+    if (!committed) {
+      try { await query(db().rpc("release_mesa_attack_resolution", {
+        p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token,
+      }), "Falha ao liberar Death Save"); } catch { /* preserva o erro original */ }
+    }
+    throw databaseResolutionError(error) ?? error;
+  }
+}
+
+/**
+ * `sourceType`/`sourceContext` da cura são apenas RÓTULO — viram texto do
+ * evento e nenhuma regra (Medkit/First Aid ficam fora desta etapa). Valor
+ * não-string ou acima do limite é CONTEXTO INVÁLIDO e recusa a chamada.
+ */
+function requireHealSourceText(raw: unknown, field: string, max: number): string | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "string") throw new MesaError(`${field} inválido.`, 400, "invalid_context");
+  const value = raw.trim().replace(/\s+/g, " ");
+  if (value.length === 0) return null;
+  if (value.length > max) throw new MesaError(`${field} inválido.`, 400, "invalid_context");
+  return value;
+}
+
+/**
+ * F1.12.2 — **Player Healing Gateway**: ponto ÚNICO server-side de CURA de um
+ * PERSONAGEM durante uma Mesa com combate ativo.
+ *
+ *     intenção (cliente: targetCombatantId + amount)
+ *       → validação de autoridade + autorização (GM)
+ *       → validação de intenção (amount/contexto)
+ *       → claim da resolução (idempotência durável)
+ *       → linha da Mesa (hp atual LIDO AQUI)
+ *       → newHp = min(currentHp + amount, maxHp)
+ *       → commit_mesa_attack_resolution (transação: patch + evento + status)
+ *       → publishMesaState → Realtime → characterSync → ficha
+ *
+ * ## Autoridade (F1.12.2)
+ *
+ * O cliente envia APENAS intenção: `targetCombatantId`, `amount`,
+ * `sourceType?`, `sourceContext?`, `resolutionId`. `hpAfter`/`finalHp`/`hp`/
+ * `hpCurrent`/`hpMax`/`isDead`/`deathSave*` são RECUSADOS em 400
+ * (`assertIntentOnly`) — nem são lidos. Quem declara o HP final é o servidor.
+ *
+ * ## O que este gateway NÃO faz
+ *
+ * - Não toca `is_dead` nem Death Save: a lesão de morte continua sendo da
+ *   regra de Death Save (fora do escopo). Enquanto essa regra não disser se um
+ *   personagem com HP ≤ 0 pode ser curado, a cura é PERMITIDA e o `is_dead`
+ *   permanece como está — a infraestrutura não muda, nada é inventado.
+ * - Não consome Action nem munição: a "linha de ator" da RPC é o próprio alvo
+ *   com a economia inalterada.
+ * - Não é Medkit/First Aid/inventário/cura entre Players: são etapas
+ *   posteriores que DEVEM reutilizar este gateway.
+ *
+ * ## Quem pode chamar
+ *
+ * Somente o Mestre (`requireGM`). Cura entre Players é etapa posterior.
+ *
+ * ## Concorrência e idempotência
+ *
+ * Concorrência: o MESMO mecanismo do ataque/dano — `commit_mesa_attack_resolution`
+ * compara `hp_current = p_target_hp_before AND is_dead = p_target_dead_before`
+ * antes de gravar. Quem perde recebe 409 `hp_conflict`; nunca existe escrita
+ * silenciosa por cima.
+ *
+ * Idempotência: DURÁVEL, reutilizando `mesa_attack_resolutions` — mesmo
+ * `resolutionId` devolve o resultado já gravado sem curar de novo. O prefixo
+ * `player-heal:` mantém o namespace separado.
+ *
+ * ## Recusas (todas sem efeito parcial)
+ *
+ * 410 `session_finished` · 409 `combat_not_active` · 403 `gm_only` ·
+ * 404 `target_not_found` · 400 `not_a_player` · 400 `invalid_amount` ·
+ * 400 `invalid_context` · 400 `invalid_resolution_id` ·
+ * 400 `client_authority_forbidden`.
+ */
+export async function applyPlayerHealing(input: {
+  sessionId: unknown;
+  token: unknown;
+  /** Corpo cru da intenção: só campos de intenção são lidos; os de resultado recusam. */
+  body: unknown;
+}): Promise<PlayerHealingOutcome> {
+  assertIntentOnly(input.body, "healing");
+  const body: Record<string, unknown> =
+    typeof input.body === "object" && input.body !== null && !Array.isArray(input.body)
+      ? (input.body as Record<string, unknown>)
+      : {};
+
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireGM({ session, participant });
+  // Sessão encerrada: recusa EXPLÍCITA (neste gateway não há "sucesso silencioso").
+  requireActiveSession(session);
+
+  const resolutionId = `${PLAYER_HEAL_RESOLUTION_PREFIX}${requireResolutionId(body.resolutionId)}`;
+
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+
+  /* --------------------------- intenção limpa ---------------------------- */
+
+  const targetRowId = typeof body.targetCombatantId === "string" ? body.targetCombatantId.trim() : "";
+  if (!targetRowId) throw new MesaError("Alvo da cura ausente (targetCombatantId).", 400, "target_not_found");
+  const amount = requireHealAmount(body.amount);
+  const sourceType = requireHealSourceText(body.sourceType, "sourceType", HEAL_SOURCE_TYPE_MAX);
+  const sourceContext = requireHealSourceText(body.sourceContext, "sourceContext", HEAL_SOURCE_CONTEXT_MAX);
+
+  /* ------------------------- idempotência durável ------------------------ */
+
+  const previous = await storedAttackResolution<PlayerHealingOutcome>(session.id, resolutionId, combat.id);
+  if (previous?.status === "committed" && previous.result) return previous.result;
+  if (previous?.status === "failed") {
+    throw new MesaError("A resolução desta cura falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+  }
+  if (previous?.status === "processing") {
+    return waitForAttackResolution<PlayerHealingOutcome>(session.id, resolutionId, combat.id);
+  }
+
+  const claimRows = (await query(
+    db().rpc("claim_mesa_attack_resolution", {
+      p_session_id: session.id,
+      p_combat_id: combat.id,
+      p_resolution_id: resolutionId,
+    }),
+    "Falha ao reservar a resolução da cura",
+  )) as AttackResolutionClaim<PlayerHealingOutcome>[] | null;
+  const claim = claimRows?.[0];
+  if (!claim) throw new MesaError("Não foi possível reservar a resolução da cura.", 500, "transaction_failed");
+  if (!claim.claimed) {
+    if (claim.status === "committed" && claim.result) return claim.result;
+    if (claim.status === "failed") {
+      throw new MesaError("A resolução desta cura falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+    }
+    return waitForAttackResolution<PlayerHealingOutcome>(session.id, resolutionId, combat.id);
+  }
+  const claimToken = claim.claim_token;
+  let committed = false;
+
+  try {
+    /* --------------------------- alvo da Mesa ---------------------------- */
+
+    const rows = (await query(
+      db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
+      "Falha ao consultar os combatentes",
+    )) as CombatantRow[] | null;
+    const targetRow = rows?.find((row) => row.id === targetRowId);
+    if (!targetRow || targetRow.session_id !== session.id) {
+      throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
+    }
+    // Este gateway é de PERSONAGEM: inimigo continua no caminho do Mestre
+    // (`PATCH /combatants`) — não se abre um segundo caminho de HP para inimigo.
+    if (targetRow.kind !== "character") {
+      throw new MesaError(
+        "Este gateway é para personagens; a vida de inimigo é ajustada em /api/mesa/[id]/combatants.",
+        400,
+        "not_a_player",
+      );
+    }
+
+    /* -------------- cálculo SERVIDOR: min(atual + amount, máx) ----------- */
+
+    const hpBefore = targetRow.hp_current;
+    const hpMax = targetRow.hp_max;
+    // Regra ÚNICA de cura (`clampHealing`, extraída daqui): cura nunca reduz HP
+    // e nunca passa do teto. A mesma função é usada pela resolução atômica de
+    // item + cura da Mesa (F1.13.2) — uma implementação, não duas.
+    const hp = clampHealing(hpBefore, hpMax, amount);
+    const amountApplied = hp - hpBefore;
+
+    // Já estava no máximo: nada muda, nada é publicado — mas a resolução é
+    // gravada, para o retry devolver o mesmo resultado sem efeito novo.
+    const patch: { hp_current?: number; death_save_dc?: number; death_save_failures?: number } = amountApplied > 0 ? { hp_current: hp } : {};
+
+    const outcome: PlayerHealingOutcome = {
+      updated: amountApplied > 0,
+      hp,
+      hpMax,
+      amountApplied,
+      // Invariante: cura não toca morte/Death Save nesta etapa.
+      isDead: targetRow.is_dead,
+    };
+    const eventText =
+      amountApplied > 0
+        ? [
+            `Cura${sourceType ? ` (${sourceType})` : ""}: ${targetRow.name} +${amountApplied}`,
+            sourceContext ?? "",
+          ]
+              .filter(Boolean)
+              .join(" — ")
+        : null;
+
+    /* -------------------- commit atômico (transação) --------------------- */
+
+    // UMA transação cobre patch (APENAS hp_current), evento e status da
+    // resolução. Se qualquer passo falhar, o Postgres desfaz TUDO: HP não
+    // muda, o evento não é publicado e a ficha não recebe nada.
+    const committedResult = (await query(
+      db().rpc("commit_mesa_attack_resolution", {
+        p_session_id: session.id,
+        p_combat_id: combat.id,
+        p_resolution_id: resolutionId,
+        p_claim_token: claimToken,
+        // Cura não tem ator: a linha do ALVO carrega a si própria com a
+        // economia inalterada (CAS trivial). Nenhuma Action/munição é debitada.
+        p_actor_id: targetRow.id,
+        p_target_id: targetRow.id,
+        p_actions_before: targetRow.actions_remaining,
+        p_actions_after: targetRow.actions_remaining,
+        p_ammo_before: targetRow.combat_ammo ?? null,
+        p_ammo_after: targetRow.combat_ammo ?? null,
+        p_target_hp_before: hpBefore,
+        p_target_dead_before: targetRow.is_dead,
+        p_target_patch: patch,
+        p_result: outcome,
+        p_event_text: eventText,
+      }),
+      "Falha ao confirmar a cura",
+    )) as PlayerHealingOutcome | null;
+    if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
+    committed = true;
+    return committedResult;
+  } catch (error) {
+    if (!committed) {
+      try {
+        await query(
+          db().rpc("release_mesa_attack_resolution", {
+            p_session_id: session.id,
+            p_combat_id: combat.id,
+            p_resolution_id: resolutionId,
+            p_claim_token: claimToken,
+          }),
+          "Falha ao liberar a resolução da cura",
+        );
+      } catch {
+        // O erro original é mais útil; resolução sem commit não aplicou efeitos.
+      }
+    }
+    throw databaseResolutionError(error) ?? error;
+  }
+}
+
 /** Rola a iniciativa de todos (somente GM) e abre o primeiro turno. */
 export async function rollInitiativeForAll(input: { sessionId: unknown; token: unknown }): Promise<void> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
@@ -2175,12 +3070,29 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
     kind: "character" | "enemy";
     name: string;
     initiative: number;
-    initiativeDetail: { expression: string; refBonus: number; total: number; bonus?: number };
+    initiativeDetail: MesaCombatant["initiativeDetail"];
     isDead: boolean;
     sortOrder: number;
   }> = [];
 
   for (const row of rows) {
+    // F1.14.2 — iniciativa JÁ registrada (Player Initiative Gateway ou ajuste
+    // manual do Mestre) é PRESERVADA: a rolagem coletiva só preenche quem ainda
+    // não tem valor. Sem isto o registro do Jogador seria descartado em silêncio
+    // no primeiro clique do Mestre.
+    if (typeof row.initiative === "number" && Number.isFinite(row.initiative)) {
+      rolled.push({
+        id: row.id,
+        kind: row.kind,
+        name: row.name,
+        initiative: row.initiative,
+        initiativeDetail: row.initiative_detail,
+        isDead: row.is_dead,
+        sortOrder: row.sort_order,
+      });
+      continue;
+    }
+
     let total = 0;
     let expression = "";
     let refBonus = 0;
@@ -2283,6 +3195,316 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
   );
 }
 
+// ---------------------------------------------------------------------------
+// F1.14.2 — PLAYER INITIATIVE GATEWAY (registro server-authoritative)
+// ---------------------------------------------------------------------------
+
+/**
+ * Prefixo do `resolution_id` gravado em `mesa_attack_resolutions`.
+ *
+ * A infraestrutura durável (claim/commit, F1.7.16) é a MESMA do ataque, do
+ * dano externo, da cura e do reload; o prefixo separa o namespace para um
+ * `resolutionId` de iniciativa nunca colidir com os outros na mesma mesa.
+ */
+const PLAYER_INITIATIVE_RESOLUTION_PREFIX = "player-initiative:";
+
+/**
+ * Envelope do valor aceito — derivado da fórmula que o projeto JÁ usa
+ * (`rollInitiative`: **1d10 + REF + modificadores**, com REF 2..8 na criação e
+ * modificadores de cyberware/lesão na ordem de −10..+10). Fora deste intervalo
+ * o número não veio de rolagem nenhuma; não é uma regra de CPR nova, é só o
+ * alcance da conta existente.
+ */
+const MIN_INITIATIVE = -10;
+const MAX_INITIATIVE = 30;
+
+/** Iniciativa só como inteiro dentro do envelope da fórmula do projeto. */
+function requireInitiative(raw: unknown): number {
+  if (
+    typeof raw !== "number" ||
+    !Number.isFinite(raw) ||
+    !Number.isInteger(raw) ||
+    raw < MIN_INITIATIVE ||
+    raw > MAX_INITIATIVE
+  ) {
+    throw new MesaError(
+      `Iniciativa inválida: informe um número inteiro entre ${MIN_INITIATIVE} e ${MAX_INITIATIVE} (1d10 + REF + modificadores).`,
+      400,
+      "invalid_initiative",
+    );
+  }
+  return raw;
+}
+
+/**
+ * Além de `CLIENT_RESULT_FIELDS` (HP/Armor/lesão/morte), o contrato de
+ * intenção deste gateway recusa tudo que descreva o ESTADO DERIVADO do combate:
+ * ordem de turnos, ativo, rodada, economia de ações. O cliente manda
+ * `{ resolutionId, actorCombatantId, initiative }` e nada mais.
+ */
+const INITIATIVE_FORBIDDEN_FIELDS = [
+  "initiativeOrder",
+  "initiativeDetail",
+  "initiativeStarted",
+  "activeCombatant",
+  "activeCombatantId",
+  "turn",
+  "round",
+  "actionsRemaining",
+  "actionsMax",
+  "sortOrder",
+  "sort_order",
+  "eventLog",
+];
+
+/**
+ * Um corpo de Player Initiative Gateway: presente ⇔ o chamador quer registrar a
+ * própria iniciativa. Ausente ⇔ operação legada do Mestre (`rollInitiativeForAll`,
+ * body vazio). A distinção é de FORMA, nunca de papel: o papel é validado no
+ * servidor (`requirePlayer`).
+ */
+export function isPlayerInitiativeIntent(body: Record<string, unknown>): boolean {
+  return (
+    Object.prototype.hasOwnProperty.call(body, "resolutionId") ||
+    Object.prototype.hasOwnProperty.call(body, "actorCombatantId") ||
+    Object.prototype.hasOwnProperty.call(body, "initiative")
+  );
+}
+
+/**
+ * F1.14.2 — **Player Initiative Gateway**: ponto ÚNICO server-side para o
+ * Jogador registrar a INICIATIVA do PRÓPRIO personagem durante o combate da Mesa.
+ *
+ *     rolagem local (RNG da ficha roda no navegador)
+ *       → POST só com a intenção `{ resolutionId, actorCombatantId, initiative }`
+ *       → validação de sessão/papel/posse/combate/valor
+ *       → claim da resolução (idempotência durável)
+ *       → escrita CONDICIONAL em `mesa_combatants.initiative`
+ *       → evento + carimbo `committed` da resolução
+ *       → publishMesaState → Realtime → useMesaState → syncMesaCharacterState → ficha
+ *
+ * ## O que este gateway NÃO faz
+ *
+ * Não calcula ordem de turno, não vira `active_combat`, não abre rodada e não
+ * debita Action: `sort_order`/`active_combatant_id` continuam sendo escritos
+ * pela rolagem coletiva do Mestre (`rollInitiativeForAll`), que é a regra
+ * EXISTENTE de abertura de turno. Nenhuma regra de CPR nova é inventada aqui —
+ * a única travagem é a que o combate já tem: `initiative_started`.
+ *
+ * ## Validações (todas sem efeito parcial)
+ *
+ * 400 `client_authority_forbidden` · 400 `invalid_resolution_id` ·
+ * 400 `invalid_initiative` · 401 `missing_token` · 403 `not_participant` ·
+ * 403 `player_only` · 403 `combatant_not_owned` · 403 `combatant_defeated` ·
+ * 400 `not_a_player` · 404 `session_not_found` · 404 `combatant_not_found` ·
+ * 410 `session_finished` · 409 `combat_not_active` ·
+ * 409 `initiative_already_rolled` · 409 `initiative_already_registered` ·
+ * 409 `initiative_conflict`.
+ *
+ * ## Idempotência e concorrência
+ *
+ * Idempotência: DURÁVEL, reutilizando `mesa_attack_resolutions` — a MESMA
+ * `resolutionId` devolve o resultado já gravado sem gravar de novo.
+ *
+ * Concorrência: a escrita é CONDICIONAL (`initiative IS NULL`); uma iniciativa
+ * já registrada por outra operação nunca é sobrescrita em silêncio — quem perde
+ * a corrida recebe 409 `initiative_conflict`.
+ *
+ * ## Limitação conhecida
+ *
+ * A infraestrutura de commit transacional existente não escreve a coluna
+ * `initiative`, então o passo de escrita e o carimbo da resolução são DUAS
+ * chamadas (a escrita em si é atômica). Uma falha entre elas deixa a iniciativa
+ * persistida e a resolução `processing`; o retry com a MESMA `resolutionId`
+ * recupera pelo `recover_mesa_attack_resolution` e nunca regrava.
+ */
+export async function registerPlayerInitiative(input: {
+  sessionId: unknown;
+  token: unknown;
+  /** Corpo cru da intenção: campos de resultado/estado são recusados. */
+  body: unknown;
+}): Promise<{ result: PlayerInitiativeOutcome; committed: boolean }> {
+  assertIntentOnly(input.body, "initiative");
+  const body: Record<string, unknown> =
+    typeof input.body === "object" && input.body !== null && !Array.isArray(input.body)
+      ? (input.body as Record<string, unknown>)
+      : {};
+
+  const forbidden = INITIATIVE_FORBIDDEN_FIELDS.filter((field) =>
+    Object.prototype.hasOwnProperty.call(body, field),
+  );
+  if (forbidden.length > 0) {
+    throw new MesaError(
+      `O servidor não aceita autoridade de resultado do cliente (${forbidden.join(", ")}). ` +
+        "Envie só a intenção: ordem, turno e ações são resolvidos aqui.",
+      400,
+      "client_authority_forbidden",
+    );
+  }
+
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requirePlayer({ session, participant });
+  requireActiveSession(session);
+
+  const resolutionId = `${PLAYER_INITIATIVE_RESOLUTION_PREFIX}${requireResolutionId(body.resolutionId)}`;
+  const actorCombatantId = typeof body.actorCombatantId === "string" ? body.actorCombatantId.trim() : "";
+  if (!actorCombatantId) {
+    throw new MesaError("Combatente ausente (actorCombatantId).", 400, "combatant_not_found");
+  }
+  const initiative = requireInitiative(body.initiative);
+
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+
+  /* ------------------------- idempotência durável ------------------------ */
+
+  const previous = await storedAttackResolution<PlayerInitiativeOutcome>(session.id, resolutionId, combat.id);
+  if (previous?.status === "committed" && previous.result) return { result: previous.result, committed: false };
+  if (previous?.status === "failed") {
+    throw new MesaError("A resolução desta iniciativa falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+  }
+  if (previous?.status === "processing") {
+    return { result: await waitForAttackResolution<PlayerInitiativeOutcome>(session.id, resolutionId, combat.id), committed: false };
+  }
+
+  // Trava EXISTENTE do combate: depois que a iniciativa foi rolada, ela está
+  // encerrada (`rollInitiativeForAll` lança o mesmo 409). Vem DEPOIS da
+  // idempotência de propósito: repetir uma `resolutionId` já resolvida devolve
+  // o resultado gravado mesmo que o Mestre tenha rolado nesse meio-tempo.
+  if (combat.initiative_started) {
+    throw new MesaError("A iniciativa já foi rolada.", 409, "initiative_already_rolled");
+  }
+
+  const claimRows = (await query(
+    db().rpc("claim_mesa_attack_resolution", {
+      p_session_id: session.id,
+      p_combat_id: combat.id,
+      p_resolution_id: resolutionId,
+    }),
+    "Falha ao reservar a resolução da iniciativa",
+  )) as AttackResolutionClaim<PlayerInitiativeOutcome>[] | null;
+  const claim = claimRows?.[0];
+  if (!claim) throw new MesaError("Não foi possível reservar a resolução da iniciativa.", 500, "transaction_failed");
+  if (!claim.claimed) {
+    if (claim.status === "committed" && claim.result) return { result: claim.result, committed: false };
+    if (claim.status === "failed") {
+      throw new MesaError("A resolução desta iniciativa falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+    }
+    return { result: await waitForAttackResolution<PlayerInitiativeOutcome>(session.id, resolutionId, combat.id), committed: false };
+  }
+  const claimToken = claim.claim_token;
+  let committed = false;
+
+  try {
+    /* ----------------------------- intenção ------------------------------ */
+
+    const rows = (await query(
+      db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
+      "Falha ao consultar os combatentes",
+    )) as CombatantRow[] | null;
+    const actorRow = rows?.find((row) => row.id === actorCombatantId);
+    if (!actorRow || actorRow.session_id !== session.id) {
+      throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+    }
+    // Posse: um Player só registra a iniciativa do PRÓPRIO combatente.
+    if (actorRow.participant_id !== participant.id) {
+      throw new MesaError("Você não pode controlar este combatente.", 403, "combatant_not_owned");
+    }
+    // Inimigo continua sendo do Mestre (seed/`rollInitiativeForAll`): este
+    // gateway é de PERSONAGEM, como os outros gateways de Player.
+    if (actorRow.kind !== "character") {
+      throw new MesaError("Este gateway é para personagens.", 400, "not_a_player");
+    }
+    if (actorRow.is_dead) throw new MesaError("Combatente derrotado.", 403, "combatant_defeated");
+    // Sem sobrescrita silenciosa: valor já gravado (gateway, rolagem do Mestre
+    // ou ajuste manual) só sai por uma operação explícita, nunca por este POST.
+    if (actorRow.initiative !== null && actorRow.initiative !== undefined) {
+      throw new MesaError("Sua iniciativa já foi registrada nesta luta.", 409, "initiative_already_registered");
+    }
+
+    // `refBonus` vem da ficha que O SERVIDOR guarda; o request só traz o total.
+    const sheet = actorRow.character_id ? await loadSheet(actorRow.character_id) : null;
+    const refBonus = typeof sheet?.stats?.REF === "number" ? sheet.stats.REF : undefined;
+    const initiativeDetail: MesaCombatant["initiativeDetail"] = { total: initiative, ...(refBonus !== undefined ? { refBonus } : {}) };
+    const outcome: PlayerInitiativeOutcome = {
+      kind: "initiative",
+      resolutionId,
+      combatantId: actorRow.id,
+      initiative,
+      initiativeDetail,
+      registered: true,
+    };
+
+    /* -------------------- escrita condicional (CAS) ----------------------- */
+
+    // Só grava se a coluna AINDA estiver como foi lida: dois registros
+    // concorrentes nunca sobrescrevem um ao outro em silêncio.
+    const written = (await query(
+      db()
+        .from("mesa_combatants")
+        .update({ initiative, initiative_detail: initiativeDetail })
+        .eq("id", actorRow.id)
+        .eq("combat_id", combat.id)
+        .is("initiative", null)
+        .select("id"),
+      "Falha ao registrar a iniciativa",
+    )) as Array<{ id: string }> | null;
+    if (!written || written.length !== 1) {
+      throw new MesaError(
+        "Sua iniciativa mudou durante o registro; recarregue a Mesa e tente de novo.",
+        409,
+        "initiative_conflict",
+      );
+    }
+
+    /* ------------------- carimbo da resolução (retry) --------------------- */
+
+    const stamped = (await query(
+      db()
+        .from("mesa_attack_resolutions")
+        .update({
+          status: "committed",
+          result: outcome,
+          committed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("session_id", session.id)
+        .eq("combat_id", combat.id)
+        .eq("resolution_id", resolutionId)
+        .eq("claim_token", claimToken)
+        .eq("status", "processing")
+        .select("id"),
+      "Falha ao confirmar a resolução da iniciativa",
+    )) as Array<{ id: string }> | null;
+    if (!stamped || stamped.length !== 1) {
+      throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
+    }
+    committed = true;
+
+    await appendEvent(combat.id, { kind: "initiative", text: `${actorRow.name}: iniciativa registrada (${initiative})` });
+    return { result: outcome, committed: true };
+  } catch (error) {
+    // Libera só o que não foi carimbado: com o carimbo feito, um retry da MESMA
+    // `resolutionId` devolve este resultado em vez de regravar (ou reclamar).
+    if (!committed) {
+      try {
+        await query(
+          db().rpc("release_mesa_attack_resolution", {
+            p_session_id: session.id,
+            p_combat_id: combat.id,
+            p_resolution_id: resolutionId,
+            p_claim_token: claimToken,
+          }),
+          "Falha ao liberar a resolução da iniciativa",
+        );
+      } catch {
+        // O erro original é mais útil; resolução sem commit não aplicou efeitos.
+      }
+    }
+    throw databaseResolutionError(error) ?? error;
+  }
+}
+
 /** Avança o turno a partir do estado atual do banco. */
 async function advanceActiveTurn(sessionId: string, combat: CombatRow): Promise<void> {
   const rows = (await query(
@@ -2370,6 +3592,13 @@ export async function performAction(input: {
   meters?: unknown;
 }): Promise<void> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
+  // F1.16: esta é a rota legada de controle manual da Mesa. Players usam os
+  // gateways específicos (attack/move/reload/item); não há uma segunda porta
+  // genérica sem resolutionId capaz de debitar a economia.
+  if (participant.role === "player" && input.actionType === "move") {
+    throw new MesaError("Use o gateway de movimento da Mesa.", 403, "move_gateway_required");
+  }
+  requireGM({ session, participant });
 
   const combat = (await query(
     db().from("mesa_combats").select("*").eq("session_id", session.id).maybeSingle(),
@@ -2419,19 +3648,173 @@ export async function performAction(input: {
     meters,
   );
 
-  await query(
+  const written = (await query(
     db()
       .from("mesa_combatants")
       .update({
         actions_remaining: economy.actionsRemaining,
         movement_remaining: economy.movementRemaining,
       })
-      .eq("id", row.id),
+      .eq("id", row.id)
+      .eq("actions_remaining", row.actions_remaining)
+      .eq("movement_remaining", row.movement_remaining)
+      .eq("is_dead", false)
+      .select("id"),
     "Falha ao consumir a ação",
-  );
+  )) as Array<{ id: string }> | null;
+  if (!written || written.length !== 1) {
+    throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
+  }
 
   const label = actionType === "move" ? `Movimento (${Math.floor(meters)}m)` : ACTION_LABELS[actionType as CombatActionType];
   await appendEvent(combat.id, { kind: "action", text: `${row.name}: ${label}` });
+}
+
+/**
+ * F1.14.3 — movimento do Player. Não há posição espacial na Mesa: o estado
+ * persistido é o orçamento `movement_remaining` (metros de MOVE × 2 por turno).
+ * Reutiliza resolveAction/applyAction: Move custa ZERO Actions e pode gastar o
+ * orçamento em parcelas, exatamente como o /combat/action legado do GM.
+ */
+export async function movePlayerCombatant(input: {
+  sessionId: unknown;
+  token: unknown;
+  body: unknown;
+}): Promise<{ result: { combatantId: string; distance: number; movementRemaining: number; actionsRemaining: number }; committed: boolean }> {
+  const body = typeof input.body === "object" && input.body !== null && !Array.isArray(input.body)
+    ? input.body as Record<string, unknown> : {};
+  const extra = Object.keys(body).filter((key) => !["resolutionId", "actorCombatantId", "distance"].includes(key));
+  if (extra.length) throw new MesaError(`Envie somente a intenção de movimento (${extra.join(", ")}).`, 400, "client_authority_forbidden");
+
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  if (participant.role !== "player" && participant.role !== "gm") {
+    throw new MesaError("Papel sem autorização para movimento.", 403, "not_allowed");
+  }
+  requireActiveSession(session);
+  const resolutionId = `player-move:${requireResolutionId(body.resolutionId)}`;
+  const actorCombatantId = typeof body.actorCombatantId === "string" ? body.actorCombatantId.trim() : "";
+  if (!actorCombatantId) throw new MesaError("Combatente ausente.", 400, "combatant_not_found");
+  // O motor legado truncava metros fracionários. O gateway recebe somente
+  // metros inteiros para não aceitar uma intenção diferente da registrada.
+  if (typeof body.distance !== "number" || !Number.isSafeInteger(body.distance) || body.distance <= 0) {
+    throw new MesaError("Informe uma distância inteira e positiva em metros.", 400, "invalid_distance");
+  }
+  const distance = body.distance;
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+
+  // Também antes do replay: um participante que descubra uma resolutionId
+  // alheia não pode receber o resultado gravado de outro combatente.
+  const owner = (await query(db().from("mesa_combatants").select("session_id,participant_id,kind")
+    .eq("id", actorCombatantId).eq("combat_id", combat.id).maybeSingle(),
+  "Falha ao consultar combatente")) as Pick<CombatantRow, "session_id" | "participant_id" | "kind"> | null;
+  if (!owner || owner.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  if (participant.role === "player" && owner.participant_id !== participant.id) {
+    throw new MesaError("Você não controla este combatente.", 403, "combatant_not_owned");
+  }
+  if (participant.role === "player" && owner.kind !== "character") {
+    throw new MesaError("Movimento de Player exige personagem.", 400, "not_a_player");
+  }
+  if (participant.role === "gm" && owner.kind !== "enemy" && owner.participant_id !== participant.id) {
+    throw new MesaError("O Mestre só pode mover inimigos ou o próprio personagem.", 403, "player_only");
+  }
+
+  type MoveResult = { combatantId: string; distance: number; movementRemaining: number; actionsRemaining: number };
+  const replay = (result: MoveResult) => {
+    if (result.combatantId !== actorCombatantId || result.distance !== distance) {
+      throw new MesaError("Esta resolução pertence a outro movimento.", 409, "resolution_conflict");
+    }
+    return { result, committed: false };
+  };
+  const previous = await storedAttackResolution<MoveResult>(session.id, resolutionId, combat.id);
+  if (previous?.status === "committed" && previous.result) return replay(previous.result);
+  if (previous?.status === "failed") throw new MesaError("Esta resolução de movimento falhou.", 409, "resolution_failed");
+  if (previous?.status === "processing") {
+    return replay(await waitForAttackResolution<MoveResult>(session.id, resolutionId, combat.id));
+  }
+
+  const claimRows = (await query(db().rpc("claim_mesa_attack_resolution", {
+    p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
+  }), "Falha ao reservar movimento")) as AttackResolutionClaim<MoveResult>[] | null;
+  const claim = claimRows?.[0];
+  if (!claim) throw new MesaError("Não foi possível reservar o movimento.", 500, "transaction_failed");
+  if (!claim.claimed) {
+    if (claim.status === "committed" && claim.result) return replay(claim.result);
+    if (claim.status === "failed") throw new MesaError("Esta resolução de movimento falhou.", 409, "resolution_failed");
+    return replay(await waitForAttackResolution<MoveResult>(session.id, resolutionId, combat.id));
+  }
+
+  let applied = false;
+  try {
+    const row = (await query(db().from("mesa_combatants").select("*")
+      .eq("id", actorCombatantId).eq("combat_id", combat.id).maybeSingle(), "Falha ao consultar combatente")) as CombatantRow | null;
+    if (!row || row.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+    if (participant.role === "player" && row.participant_id !== participant.id) throw new MesaError("Você não controla este combatente.", 403, "combatant_not_owned");
+    if (participant.role === "player" && row.kind !== "character") throw new MesaError("Movimento de Player exige personagem.", 400, "not_a_player");
+    if (participant.role === "gm" && row.kind !== "enemy" && row.participant_id !== participant.id) {
+      throw new MesaError("O Mestre só pode mover inimigos ou o próprio personagem.", 403, "player_only");
+    }
+    // Uma nova leitura reduz a janela entre claim e validação; o CAS abaixo
+    // protege também o orçamento contra dois movimentos simultâneos.
+    const currentCombat = await getActiveCombat(session.id);
+    const validation = resolveAction({
+      combatStatus: currentCombat?.status ?? null,
+      initiativeStarted: currentCombat?.initiative_started ?? false,
+      activeCombatantId: currentCombat?.active_combatant_id ?? null,
+      actorRole: participant.role,
+      actorOwnsCombatant: true,
+      combatant: {
+        id: row.id, isDead: row.is_dead, actionsMax: row.actions_max,
+        actionsRemaining: row.actions_remaining, movementMax: row.movement_max,
+        movementRemaining: row.movement_remaining,
+      },
+      actionType: "move", meters: distance,
+    });
+    if (!validation.ok) throw new MesaError(DENIAL_MESSAGES[validation.reason], 403, validation.reason);
+
+    const economy = applyAction({
+      actionsMax: row.actions_max, actionsRemaining: row.actions_remaining,
+      movementMax: row.movement_max, movementRemaining: row.movement_remaining,
+    }, "move", distance);
+    const written = (await query(db().from("mesa_combatants")
+      .update({ movement_remaining: economy.movementRemaining })
+      .eq("id", row.id).eq("combat_id", combat.id)
+      .eq("movement_remaining", row.movement_remaining)
+      .eq("actions_remaining", row.actions_remaining)
+      .eq("is_dead", false)
+      .select("id"), "Falha ao registrar movimento")) as Array<{ id: string }> | null;
+    if (written?.length !== 1) throw new MesaError("O estado de movimento mudou; atualize a Mesa.", 409, "movement_conflict");
+    applied = true;
+    const result: MoveResult = {
+      combatantId: row.id, distance, movementRemaining: economy.movementRemaining,
+      actionsRemaining: economy.actionsRemaining,
+    };
+    const stamped = (await query(db().from("mesa_attack_resolutions").update({
+      status: "committed", result, committed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    }).eq("session_id", session.id).eq("combat_id", combat.id).eq("resolution_id", resolutionId)
+      .eq("claim_token", claim.claim_token).eq("status", "processing").select("id"),
+    "Falha ao confirmar movimento")) as Array<{ id: string }> | null;
+    if (stamped?.length !== 1) throw new MesaError("A resolução não foi confirmada.", 500, "transaction_failed");
+    // O evento é apresentação. Depois do commit ele não pode transformar um
+    // movimento já aplicado em erro para o jogador nem impedir a publicação.
+    try {
+      await appendEvent(combat.id, { kind: "action", text: `${row.name}: Movimento (${distance}m)` });
+    } catch { /* O orçamento/resultado já foram gravados; o estado será publicado. */ }
+    return { result, committed: true };
+  } catch (error) {
+    // Depois do CAS NÃO liberar o claim: um retry não pode aplicar de novo caso
+    // o carimbo tenha falhado. Requer recuperação manual/transação para fechar
+    // completamente essa janela (GAP documentado).
+    if (!applied) {
+      try {
+        await query(db().rpc("release_mesa_attack_resolution", {
+          p_session_id: session.id, p_combat_id: combat.id,
+          p_resolution_id: resolutionId, p_claim_token: claim.claim_token,
+        }), "Falha ao liberar resolução de movimento");
+      } catch { /* Mantém o erro original. */ }
+    }
+    throw databaseResolutionError(error) ?? error;
+  }
 }
 
 /** Reload server-authoritative, separado do fluxo de ataque. */
@@ -2440,6 +3823,7 @@ export async function reloadIntegrated(input: {
   token: unknown;
   resolutionId: unknown;
   weaponId: unknown;
+  actorCombatantId?: unknown;
 }): Promise<{ result: ReloadResponse; committed: boolean }> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   const resolutionId = requireResolutionId(input.resolutionId);
@@ -2459,8 +3843,18 @@ export async function reloadIntegrated(input: {
     "Falha ao consultar os combatentes",
   )) as CombatantRow[];
   // O combatente é derivado da participação autenticada; nunca do body.
-  const actorRow = rows.find((row) => row.participant_id === participant.id && row.kind === "character");
+  const requestedActorId = typeof input.actorCombatantId === "string" ? input.actorCombatantId.trim() : "";
+  const actorRow = participant.role === "gm" && requestedActorId
+    ? rows.find((row) => row.id === requestedActorId)
+    : rows.find((row) => row.participant_id === participant.id && row.kind === "character");
   if (!actorRow) throw new MesaError("Ator não encontrado.", 404, "actor_not_found");
+  if (actorRow.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  if (participant.role === "player" && actorRow.kind !== "character") {
+    throw new MesaError("Reload de Player exige personagem.", 400, "not_a_player");
+  }
+  if (participant.role === "gm" && actorRow.kind !== "enemy" && actorRow.participant_id !== participant.id) {
+    throw new MesaError("O Mestre só pode controlar inimigos ou o próprio personagem.", 403, "combatant_not_owned");
+  }
   authorizeCombatAttackActor({ session, participant }, actorRow);
 
   const actionCheck = resolveAction({
@@ -2610,7 +4004,7 @@ export async function attackIntegrated(input: {
       p_resolution_id: resolutionId,
     }),
     "Falha ao reservar a resolução do ataque",
-  )) as AttackResolutionClaim[] | null;
+  )) as AttackResolutionClaim<IntegratedAttackResponse>[] | null;
   const claim = claimRows?.[0];
   if (!claim) throw new MesaError("Não foi possível reservar a resolução do ataque.", 500, "transaction_failed");
   if (!claim.claimed) {
@@ -2860,6 +4254,7 @@ export async function registerRoll(input: {
   token: unknown;
   roll: unknown;
   key?: unknown;
+  resolutionId?: unknown;
 }): Promise<{ registered: boolean; debited: boolean }> {
   const parsed = parseMesaRoll(input.roll);
   if (!parsed.ok) throw new MesaError(parsed.reason, 400, "invalid_roll");
@@ -2873,6 +4268,10 @@ export async function registerRoll(input: {
 
   const combat = await getActiveCombat(session.id);
   if (!combat) return { registered: false, debited: false };
+
+  const resolutionId = participant.role === "player"
+    ? requireResolutionId(input.resolutionId)
+    : null;
 
   const roll = parsed.roll;
   // O cliente não envia custo numérico confiável. O servidor deriva o custo
@@ -2908,10 +4307,11 @@ export async function registerRoll(input: {
       movementMax: target.movement_max,
       movementRemaining: target.movement_remaining,
     };
+    const currentCombat = await getActiveCombat(session.id);
     const result = resolveAction({
-      combatStatus: combat.status,
-      initiativeStarted: combat.initiative_started,
-      activeCombatantId: combat.active_combatant_id,
+      combatStatus: currentCombat?.status ?? null,
+      initiativeStarted: currentCombat?.initiative_started ?? false,
+      activeCombatantId: currentCombat?.active_combatant_id ?? null,
       actorRole: participant.role,
       actorOwnsCombatant: true,
       combatant: { id: target.id, isDead: target.is_dead, ...economy },
@@ -2921,10 +4321,16 @@ export async function registerRoll(input: {
 
     if (result.ok) {
       const next = applyAction(economy, actionType, 0);
-      await query(
-        db().from("mesa_combatants").update({ actions_remaining: next.actionsRemaining }).eq("id", target.id),
+      const written = (await query(
+        db().from("mesa_combatants").update({ actions_remaining: next.actionsRemaining })
+          .eq("id", target.id)
+          .eq("actions_remaining", target.actions_remaining)
+          .eq("movement_remaining", target.movement_remaining)
+          .eq("is_dead", false)
+          .select("id"),
         "Falha ao consumir a ação",
-      );
+      )) as Array<{ id: string }> | null;
+      if (!written || written.length !== 1) throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
       debited = true;
     } else {
       denial = result.reason;
@@ -2933,17 +4339,34 @@ export async function registerRoll(input: {
 
   const actor = target?.name ?? participant.displayName;
   const note = actionType && !debited ? rollDenialNote(denial) : "";
+  const eventText = participant.role === "player"
+    ? formatPlayerRollEvent(actor, roll, note)
+    : formatRollEvent(actor, roll, note);
+  const eventResolutionId = resolutionId ? `player-roll:${resolutionId}` : undefined;
+  if (eventResolutionId) {
+    const existing = (await query(
+      db().from("mesa_combats").select("event_log").eq("id", combat.id).maybeSingle(),
+      "Falha ao consultar o histórico do combate",
+    )) as { event_log: MesaEvent[] | null } | null;
+    const prior = (Array.isArray(existing?.event_log) ? existing.event_log : [])
+      .find((event) => event.resolutionId === eventResolutionId);
+    if (prior) {
+      if (prior.text !== eventText) throw new MesaError("Esta resolução de rolagem pertence a outra intenção.", 409, "resolution_conflict");
+      return { registered: true, debited: !note };
+    }
+  }
   await appendEvent(
     combat.id,
-    { kind: "roll", text: formatRollEvent(actor, roll, note) },
+    { kind: "roll", text: eventText, ...(eventResolutionId ? { resolutionId: eventResolutionId } : {}) },
   );
 
   return { registered: true, debited };
 }
 
-/** Finaliza o turno atual (dono do combatente ativo ou GM). */
+/** Finaliza o turno atual (somente GM; Player apenas solicita ações). */
 export async function endTurn(input: { sessionId: unknown; token: unknown }): Promise<void> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireGM({ session, participant });
 
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
@@ -2956,10 +4379,7 @@ export async function endTurn(input: { sessionId: unknown; token: unknown }): Pr
     "Falha ao consultar o combatente",
   )) as CombatantRow | null;
 
-  const ownsActive = active?.participant_id === participant.id;
-  if (participant.role !== "gm" && !ownsActive) {
-    throw new MesaError("Não é a sua vez de finalizar o turno.", 403, "not_your_turn");
-  }
+  if (!active) throw new MesaError("Combatente ativo não encontrado.", 409, "turn_conflict");
 
   await advanceActiveTurn(session.id, combat);
 }
@@ -3066,6 +4486,441 @@ export async function leaveSession(input: { sessionId: unknown; token: unknown }
   }
 
   await query(db().from("mesa_participants").delete().eq("id", participant.id), "Falha ao sair da mesa");
+}
+
+// ---------------------------------------------------------------------------
+// F1.13.1 — Player Inventory Authority: consumo atômico de item
+// ---------------------------------------------------------------------------
+
+/**
+ * F1.13.1 — consumo atômico de item na Mesa.
+ *
+ * Caminho server-authoritative: o cliente envia a INTENÇÃO
+ * (actorCombatantId, itemId, amount, resolutionId). O servidor:
+ *   • valida token / sessão / combate / combatent / dono / ação;
+ *   • lê `supplies.inventory` da linha da Mesa;
+ *   • decrementa a quantidade;
+ *   • persiste via claim/commit com CAS em `supplies`
+ *     (dois requests concorrentes nunca consomem a mesma unidade);
+ *   • registra evento e publica o estado.
+ *
+ * Nunca aceita do cliente: quantidade final, inventory, supplies,
+ * HP, armor ou qualquer snapshot autoritativo.
+ */
+
+const ITEM_CONSUME_RESOLUTION_PREFIX = "item-consume:";
+
+async function storedItemConsumeResolution<T = ConsumeItemResponse>(
+  sessionId: string,
+  resolutionId: string,
+  combatId: string,
+) {
+  return (await query(
+    db()
+      .from("mesa_item_consume_resolutions")
+      .select("*")
+      .eq("session_id", sessionId)
+      .eq("combat_id", combatId)
+      .eq("resolution_id", resolutionId)
+      .maybeSingle(),
+    "Falha ao consultar a resolução do consumo",
+  )) as { status: string; result: T } | null;
+}
+
+async function waitForItemConsumeResolution<T = ConsumeItemResponse>(
+  sessionId: string,
+  resolutionId: string,
+  combatId: string,
+): Promise<T> {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await new Promise((r) => setTimeout(r, 200));
+    const row = await storedItemConsumeResolution<T>(sessionId, resolutionId, combatId);
+    if (row?.status === "committed" && row.result) return row.result;
+    if (row?.status === "failed") {
+      throw new MesaError("A resolução deste consumo falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+    }
+  }
+  throw new MesaError("A resolução do consumo continua em processamento.", 409, "resolution_in_progress");
+}
+
+export interface ConsumeItemResponse {
+  combatantId: string;
+  /** ID estável do item consumido (f1.13.2). */
+  itemId: string;
+  itemName: string;
+  quantityBefore: number;
+  quantityAfter: number;
+  consumed: number;
+  actionsBefore: number;
+  actionsAfter: number;
+}
+
+export async function consumeItemIntegrated(input: {
+  sessionId: unknown;
+  token: unknown;
+  combatantId: unknown;
+  itemId: unknown;
+  amount: unknown;
+  resolutionId: unknown;
+}): Promise<{ result: ConsumeItemResponse; committed: boolean }> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  const resolutionId = `${ITEM_CONSUME_RESOLUTION_PREFIX}${requireResolutionId(input.resolutionId)}`;
+  const combatantId = typeof input.combatantId === "string" ? input.combatantId.trim() : "";
+  const itemId = typeof input.itemId === "string" ? input.itemId.trim() : "";
+  const amount = typeof input.amount === "number" ? input.amount : Number.NaN;
+  if (!combatantId || !itemId) throw new MesaError("Dados do consumo inválidos.", 400, "invalid_action");
+  // Quantidade é intenção do cliente: só aceitamos inteiro positivo.
+  // O resultado final (estoque após o consumo) é sempre do servidor.
+  if (!Number.isInteger(amount) || amount <= 0) throw new MesaError("Quantidade inválida.", 400, "invalid_action");
+
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+
+  const previous = await storedItemConsumeResolution<ConsumeItemResponse>(session.id, resolutionId, combat.id);
+  if (previous?.status === "committed" && previous.result) return { result: previous.result, committed: false };
+  if (previous?.status === "failed") {
+    throw new MesaError("A resolução deste consumo falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+  }
+  if (previous?.status === "processing") {
+    return { result: await waitForItemConsumeResolution<ConsumeItemResponse>(session.id, resolutionId, combat.id), committed: false };
+  }
+
+  const rows = (await query(
+    db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
+    "Falha ao consultar os combatentes",
+  )) as CombatantRow[];
+  const actorRow = rows.find((row) => row.id === combatantId);
+  if (!actorRow) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  if (actorRow.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  if (participant.role === "player" && actorRow.participant_id !== participant.id) throw new MesaError("Você não pode controlar este combatente.", 403, "combatant_not_owned");
+  if (participant.role === "player" && actorRow.kind !== "character") throw new MesaError("Consumo de item só é permitido em personagens.", 400, "not_a_player");
+  if (participant.role === "gm" && actorRow.kind !== "enemy" && actorRow.participant_id !== participant.id) {
+    throw new MesaError("O Mestre só pode controlar inimigos ou o próprio personagem.", 403, "combatant_not_owned");
+  }
+
+  const actionCheck = resolveAction({
+    combatStatus: combat.status,
+    initiativeStarted: combat.initiative_started,
+    activeCombatantId: combat.active_combatant_id,
+    actorRole: participant.role,
+    actorOwnsCombatant: actorRow.participant_id === participant.id,
+    combatant: { id: actorRow.id, isDead: actorRow.is_dead, actionsMax: actorRow.actions_max, actionsRemaining: actorRow.actions_remaining, movementMax: actorRow.movement_max, movementRemaining: actorRow.movement_remaining },
+    actionType: "item",
+  });
+  if (!actionCheck.ok) throw new MesaError(DENIAL_MESSAGES[actionCheck.reason], 403, actionCheck.reason);
+  if (actorRow.is_dead) throw new MesaError("Ator derrotado.", 403, "combatant_defeated");
+
+  const suppliesBefore: MesaSupplies = actorRow.supplies ?? { inventory: [] };
+  const inventory = suppliesBefore.inventory ?? [];
+  // F1.13.2 — a procura é pelo ID ESTÁVEL, nunca pelo rótulo exibido.
+  const rawEntry = findSupplyEntry(inventory, itemId);
+  if (!rawEntry) throw new MesaError("Item não está na mochila do combate.", 400, "item_not_found");
+  // Escrita SEMPRE passa pela normalização: pilhas duplicadas do mesmo id são
+  // somadas e as entradas legadas ganham o `itemId`.
+  const normalizedInventory = normalizeSupplyInventory(inventory);
+  const entry = findSupplyEntry(normalizedInventory, itemId);
+  if (!entry) throw new MesaError("Quantidade insuficiente na mochila.", 400, "insufficient_quantity");
+  if (entry.quantity < amount) throw new MesaError("Quantidade insuficiente na mochila.", 400, "insufficient_quantity");
+
+  const quantityAfter = entry.quantity - amount;
+  const suppliesAfter: MesaSupplies = {
+    ...suppliesBefore,
+    inventory: quantityAfter > 0
+      ? normalizedInventory.map((i) => (resolveSupplyItemId(i) === itemId ? { ...i, quantity: quantityAfter } : i))
+      : normalizedInventory.filter((i) => resolveSupplyItemId(i) !== itemId),
+  };
+  const actionsAfter = actorRow.actions_remaining - actionCheck.cost;
+  const result: ConsumeItemResponse = {
+    combatantId: actorRow.id,
+    itemId,
+    itemName: entry.item,
+    quantityBefore: entry.quantity,
+    quantityAfter,
+    consumed: amount,
+    actionsBefore: actorRow.actions_remaining,
+    actionsAfter,
+  };
+
+  const claimRows = (await query(
+    db().rpc("claim_mesa_item_consume_resolution", {
+      p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
+    }),
+    "Falha ao reservar a resolução do consumo",
+  )) as Array<{ claimed: boolean; status: string; claim_token: string; result: ConsumeItemResponse }> | null;
+  const claim = claimRows?.[0];
+  if (!claim) throw new MesaError("Não foi possível reservar a resolução do consumo.", 500, "transaction_failed");
+  if (!claim.claimed) {
+    if (claim.status === "committed" && claim.result) return { result: claim.result, committed: false };
+    if (claim.status === "failed") throw new MesaError("A resolução deste consumo falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+    return { result: await waitForItemConsumeResolution<ConsumeItemResponse>(session.id, resolutionId, combat.id), committed: false };
+  }
+  const claimToken = claim.claim_token;
+  let committed = false;
+  try {
+    const committedResult = (await query(
+      db().rpc("commit_mesa_item_consume_resolution", {
+        p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
+        p_claim_token: claimToken, p_actor_id: actorRow.id,
+        p_actions_before: actorRow.actions_remaining, p_actions_after: actionsAfter,
+        p_supplies_before: actorRow.supplies ?? null, p_supplies_after: suppliesAfter,
+        p_item_name: entry.item, p_amount: amount,
+        p_result: result,
+        p_event_text: `${actorRow.name}: consumiu ${amount}× ${entry.item} (${quantityAfter} restante)`,
+      }),
+      "Falha ao confirmar a resolução do consumo",
+    )) as ConsumeItemResponse | null;
+    if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
+    committed = true;
+    return { result: committedResult, committed: true };
+  } catch (error) {
+    if (!committed) {
+      try {
+        await query(
+          db().rpc("release_mesa_item_consume_resolution", {
+            p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claimToken,
+          }),
+          "Falha ao liberar a resolução do consumo",
+        );
+      } catch {}
+    }
+    if (error instanceof Error) {
+      const code = ["consumption_conflict", "consumption_not_active", "not_your_turn", "resolution_in_progress"].find((c) =>
+        error.message.includes(c),
+      );
+      if (code) throw new MesaError("A resolução concorrente não pôde ser aplicada.", 409, code);
+    }
+    throw error;
+  }
+}
+
+/**
+ * F1.13.2 — **uso atômico de item de cura** na Mesa.
+ *
+ *     validar → consumir → calcular cura → aplicar HP → evento → commit
+ *
+ * Tudo numa ÚNICA resolução (`mesa_item_consume_resolutions` + a RPC
+ * `commit_mesa_item_heal_resolution`, que debita Action, decrementa o item e
+ * escreve o HP numa linha só, com CAS nos três campos). Se qualquer etapa
+ * falhar, nada muda: sem item consumido, sem HP, sem Action e sem evento — e a
+ * resolução não fica `committed`.
+ *
+ * Intenção enviada pelo cliente: `{ resolutionId, actorCombatantId, itemId }`.
+ * Nunca aceitamos do cliente: quantidade final, cura final, HP final,
+ * inventory/supplies finais ou qualquer snapshot autoritativo.
+ *
+ * A regra de HP é a MESMA do Healing Gateway (`clampHealing`), e o valor do
+ * item vem da MESMA regra que o resto do sistema já usa
+ * (`getSupplyHealAmount`) — nada de segunda implementação de cura.
+ */
+
+const ITEM_HEAL_RESOLUTION_PREFIX = "item-heal:";
+
+/**
+ * Além dos campos de resultado genéricos (`assertIntentOnly`), o corpo deste
+ * endpoint também recusa qualquer coisa que pareça com o ESTADO final da
+ * mochila/economia — o contrato de intenção é só
+ * `{ resolutionId, actorCombatantId, itemId }`.
+ */
+const ITEM_HEAL_FORBIDDEN_FIELDS = [
+  "quantity",
+  "quantityAfter",
+  "finalQuantity",
+  "restored",
+  "healAmount",
+  "inventory",
+  "supplies",
+  "actionsAfter",
+  "committed",
+];
+
+export interface UseItemHealResponse {
+  combatantId: string;
+  itemId: string;
+  itemName: string;
+  quantityBefore: number;
+  quantityAfter: number;
+  hpBefore: number;
+  hpAfter: number;
+  hpMax: number;
+  /** HP efetivamente devolvido (servidor). */
+  restored: number;
+  actionsBefore: number;
+  actionsAfter: number;
+}
+
+export async function applyItemHealIntegrated(input: {
+  sessionId: unknown;
+  token: unknown;
+  /** Corpo cru da intenção: campos de resultado são recusados. */
+  body: unknown;
+}): Promise<{ result: UseItemHealResponse; committed: boolean }> {
+  assertIntentOnly(input.body, "healing");
+  const body: Record<string, unknown> =
+    typeof input.body === "object" && input.body !== null && !Array.isArray(input.body)
+      ? (input.body as Record<string, unknown>)
+      : {};
+  const forbidden = ITEM_HEAL_FORBIDDEN_FIELDS.filter((field) =>
+    Object.prototype.hasOwnProperty.call(body, field),
+  );
+
+  if (forbidden.length > 0) {
+    throw new MesaError(
+      `O servidor não aceita autoridade de resultado do cliente (${forbidden.join(", ")}). ` +
+        "Envie só a intenção: a mochila, o HP e as Actions são resolvidos aqui.",
+      400,
+      "client_authority_forbidden",
+    );
+  }
+
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  const resolutionId = `${ITEM_HEAL_RESOLUTION_PREFIX}${requireResolutionId(body.resolutionId)}`;
+  const combatantId = typeof body.actorCombatantId === "string" ? body.actorCombatantId.trim() : "";
+  const itemId = typeof body.itemId === "string" ? body.itemId.trim() : "";
+  if (!combatantId || !itemId) throw new MesaError("Dados do uso de item inválidos.", 400, "invalid_action");
+
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+
+  const previous = await storedItemConsumeResolution<UseItemHealResponse>(session.id, resolutionId, combat.id);
+  if (previous?.status === "committed" && previous.result) return { result: previous.result, committed: false };
+  if (previous?.status === "failed") {
+    throw new MesaError("A resolução deste uso falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+  }
+  if (previous?.status === "processing") {
+    return {
+      result: await waitForItemConsumeResolution<UseItemHealResponse>(session.id, resolutionId, combat.id),
+      committed: false,
+    };
+  }
+
+  const rows = (await query(
+    db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
+    "Falha ao consultar os combatentes",
+  )) as CombatantRow[];
+  const actorRow = rows.find((row) => row.id === combatantId);
+  if (!actorRow) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  if (actorRow.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  if (participant.role === "player" && actorRow.participant_id !== participant.id) throw new MesaError("Você não pode controlar este combatente.", 403, "combatant_not_owned");
+  if (participant.role === "player" && actorRow.kind !== "character") throw new MesaError("Uso de item só é permitido em personagens.", 400, "not_a_player");
+  if (participant.role === "gm" && actorRow.kind !== "enemy" && actorRow.participant_id !== participant.id) {
+    throw new MesaError("O Mestre só pode controlar inimigos ou o próprio personagem.", 403, "combatant_not_owned");
+  }
+
+  const actionCheck = resolveAction({
+    combatStatus: combat.status,
+    initiativeStarted: combat.initiative_started,
+    activeCombatantId: combat.active_combatant_id,
+    actorRole: participant.role,
+    actorOwnsCombatant: actorRow.participant_id === participant.id,
+    combatant: { id: actorRow.id, isDead: actorRow.is_dead, actionsMax: actorRow.actions_max, actionsRemaining: actorRow.actions_remaining, movementMax: actorRow.movement_max, movementRemaining: actorRow.movement_remaining },
+    actionType: "item",
+  });
+  if (!actionCheck.ok) throw new MesaError(DENIAL_MESSAGES[actionCheck.reason], 403, actionCheck.reason);
+  if (actorRow.is_dead) throw new MesaError("Ator derrotado.", 403, "combatant_defeated");
+
+  /* -------------------------- 6. localizar o item -------------------------- */
+  const suppliesBefore: MesaSupplies = actorRow.supplies ?? { inventory: [] };
+  const inventory = suppliesBefore.inventory ?? [];
+  if (!findSupplyEntry(inventory, itemId)) {
+    throw new MesaError("Item não está na mochila do combate.", 400, "item_not_found");
+  }
+  const normalizedInventory = normalizeSupplyInventory(inventory);
+  const entry = findSupplyEntry(normalizedInventory, itemId);
+  if (!entry) throw new MesaError("Quantidade insuficiente na mochila.", 400, "insufficient_quantity");
+  if (entry.quantity < 1) throw new MesaError("Quantidade insuficiente na mochila.", 400, "insufficient_quantity");
+
+  /* ------------------- 7/8. item utilizável + regra de cura ---------------- */
+  const healAmount = getSupplyHealAmount(entry.item);
+  if (healAmount === null) {
+    throw new MesaError("Este item não restaura HP no sistema.", 400, "item_not_healing");
+  }
+  const hpBefore = actorRow.hp_current;
+  const hpMax = actorRow.hp_max;
+  // No teto (ou sem teto cadastrado) não há nada a curar: consumir aqui seria
+  // jogar o item fora. Mesma recusa do `applyParticipantHealingItem`.
+  if (hpBefore >= hpMax) throw new MesaError("Combatente já está com HP máximo.", 409, "already_full_hp");
+
+  const hpAfter = clampHealing(hpBefore, hpMax, healAmount);
+  const restored = hpAfter - hpBefore;
+
+  /* ------------------------ 9. consumir + preparar ------------------------- */
+  const quantityAfter = entry.quantity - 1;
+  const suppliesAfter: MesaSupplies = {
+    ...suppliesBefore,
+    inventory: quantityAfter > 0
+      ? normalizedInventory.map((i) => (resolveSupplyItemId(i) === itemId ? { ...i, quantity: quantityAfter } : i))
+      : normalizedInventory.filter((i) => resolveSupplyItemId(i) !== itemId),
+  };
+  const actionsAfter = actorRow.actions_remaining - actionCheck.cost;
+  const result: UseItemHealResponse = {
+    combatantId: actorRow.id,
+    itemId,
+    itemName: entry.item,
+    quantityBefore: entry.quantity,
+    quantityAfter,
+    hpBefore,
+    hpAfter,
+    hpMax,
+    restored,
+    actionsBefore: actorRow.actions_remaining,
+    actionsAfter,
+  };
+
+  /* ------------------------ 12. claim + commit único ---------------------- */
+  const claimRows = (await query(
+    db().rpc("claim_mesa_item_consume_resolution", {
+      p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
+    }),
+    "Falha ao reservar a resolução do uso de item",
+  )) as Array<{ claimed: boolean; status: string; claim_token: string; result: UseItemHealResponse }> | null;
+  const claim = claimRows?.[0];
+  if (!claim) throw new MesaError("Não foi possível reservar a resolução do uso de item.", 500, "transaction_failed");
+  if (!claim.claimed) {
+    if (claim.status === "committed" && claim.result) return { result: claim.result, committed: false };
+    if (claim.status === "failed") throw new MesaError("A resolução deste uso falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
+    return {
+      result: await waitForItemConsumeResolution<UseItemHealResponse>(session.id, resolutionId, combat.id),
+      committed: false,
+    };
+  }
+  const claimToken = claim.claim_token;
+  let committed = false;
+  try {
+    const committedResult = (await query(
+      db().rpc("commit_mesa_item_heal_resolution", {
+        p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
+        p_claim_token: claimToken, p_actor_id: actorRow.id,
+        p_actions_before: actorRow.actions_remaining, p_actions_after: actionsAfter,
+        p_supplies_before: actorRow.supplies ?? null, p_supplies_after: suppliesAfter,
+        p_hp_before: hpBefore, p_hp_after: hpAfter,
+        p_item_name: entry.item, p_amount: healAmount,
+        p_result: result,
+        p_event_text: `${actorRow.name}: usou ${entry.item} → +${restored} HP (${hpAfter}/${hpMax}); ${quantityAfter} restante`,
+      }),
+      "Falha ao confirmar a resolução do uso de item",
+    )) as UseItemHealResponse | null;
+    if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
+    committed = true;
+    return { result: committedResult, committed: true };
+  } catch (error) {
+    if (!committed) {
+      try {
+        await query(
+          db().rpc("release_mesa_item_consume_resolution", {
+            p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claimToken,
+          }),
+          "Falha ao liberar a resolução do uso de item",
+        );
+      } catch {}
+    }
+    if (error instanceof Error) {
+      const code = ["consumption_conflict", "consumption_not_active", "not_your_turn", "resolution_in_progress"].find((c) =>
+        error.message.includes(c),
+      );
+      if (code) throw new MesaError("A resolução concorrente não pôde ser aplicada.", 409, code);
+    }
+    throw error;
+  }
 }
 
 // Mensagens/labels vêm de `messages.ts` (módulo puro, compartilhado com a UI).

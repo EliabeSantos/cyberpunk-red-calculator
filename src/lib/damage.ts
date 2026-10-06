@@ -292,27 +292,44 @@ export interface DeathSaveResult {
   characterDied: boolean;
 }
 
+export interface DeathSaveState {
+  dc: number;
+  failures: number;
+}
+
+/**
+ * Resolve somente a regra de Death Save, sem depender de Character ou de
+ * persistência. A ficha e o gateway da Mesa usam esta mesma função.
+ */
+export function resolveDeathSave(state: DeathSaveState, rng?: RandomSource): DeathSaveResult & { state: DeathSaveState } {
+  const dc = state.dc;
+  const roll = rollDice("1d10", rng);
+  const diceRoll = roll.rolls[0];
+  const success = diceRoll <= dc;
+  const failuresAfter = success ? state.failures : state.failures + 1;
+  const nextDc = success ? dc : Math.max(0, dc - 1);
+  const characterDied = !success && diceRoll > nextDc;
+  return {
+    diceRoll,
+    dc,
+    success,
+    failuresAfter,
+    characterDied,
+    state: { dc: nextDc, failures: failuresAfter },
+  };
+}
+
 /** Rola um Death Save para um personagem Mortally Wounded.
  * Regra: 1d10 vs DC (inicial = BODY). Cada falha reduz DC em 1.
  * Se o resultado > DC, o personagem morre.
  */
 export function rollDeathSave(character: Character, rng?: RandomSource): { character: Character; result: DeathSaveResult } {
-  const dc = character.combat.deathSaveDC;
-  const roll = rollDice("1d10", rng);
-  const diceRoll = roll.rolls[0];
-  const success = diceRoll <= dc;
-  let newFailures = character.combat.deathSaveFailures;
-  let newDC = dc;
-  let characterDied = false;
-
-  if (!success) {
-    newFailures += 1;
-    newDC = Math.max(0, dc - 1); // Cada falha reduz DC em1
-    // Verifica se o resultado do d10 é maior que o DC atual
-    if (diceRoll > newDC) {
-      characterDied = true;
-    }
-  }
+  const resolved = resolveDeathSave(
+    { dc: character.combat.deathSaveDC, failures: character.combat.deathSaveFailures },
+    rng,
+  );
+  const { diceRoll, dc, success, failuresAfter: newFailures, characterDied } = resolved;
+  const newDC = resolved.state.dc;
 
   const entry: RollHistoryEntry = {
     id: crypto.randomUUID(),

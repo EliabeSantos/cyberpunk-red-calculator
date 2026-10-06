@@ -10,6 +10,7 @@ import {
 } from "../src/lib/combatEngine.ts";
 import {
   MESA_ROLL_ACTION,
+  formatPlayerRollEvent,
   formatRollEvent,
   isMesaRollKind,
   parseMesaRoll,
@@ -19,6 +20,20 @@ import {
   type MesaRollSummary,
 } from "../src/lib/mesa/rollPolicy.ts";
 import type { RollHistoryEntry } from "../src/types/character.ts";
+
+test("evento de rolagem do Player não expõe resultado fornecido pelo navegador", () => {
+  const text = formatPlayerRollEvent("Player", {
+    type: "skill_check",
+    label: "resultado inventado",
+    expression: "1d10 + 99",
+    total: 999,
+    rolls: [10],
+    skillCheckContext: "action",
+  });
+  assert.equal(text, "Player: Skill Check (action)");
+  assert.equal(text.includes("999"), false);
+  assert.equal(text.includes("inventado"), false);
+});
 
 function entry(overrides: Partial<RollHistoryEntry> = {}): RollHistoryEntry {
   return {

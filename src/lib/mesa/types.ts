@@ -3,6 +3,8 @@
  *
  * Hierarquia: USUÁRIO → SESSÃO → PARTICIPANTES → PERSONAGENS → ESTADO DE COMBATE.
  */
+import type { DamageResult } from "@/lib/combat/contract";
+import type { CriticalInjury } from "@/data/criticalInjuries";
 
 export type SessionStatus = "lobby" | "active" | "finished";
 export type ParticipantRole = "gm" | "player";
@@ -43,7 +45,7 @@ export interface MesaSupplies {
   /** Capacidade do pente. */
   magazine?: number;
   /** Reserva na mochila: munição para recarregar e itens de cura. */
-  inventory?: Array<{ item: string; quantity: number }>;
+  inventory?: Array<{ item: string; quantity: number; itemId?: string }>;
 }
 
 export interface MesaCombatant {
@@ -82,12 +84,17 @@ export interface MesaCombatant {
   hpCurrent: number;
   hpMax: number;
   isDead: boolean;
+  /** Estado de Death Save projetado da ficha; inimigos permanecem em zero. */
+  deathSaveDC?: number;
+  deathSaveFailures?: number;
   conditions: string[];
   sortOrder: number;
 }
 
 export interface MesaEvent {
   at: string;
+  /** Chave de resolução carimbada pelo servidor quando o evento é retryable. */
+  resolutionId?: string;
   /**
    * `roll` = dado rolado na ficha de um participante (entra também na lista de
    * rolagens visível no painel, sem precisar abrir o registro completo).
@@ -161,6 +168,8 @@ export interface MesaBattle {
 
 /** Estado completo devolvido ao cliente (é o que o Realtime publica). */
 export interface MesaState {
+  /** Maior `updated_at` conhecido da sessão/combate, usado só para convergência. */
+  stateVersion?: string;
   session: MesaSession;
   participants: MesaParticipant[];
   combat: MesaCombat | null;
@@ -175,4 +184,75 @@ export interface MesaState {
 
 export function isSessionStatus(value: unknown): value is SessionStatus {
   return value === "lobby" || value === "active" || value === "finished";
+}
+
+/**
+ * F1.12.1 — resultado do **Player Damage Gateway** (`POST /combat/player-damage`).
+ *
+ * É também o payload que fica gravado em `mesa_attack_resolutions.result`, o
+ * que permite devolver o MESMO resultado em um retry sem aplicar dano de novo.
+ * `updated: false` (sem combate ativo / alvo inexistente) devolve os campos
+ * como `null`.
+ */
+export interface PlayerDamageOutcome {
+  updated: boolean;
+  hp: number | null;
+  isDead: boolean | null;
+  armor: { head: number; body: number } | null;
+  criticalInjuries: CriticalInjury[] | null;
+  damageResult: DamageResult | null;
+}
+
+/**
+ * F1.12.2 — resultado do **Player Healing Gateway** (`POST /combat/player-heal`).
+ *
+ * Assim como o dano, este payload é o que fica gravado em
+ * `mesa_attack_resolutions.result`, permitindo devolver o MESMO resultado num
+ * retry sem curar duas vezes.
+ *
+ * `hp`/`hpMax`/`amountApplied` são SEMPRE valores lidos/calculados no servidor
+ * (`min(hpAtual + amount, hpMax)`). `updated: false` = o alvo já estava no
+ * máximo e nada mudou (portanto `amountApplied: 0` e nenhum evento).
+ *
+ * `isDead` é DEVOLVIDO, nunca alterado: cura não toca Death Save nesta etapa.
+ */
+export interface PlayerHealingOutcome {
+  updated: boolean;
+  hp: number;
+  hpMax: number;
+  amountApplied: number;
+  isDead: boolean;
+}
+
+/** F1.15 — resultado da resolução server-side de Death Save. */
+export interface PlayerDeathSaveOutcome {
+  combatantId: string;
+  diceRoll: number;
+  dc: number;
+  success: boolean;
+  failuresAfter: number;
+  characterDied: boolean;
+  deathSaveDC: number;
+  committed: boolean;
+}
+
+/**
+ * F1.14.2 — resultado do **Player Initiative Gateway**
+ * (`POST /combat/initiative` com corpo de intenção).
+ *
+ * `initiative` é o valor GRAVADO no combatant do próprio participante (lido de
+ * volta do servidor, nunca do navegador). `initiativeDetail` (total/bônus de REF)
+ * também é calculado no servidor — o cliente não manda autoridade de display.
+ *
+ * `committed:false` = este `resolutionId` já tinha sido processado antes (retry):
+ * nada foi regravado.
+ */
+export interface PlayerInitiativeOutcome {
+  kind: "initiative";
+  resolutionId: string;
+  combatantId: string;
+  initiative: number;
+  initiativeDetail: MesaCombatant["initiativeDetail"];
+  /** Sempre `true` num resultado persistido — o replay devolve o mesmo objeto. */
+  registered: true;
 }

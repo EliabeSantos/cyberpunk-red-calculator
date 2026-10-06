@@ -12,7 +12,10 @@
  * que o F1.8 (condições mecânicas) vai crescer, sem mexer em ataque/dano/
  * mochila. Hoje ele só adiciona e remove, exatamente como antes: a ficha do
  * jogador não modela condições e a MESA guarda `string[]`
- * (conversão pendente, F1.0 §13 nº 12).
+ * (conversão pendente, F1.0 §13 nº 12). Durante `mesa-combat`, portanto,
+ * não existe uma operação legítima de declaração do Player: Conditions são
+ * observações/efeitos controlados pelo Mestre, não um catálogo livre para o
+ * jogador inventar ou alterar.
  */
 import type { EncounterData } from "@/types/encounter";
 

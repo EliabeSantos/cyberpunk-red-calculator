@@ -9,12 +9,13 @@ import { ArrowLeftIcon, PlusIcon, SwordsIcon, TargetIcon } from "@/components/ic
 const navItems: Array<{
   href: string;
   label: string;
+  description: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   disabled?: boolean;
 }> = [
-  { href: "/gm", label: "Inimigos", icon: TargetIcon },
-  { href: "/gm/create", label: "Criar Inimigo", icon: PlusIcon },
-  { href: "/gm/encounters", label: "Combate", icon: SwordsIcon },
+  { href: "/gm", label: "Inimigos", description: "Catálogo e fichas", icon: TargetIcon },
+  { href: "/gm/create", label: "Criar inimigo", description: "Montar uma ameaça", icon: PlusIcon },
+  { href: "/gm/encounters", label: "Combate", description: "Rodar um encontro", icon: SwordsIcon },
 ];
 
 export default function GMNav() {
@@ -30,26 +31,37 @@ export default function GMNav() {
 
   return (
     <nav className="gm-nav" role="navigation" aria-label="Navegação da Área GM">
-      <div className="gm-nav-brand">
-        <div className="gm-nav-brand-icon">GM</div>
-        <div className="gm-nav-brand-text">
-          <span className="gm-nav-title">Área GM</span>
-          <span className="gm-nav-subtitle">Cyberpunk Red</span>
+      <header className="gm-nav-head">
+        <div className="gm-nav-brand">
+          <div className="gm-nav-brand-icon" aria-hidden="true"><span>GM</span><i /></div>
+          <div className="gm-nav-brand-text">
+            <span className="gm-nav-kicker">REDLINE // OPERADOR</span>
+            <span className="gm-nav-title">Central do GM</span>
+          </div>
         </div>
-      </div>
+        <span className="gm-nav-build">v.01 / ONLINE</span>
+      </header>
+
+      <section className="gm-nav-console" aria-label="Status da central">
+        <span className="gm-nav-console-label"><i /> Central ativa</span>
+        <strong>Controle de campanha</strong>
+        <small>Prepare ameaças, encontros e o próximo turno.</small>
+      </section>
 
       <div className="gm-nav-section">
+        <span className="gm-nav-section-label">Operação</span>
         <ul className="gm-nav-list">
-          {navItems.map(({ href, label, icon: Icon, disabled }) => {
+          {navItems.map(({ href, label, description, icon: Icon, disabled }, index) => {
             const active = !disabled && activeHref === href;
             return (
               <li key={href}>
                 {disabled ? (
                   <span className="gm-nav-item gm-nav-item-disabled" title="Em desenvolvimento">
+                    <span className="gm-nav-item-index">0{index + 1}</span>
                     <span className="gm-nav-item-icon">
                       <Icon />
                     </span>
-                    <span className="gm-nav-item-label">{label}</span>
+                    <span className="gm-nav-item-copy"><span className="gm-nav-item-label">{label}</span><small>{description}</small></span>
                     <span className="gm-nav-item-badge">Em breve</span>
                   </span>
                 ) : (
@@ -58,10 +70,12 @@ export default function GMNav() {
                     className={`gm-nav-item${active ? " gm-nav-item-active" : ""}`}
                     aria-current={active ? "page" : undefined}
                   >
+                    <span className="gm-nav-item-index">0{index + 1}</span>
                     <span className="gm-nav-item-icon">
                       <Icon />
                     </span>
-                    <span className="gm-nav-item-label">{label}</span>
+                    <span className="gm-nav-item-copy"><span className="gm-nav-item-label">{label}</span><small>{description}</small></span>
+                    <span className="gm-nav-item-arrow" aria-hidden="true">↗</span>
                   </Link>
                 )}
               </li>
@@ -71,13 +85,12 @@ export default function GMNav() {
       </div>
 
       <div className="gm-nav-footer">
+        <span className="gm-nav-section-label">Acesso rápido</span>
         <Link href="/" className="gm-nav-back">
-          <span className="gm-nav-item-icon">
-            <ArrowLeftIcon />
-          </span>
-          <span>Voltar para Fichas</span>
+          <span className="gm-nav-item-icon"><ArrowLeftIcon /></span>
+          <span><strong>Voltar para fichas</strong><small>Área do jogador</small></span>
         </Link>
-        <MesaEntry />
+        <div className="gm-nav-mesa"><MesaEntry /></div>
       </div>
     </nav>
   );

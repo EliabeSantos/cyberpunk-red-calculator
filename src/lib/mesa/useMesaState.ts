@@ -31,6 +31,18 @@ export interface MesaStateResult {
   refresh: () => Promise<void>;
 }
 
+/** Aceita somente snapshots da sessão atual e nunca recua a versão conhecida. */
+export function shouldAcceptMesaSnapshot(
+  snapshot: { session: Pick<MesaSnapshot["session"], "id">; stateVersion?: string },
+  expectedSessionId: string,
+  latestVersion: string | null,
+): boolean {
+  if (snapshot.session.id !== expectedSessionId) return false;
+  if (latestVersion && !snapshot.stateVersion) return false;
+  if (snapshot.stateVersion && latestVersion && snapshot.stateVersion < latestVersion) return false;
+  return true;
+}
+
 export function useMesaState(sessionId: string | null): MesaStateResult {
   const [state, setState] = useState<MesaState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -39,23 +51,35 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
   const [realtime, setRealtime] = useState(false);
 
   const realtimeActiveRef = useRef(false);
+  const latestVersionRef = useRef<string | null>(null);
 
-  const applySnapshot = useCallback((snapshot: MesaSnapshot) => {
+  const acceptsSnapshot = useCallback((snapshot: MesaSnapshot, expectedSessionId: string): boolean => {
+    if (!shouldAcceptMesaSnapshot(snapshot, expectedSessionId, latestVersionRef.current)) return false;
+    const incoming = snapshot.stateVersion;
+    if (incoming) latestVersionRef.current = incoming;
+    return true;
+  }, []);
+
+  const applySnapshot = useCallback((snapshot: MesaSnapshot, expectedSessionId: string) => {
+    if (!acceptsSnapshot(snapshot, expectedSessionId)) return false;
     // O broadcast não traz `viewer` (é igual para todos, exceto quem pergunta):
     // preserva o do último GET para os botões continuarem certos.
     setState((previous) => ({
       ...snapshot,
-      viewer: previous?.viewer ?? { participantId: null, role: null, displayName: null },
+      viewer: previous?.session.id === snapshot.session.id
+        ? previous.viewer
+        : { participantId: null, role: null, displayName: null },
     }));
     setError(null);
     setErrorCode(null);
-  }, []);
+    return true;
+  }, [acceptsSnapshot]);
 
   const refresh = useCallback(async () => {
     if (!sessionId) return;
     try {
       const next = await fetchMesaState(sessionId);
-      setState(next);
+      if (acceptsSnapshot(next, sessionId)) setState(next);
       setError(null);
       setErrorCode(null);
     } catch (caught) {
@@ -64,7 +88,7 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, acceptsSnapshot]);
 
   useEffect(() => {
     // O estado inicial já é `{ state: null, loading: true }`; não há nada a
@@ -75,6 +99,7 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
     let graceTimer: ReturnType<typeof setTimeout> | null = null;
     let subscription: { close: () => void } | null = null;
+    latestVersionRef.current = null;
 
     const stopPolling = () => {
       if (pollTimer) {
@@ -101,6 +126,7 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
       try {
         const next = await fetchMesaState(sessionId);
         if (disposed) return;
+        if (!acceptsSnapshot(next, sessionId)) return;
         setState(next);
         setError(null);
         setErrorCode(null);
@@ -123,7 +149,7 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
           realtimeActiveRef.current = true;
           setRealtime(true);
           stopPolling();
-          applySnapshot(snapshot);
+           applySnapshot(snapshot, sessionId);
         },
         (status) => {
           if (disposed) return;
@@ -161,7 +187,10 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
       realtimeActiveRef.current = false;
       subscription?.close();
     };
-  }, [sessionId, applySnapshot, refresh]);
+  }, [sessionId, acceptsSnapshot, applySnapshot, refresh]);
 
-  return { state, loading, error, errorCode, realtime, refresh };
+  // Enquanto uma nova sessão carrega, nunca exponha o snapshot da sessão
+  // anterior como se fosse o atual.
+  const visibleState = state?.session.id === sessionId ? state : null;
+  return { state: visibleState, loading, error, errorCode, realtime, refresh };
 }

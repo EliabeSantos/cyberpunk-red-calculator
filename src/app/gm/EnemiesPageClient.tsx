@@ -30,14 +30,18 @@ export default function EnemiesPageClient() {
 
   return (
     <div className="gm-page">
-      <header className="gm-page-header">
+      <header className="gm-page-header enemy-page-header">
         <div className="gm-page-header-main">
+          <span className="enemy-page-eyebrow">CATÁLOGO // AMEAÇAS</span>
           <h1 className="gm-page-title">Inimigos</h1>
           <p className="gm-page-subtitle">Gerencie NPCs e inimigos para seus encontros</p>
         </div>
-        <Link href="/gm/create" className="gm-page-create-button">
-          <span aria-hidden="true">+</span> Novo Inimigo
-        </Link>
+        <div className="enemy-page-header-meta">
+          <span className="enemy-page-signal"><i aria-hidden="true" /> ROSTER LOCAL</span>
+          <Link href="/gm/create" className="gm-page-create-button">
+            <span aria-hidden="true">+</span> Novo inimigo
+          </Link>
+        </div>
       </header>
 
       {viewMode === "list" && (

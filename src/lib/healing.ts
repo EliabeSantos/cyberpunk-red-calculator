@@ -4,6 +4,18 @@ import type { Character, InventoryItem } from "@/types/character";
 /** Fallback para itens sem `hpRestore` explícito (ex.: notas do jogador "Recupera 5 HP."). */
 const HP_RESTORE_PATTERN = /recupera\s+(\d+)\s+hp/i;
 
+/**
+ * F1.13.2 — **a** regra de cura de HP do sistema, extraída de
+ * `applyPlayerHealing` (Healing Gateway) para que a resolução atômica de item
+ * + cura da Mesa compartilhe UMA implementação em vez de duas.
+ *
+ * Cura nunca REDUZ o HP (protege linhas legadas acima do máximo por caminho
+ * antigo) e nunca passa do teto.
+ */
+export function clampHealing(hpBefore: number, hpMax: number, amount: number): number {
+  return Math.max(hpBefore, Math.min(hpBefore + amount, hpMax));
+}
+
 /** Quantidade de HP que o item restaura quando usado, ou `null` se o item não restaura HP. */
 export function getItemHealAmount(item: InventoryItem): number | null {
   const catalogItem = item.catalogItemId ? getCatalogItem(item.catalogItemId) : null;
@@ -60,7 +72,7 @@ export function applyHealingItem(
 
   const stabilizes = doesItemStabilize(item);
   const hpBefore = character.combat.hp.current;
-  let hpAfter = Math.min(character.combat.hp.max, hpBefore + amount);
+  let hpAfter = clampHealing(hpBefore, character.combat.hp.max, amount);
   let stabilized = false;
 
   if (hpBefore <= 0) {

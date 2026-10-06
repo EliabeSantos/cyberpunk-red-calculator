@@ -7,8 +7,9 @@
  * `useSyncExternalStore`.
  *
  * É estado de tela, não de jogo: fica **em memória** (não vai para o
- * localStorage). Recarregar a página fecha a sala — a reabre pelo nav
- * (📜 Suas mesas) ou pelo link de convite /mesa/CODE.
+ * localStorage). Recarregar a página fecha a sala — a reabre pelo nav da ficha
+ * (item "Mesa online" → 📜 Suas mesas). O convite `/mesa/<CODE>` não passa por
+ * aqui desde F1.12.6: ele entra direto na tela dedicada do Player.
  */
 
 export interface MesaUiSnapshot {

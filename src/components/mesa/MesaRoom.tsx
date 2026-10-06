@@ -22,9 +22,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import MesaCharacterLink from "@/components/mesa/MesaCharacterLink";
 import MesaCombatPanel from "@/components/mesa/MesaCombatPanel";
-import { joinMesa, leaveMesa, linkCharacter, MesaApiError } from "@/lib/mesa/client";
+import { joinMesa, leaveMesa, MesaApiError } from "@/lib/mesa/client";
 import { normalizeJoinCode } from "@/lib/mesa/joinCode";
+import { playerMesaHref } from "@/lib/mesa/mesaRoute";
 import {
   getMembershipSnapshot,
   getServerMembershipSnapshot,
@@ -32,8 +34,8 @@ import {
   subscribeToMembership,
 } from "@/lib/mesa/membershipStore";
 import type { MesaState } from "@/lib/mesa/types";
+import { useAutoLinkCharacter } from "@/lib/mesa/useAutoLinkCharacter";
 import { useMesaState } from "@/lib/mesa/useMesaState";
-import { getActiveCharacter, loadCharacters } from "@/lib/storage";
 
 interface Props {
   joinCode: string;
@@ -86,23 +88,9 @@ export default function MesaRoom({ joinCode, onClose }: Props) {
     onClose?.();
   }, [state, errorCode, normalizedCode, onClose]);
 
-  // Vincula automaticamente a ficha ativa quando o jogador ainda não escolheu uma.
-  // Uma tentativa por sessão: se falhar, o jogador escolhe manualmente abaixo.
-  const attemptedLinkRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!state) return;
-    const me = state.participants.find((entry) => entry.id === state.viewer.participantId);
-    if (!me || me.characterId) return;
-    if (attemptedLinkRef.current === state.session.id) return;
-    const character = getActiveCharacter();
-    if (!character) return;
-    attemptedLinkRef.current = state.session.id;
-    void linkCharacter(state.session.id, character.id, character)
-      .then(() => refresh())
-      .catch(() => {
-        // Sem ficha local ou falha de rede: o jogador pode escolher abaixo.
-      });
-  }, [state, refresh]);
+  // Vincula automaticamente a ficha ativa quando o jogador ainda não escolheu
+  // uma — MESMO efeito usado pela tela dedicada do Player (`/mesa/[id]`).
+  useAutoLinkCharacter(state, refresh);
 
   async function handleJoin(event: React.FormEvent) {
     event.preventDefault();
@@ -208,23 +196,11 @@ interface ViewProps {
   onClose?: () => void;
 }
 
-function listLocalCharacters(): Array<{ id: string; name: string }> {
-  return loadCharacters().map((character) => ({
-    id: character.id,
-    name: character.identity.name || "Sem nome",
-  }));
-}
-
 function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onChanged, onRefresh, onClose }: ViewProps) {
-  // Inicialização preguiçosa: `MesaView` só renderiza depois do estado chegar
-  // do servidor, ou seja, já está no navegador — não há hidratação a casar.
-  const [characters] = useState(listLocalCharacters);
-  const [linking, setLinking] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [inviteLink] = useState(() => `${window.location.origin}/mesa/${joinCode}`);
 
   const isGM = state.viewer.role === "gm";
-  const me = state.participants.find((entry) => entry.id === state.viewer.participantId) ?? null;
   const sessionFinished = state.session.status === "finished";
 
   async function copyInvite() {
@@ -252,22 +228,6 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
     }
   }
 
-  async function handleLink(characterId: string) {
-    if (!characterId) return;
-    setLinking(true);
-    try {
-      const character = loadCharacters().find((entry) => entry.id === characterId);
-      if (!character) throw new MesaApiError("Personagem não encontrado no navegador.", 400, "not_found");
-      await linkCharacter(sessionId, character.id, character);
-      await onRefresh();
-      onNotice(`Ficha "${character.identity.name}" vinculada.`, "ok");
-    } catch (caught) {
-      onNotice(caught instanceof MesaApiError ? caught.message : "Falha ao vincular a ficha.", "error");
-    } finally {
-      setLinking(false);
-    }
-  }
-
   return (
     <div className="mesa-shell">
       <header className="mesa-header">
@@ -288,6 +248,9 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
           <button type="button" className="mesa-ghost" onClick={() => void copyInvite()}>
             Copiar link
           </button>
+          <Link className="mesa-ghost" href={playerMesaHref(sessionId)} title="Tela dedicada do Jogador, em rota própria.">
+            Abrir tela da mesa
+          </Link>
           {onClose && (
             <button type="button" className="mesa-ghost" onClick={onClose}>
               ✕ Fechar
@@ -315,26 +278,15 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
           ))}
         </ul>
 
-        <div className="mesa-link-character">
-          <label>
-            Meu personagem nesta mesa
-            <select
-              value={me?.characterId ?? ""}
-              disabled={linking || sessionFinished}
-              onChange={(event) => void handleLink(event.target.value)}
-            >
-              <option value="">— nenhum —</option>
-              {characters.map((character) => (
-                <option key={character.id} value={character.id}>
-                  {character.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <small>
-            A ficha continua no seu navegador. Só uma cópia vai para o servidor, para o mestre validar as ações.
-          </small>
-        </div>
+        <MesaCharacterLink
+          sessionId={sessionId}
+          selectedCharacterId={
+            state.participants.find((entry) => entry.id === state.viewer.participantId)?.characterId ?? null
+          }
+          disabled={sessionFinished}
+          onNotice={onNotice}
+          onChanged={onRefresh}
+        />
       </section>
 
       <MesaCombatPanel

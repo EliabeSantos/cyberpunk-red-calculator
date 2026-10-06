@@ -2,7 +2,8 @@
  * Combatentes (somente GM para as mutações):
  *
  * POST   — adiciona inimigos ao combate ativo   { enemies: [{ name, hp, ref }] }
- * PATCH  — ajusta HP / condições / iniciativa   { combatantId, patch: {...} }
+ * PATCH  — ajusta HP / condições / iniciativa (somente GM)
+ *           { combatantId, patch: {...} }
  * DELETE — remove um inimigo                    ?combatantId=...
  */
 import { errorResponse, ok, readJson, tokenFrom } from "@/lib/mesa/http";

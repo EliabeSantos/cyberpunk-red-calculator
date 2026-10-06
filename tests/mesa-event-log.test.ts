@@ -157,6 +157,7 @@ const SESSION_ID = "sess-0001";
 const PARTICIPANT_ID = "part-0001";
 const COMBAT_ID = "comb-0001";
 const GM_TOKEN = "gm-token-de-teste-0123456789"; // requireToken: mínimo 16 chars
+const PLAYER_TOKEN = "player-token-de-teste-0123456789";
 
 const eventA: MesaEvent = { at: "2026-10-01T10:00:00.000Z", kind: "action", text: "eventA" };
 const eventB: MesaEvent = { at: "2026-10-01T10:00:01.000Z", kind: "roll", text: "eventB" };
@@ -186,6 +187,16 @@ function seed(): void {
       display_name: "Mestre",
       character_id: null,
       role: "gm",
+      created_at: "2026-10-01T09:00:00.000Z",
+      connected_at: "2026-10-01T09:00:00.000Z",
+    },
+    {
+      id: "part-player-0001",
+      session_id: SESSION_ID,
+      player_token: PLAYER_TOKEN,
+      display_name: "Player",
+      character_id: "char-0001",
+      role: "player",
       created_at: "2026-10-01T09:00:00.000Z",
       connected_at: "2026-10-01T09:00:00.000Z",
     },
@@ -329,6 +340,30 @@ test("Teste 4 — operação sem evento não altera o histórico", async () => {
   assert.ok(combatant, "o combatente deve continuar no banco");
   assert.equal(combatant.hp_current, 12, "a operação de fato executou a atualização");
   assert.deepEqual(persistedLog(), before, "o event_log permanece exatamente igual");
+});
+
+test("Conditions: GM mantém a mutação; Player não ganha bypass", async () => {
+  seed();
+  seedCombatant();
+
+  await store.updateCombatant({
+    sessionId: SESSION_ID,
+    token: GM_TOKEN,
+    combatantId: "enem-0001",
+    patch: { conditions: ["Stunned"] },
+  });
+  assert.deepEqual(tables.mesa_combatants.find((row) => row.id === "enem-0001")?.conditions, ["Stunned"]);
+
+  await assert.rejects(
+    store.updateCombatant({
+      sessionId: SESSION_ID,
+      token: PLAYER_TOKEN,
+      combatantId: "enem-0001",
+      patch: { conditions: ["inventada-pelo-player"] },
+    }),
+    (error: unknown) => error instanceof Error && "code" in error && (error as { code: string }).code === "gm_only",
+  );
+  assert.deepEqual(tables.mesa_combatants.find((row) => row.id === "enem-0001")?.conditions, ["Stunned"]);
 });
 
 test("Teste 5 — persistência: o histórico recuperado do banco é o correto", async () => {

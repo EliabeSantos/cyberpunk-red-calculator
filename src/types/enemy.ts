@@ -45,6 +45,11 @@ export interface EnemyWeapon {
 export interface EnemySupply {
   item: string;
   quantity: number;
+  /**
+   * F1.13.2 — identidade estável do item (catálogo do jogador ou slug
+   * determinístico). Ausente em dados antigos: use `resolveSupplyItemId`.
+   */
+  itemId?: string;
 }
 
 export interface EnemyArmor {

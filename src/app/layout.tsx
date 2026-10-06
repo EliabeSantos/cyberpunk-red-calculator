@@ -3,13 +3,14 @@ import { Geist, Geist_Mono } from "next/font/google";
 import type { PropsWithChildren } from "react";
 
 import "./globals.css";
+import "./design-system.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Cyberpunk RED Toolkit",
-  description: "Ficha e ferramentas para Cyberpunk RED.",
+  title: "Cyberpunk RED // Toolkit",
+  description: "Sua ficha, sua mesa, sua história.",
 };
 
 export default function RootLayout({ children }: PropsWithChildren) {

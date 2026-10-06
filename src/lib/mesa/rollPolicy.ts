@@ -211,3 +211,17 @@ export function formatRollEvent(actor: string, roll: MesaRollSummary, note = "")
   const text = parts.join(" ");
   return text.length > MAX_EVENT_TEXT ? `${text.slice(0, MAX_EVENT_TEXT - 1)}…` : text;
 }
+
+/**
+ * Player não transforma o resultado rolado no navegador em prova autoritativa.
+ * O log ainda registra a intenção/ocorrência, mas a mensagem é derivada pelo
+ * servidor somente do participante autenticado e do tipo validado.
+ */
+export function formatPlayerRollEvent(actor: string, roll: MesaRollSummary, note = ""): string {
+  const who = actor.trim() || "Jogador";
+  const kind = roll.type === "skill_check"
+    ? `Skill Check${roll.skillCheckContext ? ` (${roll.skillCheckContext})` : ""}`
+    : roll.type === "evasion" ? "Evasão" : roll.type === "attack" ? "Ataque" : "Rolagem";
+  const suffix = note ? ` · ${note}` : "";
+  return `${who}: ${kind}${suffix}`.slice(0, MAX_EVENT_TEXT);
+}
