@@ -76,6 +76,7 @@ export interface CombatWeapon {
    * `stats[skill.stat] + nível`. Ausente = a origem não tem base pronta.
    */
   attackBase?: number;
+  requiresTwoHands?: boolean;
 }
 
 /** Perícia reduzida ao que a regra usa: em qual STAT e qual o nível. */
@@ -238,6 +239,10 @@ export interface AttackResult {
   baseStat: { id: AttributeName; value: number };
   skill: { id: string; value: number };
   total: number;
+  /** Base pronta do snapshot de inimigo, quando a origem a declarou. */
+  attackBase?: number;
+  /** Modificadores efetivamente aplicados pelo engine, para auditoria. */
+  modifiers?: AttackModifier[];
   critical: boolean;
   fumble: boolean;
   hit: boolean;

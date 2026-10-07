@@ -997,7 +997,7 @@ export default function CharacterSheet({
               );
             }) : <EmptyState>Nenhuma Role selecionada.</EmptyState>}
           </section>
-          <section className="sheet-panel">
+          <section className="sheet-panel combat-panel">
             <PanelTitle number="03">Combate</PanelTitle>
             <div className="combat-grid">
               <Metric

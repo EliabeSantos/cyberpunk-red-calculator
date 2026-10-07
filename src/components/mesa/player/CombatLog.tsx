@@ -11,6 +11,7 @@
 import { useState } from "react";
 
 import type { MesaEvent } from "@/lib/mesa/types";
+import RollAuditDetails from "@/components/mesa/RollAuditDetails";
 
 interface Props {
   events: MesaEvent[];
@@ -44,7 +45,8 @@ export default function CombatLog({ events }: Props) {
           <ul>
             {recentRolls.map((event, index) => (
               <li key={`${event.at}-${index}`}>
-                <span aria-hidden="true">🎲</span> {event.text}
+               <span aria-hidden="true">🎲</span> {event.text}
+               <RollAuditDetails event={event} />
               </li>
             ))}
           </ul>
@@ -58,7 +60,10 @@ export default function CombatLog({ events }: Props) {
           {visible.map((event, index) => (
             <li key={`${event.at}-${index}`}>
               <time dateTime={event.at}>{formatTime(event.at)}</time>
-              <span>{event.text}</span>
+             <span>
+               {event.text}
+               <RollAuditDetails event={event} />
+             </span>
             </li>
           ))}
         </ul>

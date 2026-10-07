@@ -46,9 +46,15 @@ export function evaluateMesaAction(input: {
       actionsRemaining: combatant.actionsRemaining,
       movementMax: combatant.movementMax,
       movementRemaining: combatant.movementRemaining,
+      unconsciousUntilRound: Math.max(
+        0,
+        ...combatant.criticalInjuries
+          .map((injury) => injury.unconsciousUntilRound ?? 0),
+      ) || undefined,
     },
     actionType,
     meters: input.meters ?? 0,
+    currentRound: state.combat?.round,
   });
 
   return result.ok

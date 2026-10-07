@@ -32,6 +32,7 @@ import type { MesaState } from "@/lib/mesa/types";
 import type { CombatWeapon } from "@/lib/combat/contract";
 import { useAutoLinkCharacter } from "@/lib/mesa/useAutoLinkCharacter";
 import { loadCharacters } from "@/lib/storage";
+import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
 
 import CombatLog from "./CombatLog";
 import ActionFeedback from "./ActionFeedback";
@@ -60,6 +61,8 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [targetDraft, setTargetDraft] = useState("");
+  const [gmTargetDraft, setGmTargetDraft] = useState("");
+  const [selectedWeaponId, setSelectedWeaponId] = useState("");
   const [gmControlledCombatantId, setGmControlledCombatantId] = useState<string | null>(null);
   const [controlWeapons, setControlWeapons] = useState<Record<string, CombatWeapon[]>>({});
 
@@ -81,7 +84,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
         if (options?.success) onNotice(options.success, "ok");
       } catch (caught) {
         const message = caught instanceof MesaApiError ? caught.message : "Falha na operação.";
-        if (options?.onError) options.onError(message);
+        if (options?.onError) options.onError(message, caught instanceof MesaApiError ? caught.code : undefined);
         else onNotice(message, "error");
         await onChanged().catch(() => undefined);
       } finally {
@@ -102,8 +105,40 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
   // inimigo vivo (derivação pura — nenhum estado paralelo de Mesa).
   const selectedTargetId = useMemo(() => {
     if (targets.some((target) => target.id === targetDraft)) return targetDraft;
+    const coverId = tacticalCoverObstacleId(targetDraft);
+    const geometry = state.session.tacticalMap?.geometry;
+    if (coverId && [...(geometry?.walls ?? []), ...(geometry?.doors ?? [])].some((entry) => entry.id === coverId && entry.destroyed !== true && !(entry.type === "door" && entry.state === "open"))) return targetDraft;
     return targets[0]?.id ?? "";
-  }, [targets, targetDraft]);
+  }, [state.session.tacticalMap?.geometry, targets, targetDraft]);
+
+  const gmTargets = useMemo(
+    () => state.combatants.filter((combatant) => combatant.kind === "character" && !combatant.isDead && combatant.id !== gmControlledCombatantId),
+    [gmControlledCombatantId, state.combatants],
+  );
+  const selectedGmTargetId = useMemo(() => {
+    if (gmTargets.some((target) => target.id === gmTargetDraft)) return gmTargetDraft;
+    const coverId = tacticalCoverObstacleId(gmTargetDraft);
+    const geometry = state.session.tacticalMap?.geometry;
+    if (coverId && [...(geometry?.walls ?? []), ...(geometry?.doors ?? [])].some((entry) => entry.id === coverId && entry.destroyed !== true && !(entry.type === "door" && entry.state === "open"))) return gmTargetDraft;
+    return gmTargets[0]?.id ?? "";
+  }, [gmTargetDraft, gmTargets, state.session.tacticalMap?.geometry]);
+
+  const gmSelectedCombatant = state.combatants.find((combatant) => combatant.id === gmControlledCombatantId) ?? null;
+
+  useEffect(() => {
+    if (state.session.status === "finished" || state.combat?.status !== "active") {
+      setTargetDraft("");
+      setGmTargetDraft("");
+      return;
+    }
+    const geometry = state.session.tacticalMap?.geometry;
+    const coverExists = (targetId: string) => {
+      const obstacleId = tacticalCoverObstacleId(targetId);
+      return obstacleId !== null && [...(geometry?.walls ?? []), ...(geometry?.doors ?? [])].some((entry) => entry.id === obstacleId && entry.destroyed !== true && !(entry.type === "door" && entry.state === "open"));
+    };
+    if (targetDraft && !targets.some((target) => target.id === targetDraft) && !coverExists(targetDraft)) setTargetDraft("");
+    if (gmTargetDraft && !gmTargets.some((target) => target.id === gmTargetDraft) && !coverExists(gmTargetDraft)) setGmTargetDraft("");
+  }, [gmTargetDraft, gmTargets, state.combat?.status, state.session.status, targetDraft, targets]);
 
   const meParticipant = state.participants.find((entry) => entry.id === state.viewer.participantId) ?? null;
   const linkedCharacterId = meParticipant?.characterId ?? null;
@@ -118,6 +153,14 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
     if (!linkedCharacterId) return [];
     return loadCharacters().find((entry) => entry.id === linkedCharacterId)?.weapons ?? [];
   }, [linkedCharacterId]);
+  const playerSelectedWeapon = useMemo(
+    () => weapons.find((weapon) => weapon.id === selectedWeaponId) ?? weapons[0] ?? null,
+    [selectedWeaponId, weapons],
+  );
+  const gmSelectedWeapon = useMemo(
+    () => (gmSelectedCombatant ? (controlWeapons[gmSelectedCombatant.id] ?? []).find((weapon) => weapon.id === selectedWeaponId) ?? controlWeapons[gmSelectedCombatant.id]?.[0] ?? null : null),
+    [controlWeapons, gmSelectedCombatant, selectedWeaponId],
+  );
 
   async function handleLeave() {
     if (!window.confirm("Sair da mesa? Para voltar você vai precisar do código de novo.")) return;
@@ -189,7 +232,14 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
         </aside>
 
         <section className="player-mesa-column player-mesa-stage" aria-label="Game area">
-          <TacticalView />
+           <TacticalView
+             state={state}
+             onNotice={onNotice}
+             selectedTargetId={isGM ? selectedGmTargetId : selectedTargetId}
+             onSelectTarget={isGM ? setGmTargetDraft : setTargetDraft}
+             controlledCombatantId={isGM ? gmControlledCombatantId : null}
+             selectedWeapon={isGM ? gmSelectedWeapon : playerSelectedWeapon}
+           />
           <div className="player-mesa-stage-tools">
             <PlayerEquipmentPanel
               state={state}
@@ -226,8 +276,12 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
               run={run}
               metadata={controlWeapons}
               sessionFinished={sessionFinished}
-              controlledCombatantId={gmControlledCombatantId}
-            />
+               controlledCombatantId={gmControlledCombatantId}
+               selectedTargetId={selectedGmTargetId}
+               onSelectTarget={setGmTargetDraft}
+               selectedWeaponId={selectedWeaponId}
+               onSelectWeapon={setSelectedWeaponId}
+             />
           ) : (
             <PlayerActionsPanel
               state={state}
@@ -238,7 +292,9 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
               weapons={weapons}
               targets={targets}
               selectedTargetId={selectedTargetId}
-              onSelectTarget={setTargetDraft}
+               onSelectTarget={setTargetDraft}
+               selectedWeaponId={selectedWeaponId}
+               onSelectWeapon={setSelectedWeaponId}
               sessionFinished={sessionFinished}
             />
           )}

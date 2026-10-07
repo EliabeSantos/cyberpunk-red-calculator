@@ -4,6 +4,7 @@ import test from "node:test";
 import { evaluateMesaAction } from "../src/lib/mesa/actionGate.ts";
 import {
   attackTargets,
+  tacticalTargetSelectable,
   deriveTurnStatus,
   hpCondition,
   myCombatant,
@@ -204,6 +205,18 @@ test("alvos de ataque excluem aliados e inimigos derrotados", () => {
     targets.map((target) => target.id),
     ["c-enemy"],
   );
+});
+
+test("seleção visual respeita Player, GM controlado e derrotados", () => {
+  const dead = combatant({ id: "c-dead", kind: "enemy", isDead: true, participantId: null });
+  const playerState = state({ combatants: [me, enemy, dead] });
+  assert.equal(tacticalTargetSelectable(playerState, enemy), true);
+  assert.equal(tacticalTargetSelectable(playerState, me), false);
+  assert.equal(tacticalTargetSelectable(playerState, dead), false);
+
+  const gmState = state({ viewer: { participantId: "gm-participant", role: "gm", displayName: "GM" }, combatants: [me, enemy] });
+  assert.equal(tacticalTargetSelectable(gmState, me, enemy.id), true);
+  assert.equal(tacticalTargetSelectable(gmState, enemy, enemy.id), false);
 });
 
 // ---------------------------------------------------------------------------

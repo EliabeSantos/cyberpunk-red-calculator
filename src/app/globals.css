@@ -1343,6 +1343,122 @@
   padding-top: 0;
 }
 
+/*
+ * A coluna lateral da ficha tem apenas 19rem. O combate costumava tratar
+ * cada informação como uma seção de largura total, fazendo o card crescer
+ * muito antes de chegar aos ataques. Aqui os dados rápidos compartilham
+ * linhas e o detalhe dos resultados continua intacto.
+ */
+.combat-panel {
+  padding: .8rem;
+}
+.combat-panel .panel-title {
+  margin-bottom: .65rem;
+  padding-bottom: .55rem;
+}
+.combat-panel .combat-grid {
+  gap: .45rem;
+}
+.combat-panel .combat-grid strong {
+  margin-top: .1rem;
+}
+.combat-panel .hp-status-section {
+  margin: .35rem 0;
+}
+.combat-panel .combat-armor {
+  gap: .35rem;
+  margin: .35rem 0;
+}
+.combat-panel .combat-armor-slot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: .35rem;
+  row-gap: .1rem;
+  padding: .35rem .45rem;
+}
+.combat-panel .combat-armor-slot small {
+  grid-column: 1 / -1;
+}
+.combat-panel .combat-armor-slot strong {
+  margin: 0;
+}
+.combat-panel .combat-armor-slot .equip-item {
+  grid-column: 2;
+  grid-row: 2;
+  margin: 0;
+  padding: .15rem .3rem;
+  font-size: .55rem;
+}
+.combat-panel .combat-rolls-group {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: grid;
+  gap: .35rem;
+  margin: .35rem 0;
+  padding: .35rem;
+}
+.combat-panel .combat-rolls-group .initiative-section {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.combat-panel .initiative-header,
+.combat-panel .evasion-header {
+  gap: .35rem;
+  padding: .35rem .45rem;
+}
+.combat-panel .initiative-info,
+.combat-panel .evasion-info {
+  gap: .05rem;
+  min-width: 0;
+}
+.combat-panel .initiative-formula,
+.combat-panel .evasion-formula {
+  overflow-wrap: anywhere;
+  font-size: .58rem;
+}
+.combat-panel .initiative-label,
+.combat-panel .evasion-label {
+  font-size: .68rem;
+}
+.combat-panel .initiative-roll-btn,
+.combat-panel .evasion-roll-btn {
+  padding: .3rem .4rem;
+  font-size: .6rem;
+}
+.combat-panel .initiative-result,
+.combat-panel .evasion-result {
+  padding: .35rem .45rem;
+}
+.combat-panel > h3 {
+  margin: .75rem 0 .35rem;
+}
+.combat-panel .damage-input-section {
+  gap: .4rem;
+  padding: .5rem;
+  margin: .35rem 0;
+}
+.combat-panel .damage-input-row {
+  gap: .4rem;
+}
+.combat-panel .damage-select,
+.combat-panel .damage-input {
+  padding: .35rem .45rem;
+}
+.combat-panel .apply-damage-button,
+.combat-panel .apply-injury-button {
+  padding: .45rem .6rem;
+}
+
+@media (max-width: 480px) {
+  .combat-panel .combat-rolls-group {
+    grid-template-columns: 1fr;
+  }
+  .combat-panel .combat-rolls-group .initiative-section {
+    padding-bottom: .35rem;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
 /* Initiative Section */
 .initiative-section {
   margin: 0.6rem 0;
@@ -3547,6 +3663,25 @@
 .player-mesa-events-list li { display: flex; gap: .7rem; padding: .45rem 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); font-size: .75rem; line-height: 1.5; }
 .player-mesa-events-list time { flex: 0 0 4.2rem; color: var(--muted); font: .62rem var(--font-geist-mono), monospace; }
 .player-mesa-log-toggle { justify-self: start; }
+
+/* Auditoria de rolagens: fórmula, total e valores individuais registrados. */
+.mesa-roll-audit {
+  display: grid;
+  gap: .2rem;
+  margin-top: .35rem;
+  padding: .35rem .45rem;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  font: .62rem var(--font-geist-mono), monospace;
+}
+.mesa-roll-audit-heading { display: flex; justify-content: space-between; gap: .5rem; color: var(--foreground); }
+.mesa-roll-audit-heading strong { color: var(--accent); }
+.mesa-roll-audit-expression { color: var(--muted); overflow-wrap: anywhere; }
+.mesa-roll-audit-dice { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem; color: var(--foreground); }
+.mesa-roll-audit-label { color: var(--muted); margin-right: .15rem; }
+.mesa-roll-audit-dice b { color: var(--accent); font-weight: 700; }
+.mesa-log .mesa-roll-audit { margin: .3rem 0 .15rem 4.5rem; max-width: 34rem; }
+.mesa-rolls .mesa-roll-audit, .player-mesa-rolls .mesa-roll-audit { margin-left: 1.35rem; }
 
 /* F1.12.5 — Skill Check */
 .player-mesa-skillcheck-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; align-items: end; }

@@ -202,7 +202,11 @@ export function applyAttackDamage(
 
   let criticalInjuryFromDiceResult: DamageApplicationResult["criticalInjuryFromDiceResult"] | undefined;
   if (criticalInjuryFromDice) {
-    const injury = rollCriticalInjury(hitLocation, undefined, rng);
+    const injury = rollCriticalInjury(
+      hitLocation,
+      new Set(character.combat.criticalInjuries.map((existing) => existing.name)),
+      rng,
+    );
     criticalInjuryFromDiceResult = injury;
     criticalInjuryTriggered = true;
   }
@@ -295,6 +299,8 @@ export interface DeathSaveResult {
 export interface DeathSaveState {
   dc: number;
   failures: number;
+  /** Penalidade persistente das Critical Injuries, aplicada sem alterar a DC base armazenada. */
+  deathSavePenalty?: number;
 }
 
 /**
@@ -302,20 +308,23 @@ export interface DeathSaveState {
  * persistência. A ficha e o gateway da Mesa usam esta mesma função.
  */
 export function resolveDeathSave(state: DeathSaveState, rng?: RandomSource): DeathSaveResult & { state: DeathSaveState } {
-  const dc = state.dc;
+  const dc = Math.max(0, state.dc + (state.deathSavePenalty ?? 0));
   const roll = rollDice("1d10", rng);
   const diceRoll = roll.rolls[0];
   const success = diceRoll <= dc;
   const failuresAfter = success ? state.failures : state.failures + 1;
-  const nextDc = success ? dc : Math.max(0, dc - 1);
-  const characterDied = !success && diceRoll > nextDc;
+  const nextBaseDc = success ? state.dc : Math.max(0, state.dc - 1);
+  const nextEffectiveDc = Math.max(0, nextBaseDc + (state.deathSavePenalty ?? 0));
+  const characterDied = !success && diceRoll > nextEffectiveDc;
   return {
     diceRoll,
     dc,
     success,
     failuresAfter,
     characterDied,
-    state: { dc: nextDc, failures: failuresAfter },
+    state: state.deathSavePenalty === undefined
+      ? { dc: nextBaseDc, failures: failuresAfter }
+      : { dc: nextBaseDc, failures: failuresAfter, deathSavePenalty: state.deathSavePenalty },
   };
 }
 
@@ -324,8 +333,9 @@ export function resolveDeathSave(state: DeathSaveState, rng?: RandomSource): Dea
  * Se o resultado > DC, o personagem morre.
  */
 export function rollDeathSave(character: Character, rng?: RandomSource): { character: Character; result: DeathSaveResult } {
+  const injuryModifiers = getCriticalInjuryModifiers(character);
   const resolved = resolveDeathSave(
-    { dc: character.combat.deathSaveDC, failures: character.combat.deathSaveFailures },
+    { dc: character.combat.deathSaveDC, failures: character.combat.deathSaveFailures, deathSavePenalty: injuryModifiers.deathSaveModifier },
     rng,
   );
   const { diceRoll, dc, success, failuresAfter: newFailures, characterDied } = resolved;

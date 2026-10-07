@@ -5,13 +5,27 @@ import type { HitLocation } from "@/types/combat";
 import type { AttributeName } from "@/types/character";
 
 /** Modificador mecânico aplicado por uma Critical Injury. */
+export type CriticalInjuryArea = "arm" | "hand" | "leg" | "torso" | "head";
+
+export type CriticalInjuryRestriction =
+  | "cannot_run"
+  | "cannot_speak"
+  | "cannot_use_two_handed_weapons"
+  | "cannot_use_affected_hand"
+  | "cannot_use_affected_arm"
+  | "cannot_use_legs"
+  | "cannot_use_lower_body"
+  | "unconscious";
+
 export interface CriticalInjuryModifier {
-  /** Tipo de modificador: "stat" para atributo, "skill" para perícia específica, "move" para movimento, "all_physical" para todas ações físicas, "all_mental" para todas mentais, "all_actions" para todas ações, "ranged" para ataques à distância, "melee" para corpo a corpo, "fine_manipulation" para manipulação fina, "two_handed" para armas duas mãos, "social" para sociais, "death_save" para death save. */
-  type: "stat" | "skill" | "move" | "all_physical" | "all_mental" | "all_actions" | "ranged" | "melee" | "fine_manipulation" | "two_handed" | "social" | "death_save";
+  /** Tipo de modificador mecânico. `move_zero` é uma restrição semântica, não um número extremo. */
+  type: "stat" | "skill" | "move" | "move_zero" | "area" | "all_physical" | "all_mental" | "all_actions" | "ranged" | "melee" | "fine_manipulation" | "two_handed" | "social" | "death_save";
   /** Atributo afetado (quando type === "stat") */
   stat?: AttributeName;
   /** Perícia específica afetada (quando type === "skill") */
   skillId?: string;
+  /** Área afetada (quando type === "area") */
+  area?: CriticalInjuryArea;
   /** Valor do modificador (negativo para penalidade, positivo para bônus) */
   value: number;
   /** Descrição legível do modificador para exibição na UI */
@@ -30,6 +44,18 @@ export interface CriticalInjury {
   location: HitLocation;
   /** Modificadores mecânicos estruturados para aplicação automática em rolagens. */
   modifiers: CriticalInjuryModifier[];
+  /** Área usada por efeitos específicos (por exemplo, Torn Muscle). */
+  affectedArea?: CriticalInjuryArea;
+  /** Restrições semânticas que não devem ser simuladas com números extremos. */
+  restrictions?: CriticalInjuryRestriction[];
+  /** Duração da inconsciência; o valor é materializado quando a lesão é rolada. */
+  unconsciousRounds?: number;
+  /** Rodada final da inconsciência quando a lesão foi gerada pelo Combat Engine. */
+  unconsciousUntilRound?: number;
+  /** Expressão da duração definida pelo catálogo, antes da materialização. */
+  unconsciousRoundsDie?: "1d3";
+  /** Penalidade permanente separada da penalidade temporária. */
+  permanentModifiers?: CriticalInjuryModifier[];
 }
 
 /** Tabela oficial de Critical Injuries do Corpo (Body) — Cyberpunk RED Core Rulebook.
@@ -39,33 +65,35 @@ const bodyCriticalInjuries: CriticalInjury[] = [
   {
     roll: 2,
     name: "Dismembered Arm",
-    effect: "Arm severed at shoulder. Cannot use two-handed weapons. −2 REF for two-handed tasks.",
+    effect: "Arm severed at shoulder. Cannot use two-handed weapons. −2 on actions depending on the affected arm.",
     quickFix: "Tourniquet",
     treatment: "Surgery (DV 18)",
     bonusDamage: 5,
     location: "body",
     modifiers: [
       { type: "two_handed", value: -2, description: "Dismembered Arm: −2 REF for two-handed tasks" },
-      { type: "stat", stat: "REF", value: -2, description: "Dismembered Arm: −2 REF for two-handed tasks" },
     ],
+    affectedArea: "arm",
+    restrictions: ["cannot_use_two_handed_weapons", "cannot_use_affected_arm"],
   },
   {
     roll: 3,
     name: "Dismembered Hand",
-    effect: "Hand severed at wrist. Cannot use hand. −2 REF for fine manipulation.",
+    effect: "Hand severed at wrist. Cannot use hand. −2 on fine manipulation and actions depending on the affected hand.",
     quickFix: "Tourniquet",
     treatment: "Surgery (DV 16)",
     bonusDamage: 5,
     location: "body",
     modifiers: [
       { type: "fine_manipulation", value: -2, description: "Dismembered Hand: −2 REF for fine manipulation" },
-      { type: "stat", stat: "REF", value: -2, description: "Dismembered Hand: −2 REF for fine manipulation" },
     ],
+    affectedArea: "hand",
+    restrictions: ["cannot_use_two_handed_weapons", "cannot_use_affected_hand"],
   },
   {
     roll: 4,
     name: "Collapsed Lung",
-    effect: "Cannot speak above whisper. −2 on all physical actions. Suffocation in 1 minute per BOD.",
+    effect: "Cannot speak above whisper. −2 on all physical actions. Suffocation remains narrative for now.",
     quickFix: "Chest Seal",
     treatment: "Surgery (DV 18)",
     bonusDamage: 5,
@@ -89,15 +117,16 @@ const bodyCriticalInjuries: CriticalInjury[] = [
   {
     roll: 6,
     name: "Broken Arm",
-    effect: "Arm useless. Cannot use two-handed weapons. −2 REF for two-handed tasks.",
+    effect: "Arm useless. Cannot use two-handed weapons. −2 on actions depending on the affected arm.",
     quickFix: "Splint",
     treatment: "Surgery (DV 14) or Cast (4 weeks)",
     bonusDamage: 5,
     location: "body",
     modifiers: [
       { type: "two_handed", value: -2, description: "Broken Arm: −2 REF for two-handed tasks" },
-      { type: "stat", stat: "REF", value: -2, description: "Broken Arm: −2 REF for two-handed tasks" },
     ],
+    affectedArea: "arm",
+    restrictions: ["cannot_use_two_handed_weapons", "cannot_use_affected_arm"],
   },
   {
     roll: 7,
@@ -114,74 +143,79 @@ const bodyCriticalInjuries: CriticalInjury[] = [
   {
     roll: 8,
     name: "Broken Leg",
-    effect: "MOVE −4. Cannot run. −2 on physical actions using legs.",
+    effect: "MOVE −2. Cannot run. −2 on actions depending on the affected leg.",
     quickFix: "Splint",
     treatment: "Surgery (DV 14) or Cast (6 weeks)",
     bonusDamage: 5,
     location: "body",
     modifiers: [
-      { type: "move", value: -4, description: "Broken Leg: MOVE −4" },
-      { type: "melee", value: -2, description: "Broken Leg: −2 on physical actions using legs" },
+      { type: "move", value: -2, description: "Broken Leg: MOVE −2" },
+      { type: "melee", value: -2, description: "Broken Leg: −2 on actions depending on the leg" },
       { type: "skill", skillId: "athletics", value: -2, description: "Broken Leg: −2 on physical actions using legs" },
       { type: "skill", skillId: "dance", value: -2, description: "Broken Leg: −2 on physical actions using legs" },
       { type: "skill", skillId: "contortionist", value: -2, description: "Broken Leg: −2 on physical actions using legs" },
       { type: "skill", skillId: "stealth", value: -2, description: "Broken Leg: −2 on physical actions using legs" },
     ],
+    affectedArea: "leg",
+    restrictions: ["cannot_run"],
   },
   {
     roll: 9,
     name: "Torn Muscle",
-    effect: "−2 on physical actions using affected area.",
+    effect: "−2 on actions related to the affected area.",
     quickFix: "Painkillers",
     treatment: "Rest (2 weeks)",
     bonusDamage: 5,
     location: "body",
     modifiers: [
-      { type: "all_physical", value: -2, description: "Torn Muscle: −2 on physical actions using affected area" },
+      { type: "area", area: "torso", value: -2, description: "Torn Muscle: −2 on actions related to the affected area" },
     ],
+    affectedArea: "torso",
   },
   {
     roll: 10,
     name: "Spinal Injury",
-    effect: "Paralyzed from injury down. MOVE 0. Cannot take physical actions.",
+    effect: "Paralyzed from the injury down. MOVE 0. Cannot run or perform actions depending on the lower body.",
     quickFix: "None",
     treatment: "Surgery (DV 20)",
     bonusDamage: 5,
     location: "body",
     modifiers: [
-      { type: "move", value: -99, description: "Spinal Injury: MOVE 0 (paralyzed)" },
-      { type: "all_physical", value: -99, description: "Spinal Injury: Cannot take physical actions" },
+      { type: "move_zero", value: 0, description: "Spinal Injury: MOVE 0 (paralyzed)" },
     ],
+    restrictions: ["cannot_run", "cannot_use_lower_body"],
   },
   {
     roll: 11,
     name: "Crushed Fingers",
-    effect: "−2 REF for fine manipulation.",
+    effect: "−2 on fine manipulation and actions depending on the fingers.",
     quickFix: "Splint",
     treatment: "Surgery (DV 12) or Cast (3 weeks)",
     bonusDamage: 5,
     location: "body",
     modifiers: [
-      { type: "fine_manipulation", value: -2, description: "Crushed Fingers: −2 REF for fine manipulation" },
-      { type: "stat", stat: "REF", value: -2, description: "Crushed Fingers: −2 REF for fine manipulation" },
+      { type: "fine_manipulation", value: -2, description: "Crushed Fingers: −2 on fine manipulation" },
     ],
+    affectedArea: "hand",
   },
   {
     roll: 12,
     name: "Dismembered Leg",
-    effect: "Leg severed at hip. MOVE 0. Cannot use legs.",
+    effect: "Leg severed at hip. MOVE 0. Cannot run or perform actions depending on the legs.",
     quickFix: "Tourniquet",
     treatment: "Surgery (DV 18)",
     bonusDamage: 5,
     location: "body",
     modifiers: [
-      { type: "move", value: -99, description: "Dismembered Leg: MOVE 0" },
-      { type: "melee", value: -99, description: "Dismembered Leg: Cannot use legs" },
-      { type: "skill", skillId: "athletics", value: -99, description: "Dismembered Leg: Cannot use legs" },
-      { type: "skill", skillId: "dance", value: -99, description: "Dismembered Leg: Cannot use legs" },
-      { type: "skill", skillId: "contortionist", value: -99, description: "Dismembered Leg: Cannot use legs" },
-      { type: "skill", skillId: "stealth", value: -99, description: "Dismembered Leg: Cannot use legs" },
+      { type: "move_zero", value: 0, description: "Dismembered Leg: MOVE 0" },
+      { type: "melee", value: -2, description: "Dismembered Leg: −2 on melee actions depending on the leg" },
+      { type: "skill", skillId: "athletics", value: -2, description: "Dismembered Leg: −2 on actions depending on the legs" },
+      { type: "skill", skillId: "dance", value: -2, description: "Dismembered Leg: −2 on actions depending on the legs" },
+      { type: "skill", skillId: "contortionist", value: -2, description: "Dismembered Leg: −2 on actions depending on the legs" },
+      { type: "skill", skillId: "stealth", value: -2, description: "Dismembered Leg: −2 on actions depending on the legs" },
     ],
+    affectedArea: "leg",
+    restrictions: ["cannot_run", "cannot_use_legs"],
   },
 ];
 
@@ -205,15 +239,15 @@ const headCriticalInjuries: CriticalInjury[] = [
   {
     roll: 3,
     name: "Brain Injury",
-    effect: "−2 INT, −2 REF, −2 COOL. −2 on all mental actions.",
+    effect: "−2 INT, −1 REF, −1 COOL, and −2 on all mental actions.",
     quickFix: "None",
     treatment: "Surgery (DV 20)",
     bonusDamage: 5,
     location: "head",
     modifiers: [
       { type: "stat", stat: "INT", value: -2, description: "Brain Injury: −2 INT" },
-      { type: "stat", stat: "REF", value: -2, description: "Brain Injury: −2 REF" },
-      { type: "stat", stat: "COOL", value: -2, description: "Brain Injury: −2 COOL" },
+      { type: "stat", stat: "REF", value: -1, description: "Brain Injury: −1 REF" },
+      { type: "stat", stat: "COOL", value: -1, description: "Brain Injury: −1 COOL in directly affected actions" },
       { type: "all_mental", value: -2, description: "Brain Injury: −2 on all mental actions" },
     ],
   },
@@ -233,16 +267,18 @@ const headCriticalInjuries: CriticalInjury[] = [
   {
     roll: 5,
     name: "Concussion",
-    effect: "−2 INT, −2 REF, −2 COOL. Unconscious for 1d6 rounds.",
+    effect: "−2 INT, −1 REF, −1 COOL. Unconscious for 1d3 rounds.",
     quickFix: "None",
     treatment: "Rest (1 week)",
     bonusDamage: 5,
     location: "head",
     modifiers: [
       { type: "stat", stat: "INT", value: -2, description: "Concussion: −2 INT" },
-      { type: "stat", stat: "REF", value: -2, description: "Concussion: −2 REF" },
-      { type: "stat", stat: "COOL", value: -2, description: "Concussion: −2 COOL" },
+      { type: "stat", stat: "REF", value: -1, description: "Concussion: −1 REF" },
+      { type: "stat", stat: "COOL", value: -1, description: "Concussion: −1 COOL" },
     ],
+    restrictions: ["unconscious"],
+    unconsciousRoundsDie: "1d3",
   },
   {
     roll: 6,
@@ -271,34 +307,36 @@ const headCriticalInjuries: CriticalInjury[] = [
   {
     roll: 8,
     name: "Whiplash",
-    effect: "−2 REF, −2 MOVE. −2 on physical actions.",
+    effect: "−1 REF, −1 MOVE. −2 on physical actions.",
     quickFix: "Painkillers",
     treatment: "Rest (2 weeks)",
     bonusDamage: 5,
     location: "head",
     modifiers: [
-      { type: "stat", stat: "REF", value: -2, description: "Whiplash: −2 REF" },
-      { type: "move", value: -2, description: "Whiplash: −2 MOVE" },
+      { type: "stat", stat: "REF", value: -1, description: "Whiplash: −1 REF" },
+      { type: "move", value: -1, description: "Whiplash: −1 MOVE" },
       { type: "all_physical", value: -2, description: "Whiplash: −2 on physical actions" },
     ],
   },
   {
     roll: 9,
     name: "Cracked Skull",
-    effect: "−2 INT, −2 REF. Unconscious for 1d6 minutes.",
+    effect: "−2 INT, −1 REF. Unconscious for 1d3 rounds.",
     quickFix: "None",
     treatment: "Surgery (DV 18)",
     bonusDamage: 5,
     location: "head",
     modifiers: [
       { type: "stat", stat: "INT", value: -2, description: "Cracked Skull: −2 INT" },
-      { type: "stat", stat: "REF", value: -2, description: "Cracked Skull: −2 REF" },
+      { type: "stat", stat: "REF", value: -1, description: "Cracked Skull: −1 REF" },
     ],
+    restrictions: ["unconscious"],
+    unconsciousRoundsDie: "1d3",
   },
   {
     roll: 10,
     name: "Brain Damage",
-    effect: "−2 INT, −2 REF, −2 COOL. Permanent −2 INT.",
+    effect: "−2 INT, −1 REF, −1 COOL. Permanent −1 INT.",
     quickFix: "None",
     treatment: "Surgery (DV 20)",
     bonusDamage: 5,
@@ -306,38 +344,42 @@ const headCriticalInjuries: CriticalInjury[] = [
     location: "head",
     modifiers: [
       { type: "stat", stat: "INT", value: -2, description: "Brain Damage: −2 INT" },
-      { type: "stat", stat: "REF", value: -2, description: "Brain Damage: −2 REF" },
-      { type: "stat", stat: "COOL", value: -2, description: "Brain Damage: −2 COOL" },
+      { type: "stat", stat: "REF", value: -1, description: "Brain Damage: −1 REF" },
+      { type: "stat", stat: "COOL", value: -1, description: "Brain Damage: −1 COOL" },
+    ],
+    permanentModifiers: [
+      { type: "stat", stat: "INT", value: -1, description: "Brain Damage: permanent −1 INT" },
+      { type: "death_save", value: -2, description: "Brain Damage: Death Save −2" },
     ],
   },
   {
     roll: 11,
     name: "Crushed Windpipe",
-    effect: "Cannot speak. Suffocation in 1 minute per BOD.",
+    effect: "Cannot speak. Verbal communication is unavailable. Suffocation remains narrative for now.",
     quickFix: "Tracheotomy",
     treatment: "Surgery (DV 18)",
     bonusDamage: 5,
     deathSavePenalty: -2,
     location: "head",
     modifiers: [
-      { type: "social", value: -99, description: "Crushed Windpipe: Cannot speak" },
       { type: "death_save", value: -2, description: "Crushed Windpipe: Death Save −2" },
     ],
+    restrictions: ["cannot_speak"],
   },
   {
     roll: 12,
     name: "Severed Spinal Cord",
-    effect: "Paralyzed from neck down. MOVE 0. Cannot take physical actions.",
+    effect: "Paralyzed from neck down. MOVE 0. Cannot run or perform physical actions involving paralyzed regions.",
     quickFix: "None",
     treatment: "Surgery (DV 20)",
     bonusDamage: 5,
-    deathSavePenalty: -4,
+    deathSavePenalty: -2,
     location: "head",
     modifiers: [
-      { type: "move", value: -99, description: "Severed Spinal Cord: MOVE 0 (paralyzed)" },
-      { type: "all_physical", value: -99, description: "Severed Spinal Cord: Cannot take physical actions" },
-      { type: "death_save", value: -4, description: "Severed Spinal Cord: Death Save −4" },
+      { type: "move_zero", value: 0, description: "Severed Spinal Cord: MOVE 0 (paralyzed)" },
+      { type: "death_save", value: -2, description: "Severed Spinal Cord: Death Save −2" },
     ],
+    restrictions: ["cannot_run", "cannot_use_lower_body"],
   },
 ];
 
@@ -358,8 +400,8 @@ export { bodyCriticalInjuries, headCriticalInjuries };
  *
  * F1.4: `rng` é opcional e vem DEPOIS de `existingInjuries` para não mexer nas
  * chamadas existentes — sem ele a rolagem é a de sempre (`browserRandom`). O
- * problema conhecido de `existingInjuries` não ser passado pelos consumidores
- * continua fora do escopo desta etapa. */
+ * Os consumidores de dano passam a lista atual para que a mesma lesão não seja
+ * adicionada duas vezes. */
 export function rollCriticalInjury(
   location: HitLocation,
   existingInjuries: Set<string> = new Set(),
@@ -398,11 +440,21 @@ export function rollCriticalInjuryDetail(
     injury = table.find((entry) => entry.roll === roll.total);
   }
 
-  if (injury && !existingInjuries.has(injury.name)) return { injury, roll };
+  if (injury && !existingInjuries.has(injury.name)) return { injury: materializeCriticalInjury(injury, rng), roll };
 
   // Fallback: retorna a primeira lesão não sofrida (ou a primeira se todas já sofridas)
   const available = table.find((inj) => !existingInjuries.has(inj.name)) ?? table[0];
-  return { injury: available, roll };
+  return { injury: materializeCriticalInjury(available, rng), roll };
+}
+
+/** Materializa apenas efeitos temporais definidos pelo catálogo. */
+function materializeCriticalInjury(injury: CriticalInjury, rng?: RandomSource): CriticalInjury {
+  if (injury.unconsciousRoundsDie !== "1d3") return injury;
+  return { ...injury, unconsciousRounds: rollDice("1d3", rng).total };
+}
+
+export function isCriticalInjuryUnconsciousAtRound(injury: CriticalInjury, round: number): boolean {
+  return injury.unconsciousUntilRound !== undefined && round <= injury.unconsciousUntilRound;
 }
 
 /** Verifica se os dados de dano contêm dois ou mais resultados 6 (Critical Injury por dados). */

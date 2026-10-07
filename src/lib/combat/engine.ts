@@ -39,8 +39,8 @@
  * Módulo puro: sem React, Next, DOM, `localStorage`, Supabase, `gmStorage`,
  * `client-only` nem componente algum (testado em `combat-purity.test.ts`).
  */
-import { getWoundPenalty, getCriticalInjuryModifiers } from "@/lib/calculations";
-import { criticalInjuryTables, rollCriticalInjuryDetail, type CriticalInjuryRoll } from "@/data/criticalInjuries";
+import { getWoundPenalty, getCriticalInjuryModifiers, getCriticalInjuryRestrictions } from "@/lib/calculations";
+import { isCriticalInjuryUnconsciousAtRound, rollCriticalInjuryDetail, type CriticalInjuryRoll } from "@/data/criticalInjuries";
 import { getCatalogItem } from "@/data/items";
 import { armorSlotForLocation, hitLocations } from "@/types/combat";
 import type { AttributeName, CombatStats } from "@/types/character";
@@ -181,32 +181,27 @@ export function execute(
   // `DamageResult` expor o mesmo objeto — não uma segunda cópia.
   let injuryOutcome: CriticalInjuryRoll | null = null;
 
-  // O contrato não tem marcador de "este contexto rastreia lesões" (pendência
-  // do F1.1: o encontro devolve lista vazia). `deathSave !== undefined` é o
-  // que separa exatamente os dois adapters existentes — a ficha rola Critical
-  // Injury hoje, encontro/mesa não —, então é ele que decide aqui também.
-  const tracksInjuries = target.combat.deathSave !== undefined;
-  const legSpecial = location === "leg" && outcome.damageToHP > 0;
-  const brokenLeg = legSpecial ? criticalInjuryTables.body.find((injury) => injury.name === "Broken Leg") : undefined;
-  const hpAfterSpecial = brokenLeg ? outcome.hpAfter - brokenLeg.bonusDamage : outcome.hpAfter;
-  if (brokenLeg) {
-    injuries.push(brokenLeg);
-    addedInjury = { type: "critical_injury_added", participantId: target.id, injury: brokenLeg };
-  }
+  // Player e Enemy usam o mesmo modelo de Critical Injury. A ausência de
+  // Death Save só muda a política de morte, não se a lesão é rastreada.
+  const tracksInjuries = true;
+  const hpAfterSpecial = outcome.hpAfter;
 
   // O único gatilho de Critical Injury é 2+ resultados 6 nos dados de dano.
   // Wound Threshold/Seriously Wounded, HP 0 e Mortal Wound são estados
   // independentes e não geram uma lesão.
   const criticalFromDamageDice = (action.damageRolls ?? []).filter((roll) => roll === 6).length >= 2;
   if (tracksInjuries && criticalFromDamageDice) {
-    // `undefined` de propósito: a ficha também não passa as lesões existentes
-    // (os três `rollCriticalInjury(..., undefined, rng)` de `src/lib/damage.ts`),
-    // então o motor reproduz o comportamento atual — a correção do duplicado é
-    // pendência do backlog, não da F1.5.
-    const resultado = rollCriticalInjuryDetail(location, undefined, rng);
-    injuryOutcome = resultado;
-    injuries.push(resultado.injury);
-    addedInjury = { type: "critical_injury_added", participantId: target.id, injury: resultado.injury };
+    const resultado = rollCriticalInjuryDetail(
+      location,
+      new Set(target.combat.criticalInjuries.map((injury) => injury.name)),
+      rng,
+    );
+    const injury = resultado.injury.unconsciousRounds
+      ? { ...resultado.injury, unconsciousUntilRound: state.round + resultado.injury.unconsciousRounds - 1 }
+      : resultado.injury;
+    injuryOutcome = { ...resultado, injury };
+    injuries.push(injury);
+    addedInjury = { type: "critical_injury_added", participantId: target.id, injury };
     injuryRoll = {
       kind: "critical_injury",
       actorId: action.actorId,
@@ -314,7 +309,7 @@ export function execute(
     // F1.8D.4: a lesão que este MESMO dano já rolou, se rolou. `?? undefined`
     // mantém o campo sempre legível; ausente = nenhuma lesão gerada.
     criticalInjury: injuryOutcome ?? undefined,
-    specialCriticalInjury: brokenLeg,
+    specialCriticalInjury: undefined,
     changes,
   };
 
@@ -419,7 +414,9 @@ function resolveAttackContext(
   baseStat: { id: AttributeName; value: number };
   weaponId?: string;
   /** Recorte do arma que as regras leem: munição, catálogo e (F1.8D.5) ROF. */
-  weapon?: { ammo?: number; catalogItemId?: string; rateOfFire?: number };
+  weapon?: { ammo?: number; catalogItemId?: string; rateOfFire?: number; requiresTwoHands?: boolean };
+  /** Base pronta de inimigo; personagens continuam usando STAT + nível. */
+  attackBase?: number;
 } {
   // Com arma: resolve da arma
   if (action.weaponId) {
@@ -452,7 +449,11 @@ function resolveAttackContext(
         catalogItemId: weapon.catalogItemId,
         // F1.8D.5: a ARMA é a fonte canônica do ROF — nunca a action.
         rateOfFire: weapon.rateOfFire,
+        requiresTwoHands: weapon.requiresTwoHands,
       },
+      ...(actor.type === "enemy" && Number.isFinite(weapon.attackBase)
+        ? { attackBase: weapon.attackBase }
+        : {}),
     };
   }
 
@@ -494,9 +495,16 @@ function validateAttackTypeConsistency(
 function resolveAttackModifiers(
   actor: CombatParticipant,
   action: AttackAction,
-  resolved: { skillId: string; attackType: string; weaponId?: string; weapon?: { catalogItemId?: string } },
-): number {
+  resolved: { skillId: string; attackType: string; weaponId?: string; weapon?: { catalogItemId?: string; requiresTwoHands?: boolean } },
+): { total: number; modifiers: AttackModifier[] } {
   let total = 0;
+  const modifiers: AttackModifier[] = [];
+
+  const add = (source: string, value: number): void => {
+    if (value === 0) return;
+    total += value;
+    modifiers.push({ source, value });
+  };
 
   // 1. Wound penalty (reutiliza helper existente)
   const woundPenalty = getWoundPenalty({
@@ -504,7 +512,7 @@ function resolveAttackModifiers(
     cyberware: toCyberwareItems(actor.cyberware),
   });
   if (woundPenalty !== 0) {
-    total += woundPenalty;
+    add("Wound penalty", woundPenalty);
   }
 
   // 2. Critical injury modifiers (reutiliza helper existente)
@@ -512,9 +520,13 @@ function resolveAttackModifiers(
     combat: actor.combat as unknown as import("@/types/character").CombatStats,
   });
   const isRanged = isRangedAttackType(resolved.attackType, resolved.skillId);
-  total += isRanged ? injuryMods.rangedModifier : injuryMods.meleeModifier;
-  total += injuryMods.allPhysicalModifier;
-  total += injuryMods.allActionsModifier;
+  add(isRanged ? "Critical injury (ranged)" : "Critical injury (melee)", isRanged ? injuryMods.rangedModifier : injuryMods.meleeModifier);
+  add("Critical injury (physical)", injuryMods.allPhysicalModifier);
+  add("Critical injury (actions)", injuryMods.allActionsModifier);
+  add("Critical injury (area)", isRanged ? injuryMods.areaModifiers.arm : injuryMods.areaModifiers.leg);
+  add("Critical injury (STAT)", injuryMods.statModifiers[actor.skills?.[resolved.skillId]?.stat ?? "REF"] ?? 0);
+  const twoHandedSkillIds = new Set(["heavy_weapons", "shoulder_arms", "martial_arts", "melee_weapon", "brawling"]);
+  if (twoHandedSkillIds.has(resolved.skillId)) add("Critical injury (two-handed)", injuryMods.twoHandedModifier);
 
   // 3. Cyberware modifiers (reutiliza helper existente)
   const isSmart = resolved.weapon?.catalogItemId
@@ -525,20 +537,20 @@ function resolveAttackModifiers(
     { ranged: isRanged, smart: isSmart, skillId: resolved.skillId },
   );
   for (const mod of cyberMods) {
-    total += mod.value;
+    add(mod.source, mod.value);
   }
 
   // 4. External modifiers (action.modifiers)
   for (const mod of action.modifiers ?? []) {
-    total += mod.value;
+    add(mod.source, mod.value);
   }
 
   // 5. Aimed shot modifier (-8)
   if (action.attackMode === "aimed") {
-    total += -8;
+    add("Aimed shot", -8);
   }
 
-  return total;
+  return { total, modifiers };
 }
 
 /** Resolve a defesa: DV ou Evasion. */
@@ -714,6 +726,9 @@ function executeAttack(state: CombatState, action: AttackAction, rng: RandomSour
   if (actor.combat.isDead) {
     return failure(state, "combatant_defeated", `${actor.name} está fora do combate.`);
   }
+  if (actor.combat.criticalInjuries.some((injury) => isCriticalInjuryUnconsciousAtRound(injury, state.round))) {
+    return failure(state, "rule_violation", `${actor.name} está inconsciente e não pode realizar ações normais.`);
+  }
 
   // ===== VALIDAÇÃO DO ALVO =====
   const target = findParticipant(state, action.targetId);
@@ -784,6 +799,19 @@ function executeAttack(state: CombatState, action: AttackAction, rng: RandomSour
     return failure(state, typeError.code, typeError.message);
   }
 
+  const restrictions = getCriticalInjuryRestrictions({
+    combat: actor.combat as unknown as import("@/types/character").CombatStats,
+  });
+  if (
+    restrictions.has("cannot_use_two_handed_weapons") &&
+    (resolved.weapon?.requiresTwoHands === true || new Set(["heavy_weapons", "shoulder_arms", "martial_arts", "melee_weapon", "brawling"]).has(resolved.skillId))
+  ) {
+    return failure(state, "rule_violation", "Esta lesão impede o uso de armas ou ações que exigem as duas mãos.");
+  }
+  if (restrictions.has("cannot_use_lower_body") && ["melee", "martial_arts", "brawling", "unarmed"].includes(resolved.attackType)) {
+    return failure(state, "rule_violation", "Esta lesão impede ataques corpo a corpo que dependem da parte inferior do corpo.");
+  }
+
   // ===== VALIDAÇÃO DE ROF (F1.8D.5) =====
   // O ROF vem da ARMA resolvida (`weaponId → actor.weapons → rateOfFire`),
   // nunca da action — o contrato não tem `action.rof`, então o cliente não
@@ -803,7 +831,7 @@ function executeAttack(state: CombatState, action: AttackAction, rng: RandomSour
   }
 
   // ===== MODIFICADORES =====
-  const totalModifier = resolveAttackModifiers(actor, action, resolved);
+  const resolvedModifiers = resolveAttackModifiers(actor, action, resolved);
 
   // ===== VALIDAÇÃO DE MUNIÇÃO =====
   // Custo pelo MODO (F1.8D.6): 1 em normal/aimed (F1.8C, inalterado) e 10 em
@@ -828,7 +856,8 @@ function executeAttack(state: CombatState, action: AttackAction, rng: RandomSour
   const roll = rollAttackDice(rng);
 
   // ===== CÁLCULO DO TOTAL =====
-  const attackTotal = resolved.baseStat.value + resolved.skill.level + roll.total + totalModifier;
+  const attackBase = resolved.attackBase ?? (resolved.baseStat.value + resolved.skill.level);
+  const attackTotal = attackBase + roll.total + resolvedModifiers.total;
 
   // ===== CRITICAL / FUMBLE =====
   const firstRoll = roll.rolls[0];
@@ -876,6 +905,8 @@ function executeAttack(state: CombatState, action: AttackAction, rng: RandomSour
     baseStat: resolved.baseStat,
     skill: { id: resolved.skillId, value: resolved.skill.level },
     total: attackTotal,
+    attackBase: resolved.attackBase,
+    modifiers: resolvedModifiers.modifiers,
     critical,
     fumble,
     hit,

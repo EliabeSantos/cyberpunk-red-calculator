@@ -36,6 +36,7 @@ export interface EnemyWeapon {
   magazine?: number;
   /** Balas no pente AGORA — começa igual a `magazine` e desce a cada tiro. */
   ammo?: number;
+  requiresTwoHands?: boolean;
 }
 
 /**

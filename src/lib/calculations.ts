@@ -1,8 +1,8 @@
 import type { Stats } from "@/types/character";
 import type { Character } from "@/types/character";
 import type { AttributeName } from "@/types/character";
-import type { CriticalInjury } from "@/data/criticalInjuries";
-import { ignoresWoundPenalty } from "@/lib/cyberwareEffects";
+import type { CriticalInjury, CriticalInjuryArea, CriticalInjuryRestriction } from "@/data/criticalInjuries";
+import { getCyberwareMoveModifier, ignoresWoundPenalty } from "@/lib/cyberwareEffects";
 
 export function calculateMaximumHitPoints(
   stats: Pick<Stats, "BODY" | "WILL">,
@@ -22,6 +22,8 @@ export function getCriticalInjuryModifiers(
   statModifiers: Record<AttributeName, number>;
   skillModifiers: Record<string, number>;
   moveModifier: number;
+  moveZero: boolean;
+  areaModifiers: Record<CriticalInjuryArea, number>;
   allPhysicalModifier: number;
   allMentalModifier: number;
   allActionsModifier: number;
@@ -40,6 +42,8 @@ export function getCriticalInjuryModifiers(
     statModifiers: {} as Record<AttributeName, number>,
     skillModifiers: {} as Record<string, number>,
     moveModifier: 0,
+    moveZero: false,
+    areaModifiers: { arm: 0, hand: 0, leg: 0, torso: 0, head: 0 },
     allPhysicalModifier: 0,
     allMentalModifier: 0,
     allActionsModifier: 0,
@@ -53,7 +57,8 @@ export function getCriticalInjuryModifiers(
   };
 
   for (const injury of injuries) {
-    for (const mod of injury.modifiers || []) {
+    const modifiers = [...(injury.modifiers || []), ...(injury.permanentModifiers || [])];
+    for (const mod of modifiers) {
       switch (mod.type) {
         case "stat":
           if (mod.stat) {
@@ -72,6 +77,16 @@ export function getCriticalInjuryModifiers(
         case "move":
           result.moveModifier += mod.value;
           result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "move_zero":
+          result.moveZero = true;
+          result.descriptions.push(`${injury.name}: ${mod.description}`);
+          break;
+        case "area":
+          if (mod.area) {
+            result.areaModifiers[mod.area] += mod.value;
+            result.descriptions.push(`${injury.name}: ${mod.description}`);
+          }
           break;
         case "all_physical":
           result.allPhysicalModifier += mod.value;
@@ -114,6 +129,34 @@ export function getCriticalInjuryModifiers(
   }
 
   return result;
+}
+
+/** Retorna as restrições semânticas ativas, sem convertê-las em penalidades extremas. */
+export function getCriticalInjuryRestrictions(
+  character: Pick<Character, "combat">,
+): Set<CriticalInjuryRestriction> {
+  const restrictions = new Set<CriticalInjuryRestriction>();
+  for (const injury of character.combat?.criticalInjuries || []) {
+    for (const restriction of injury.restrictions || []) restrictions.add(restriction);
+  }
+  return restrictions;
+}
+
+export function getCriticalInjuryAreaModifier(
+  character: Pick<Character, "combat">,
+  area: CriticalInjuryArea,
+): number {
+  return getCriticalInjuryModifiers(character).areaModifiers[area] ?? 0;
+}
+
+/** MOVE efetivo, com MOVE 0 semântico e sem valores sentinela como -99. */
+export function getEffectiveMove(
+  character: Pick<Character, "stats" | "combat" | "cyberware">,
+): number {
+  const modifiers = getCriticalInjuryModifiers(character);
+  if (modifiers.moveZero) return 0;
+  const cyberwareMove = getCyberwareMoveModifier({ cyberware: character.cyberware });
+  return Math.max(0, character.stats.MOVE + cyberwareMove + modifiers.moveModifier);
 }
 
 /** Calcula o Wound Threshold (limiar de ferimento grave).

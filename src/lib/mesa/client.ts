@@ -9,8 +9,9 @@
  * (`cyberpunk-red-toolkit:characters:v1`); aqui só mandamos uma CÓPIA quando
  * o jogador vincula o personagem a uma mesa.
  */
-import type { MesaBattle, MesaParticipant, MesaSession, MesaState, PlayerDamageOutcome, PlayerHealingOutcome, PlayerInitiativeOutcome } from "@/lib/mesa/types";
+import type { MesaBattle, MesaParticipant, MesaSession, MesaState, PlayerDamageOutcome, PlayerHealingOutcome, PlayerInitiativeOutcome, TacticalMap, TacticalPosition } from "@/lib/mesa/types";
 import type { AttackResult, DamageResult } from "@/lib/combat/contract";
+import type { TacticalCoverResult } from "@/lib/mesa/tacticalGeometry";
 import type { DiceResult } from "@/lib/dice";
 import type { MesaRollSummary } from "@/lib/mesa/rollPolicy";
 import {
@@ -35,6 +36,13 @@ export class MesaApiError extends Error {
     this.status = status;
     this.code = code;
   }
+}
+
+/** Mensagem de UX para o erro específico do Attack Gateway; demais códigos preservam o texto atual. */
+export function formatAttackGatewayError(message: string, code?: string): string {
+  return code === "line_of_sight_blocked"
+    ? "LINHA DE VISÃO BLOQUEADA — não é possível atacar este alvo."
+    : message;
 }
 
 async function api<T>(
@@ -203,14 +211,23 @@ export async function performAction(
 export async function moveMesa(input: {
   sessionId: string;
   actorCombatantId: string;
-  distance: number;
+  distance?: number;
+  targetPosition?: TacticalPosition;
   resolutionId?: string;
-}): Promise<{ combatantId: string; distance: number; movementRemaining: number; actionsRemaining: number; committed: boolean }> {
+}): Promise<{ combatantId: string; distance: number; movementRemaining: number; actionsRemaining: number; committed: boolean; position?: TacticalPosition }> {
   const { sessionId, ...intent } = input;
   return api(`/api/mesa/${sessionId}/combat/move`, {
     method: "POST",
     body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() },
   });
+}
+
+export async function saveTacticalMap(sessionId: string, map: TacticalMap): Promise<void> {
+  await api(`/api/mesa/${sessionId}/tactical-map`, { method: "PATCH", body: { map } });
+}
+
+export async function positionCombatant(sessionId: string, combatantId: string, position: TacticalPosition): Promise<void> {
+  await api(`/api/mesa/${sessionId}/combatants`, { method: "PATCH", body: { combatantId, patch: { position } } });
 }
 
 /** Metadados privados para a tela de controle do GM (não entram no snapshot Player). */
@@ -236,8 +253,12 @@ export async function attackMesa(input: {
   attackType?: string;
   attackMode?: string;
   aimedTarget?: string;
+  targetType?: "combatant" | "cover";
+  obstacleId?: string;
 }): Promise<{
   attackResult: AttackResult;
+  tacticalCover?: TacticalCoverResult;
+  coverDamage?: { obstacleId: string; hpBefore: number; hpAfter: number; damage: number; destroyed: boolean };
   weaponDamage?: DiceResult;
   damageResult?: DamageResult;
   damageError?: { code: string; message: string };
@@ -255,6 +276,8 @@ export async function attackMesa(input: {
       attackType: input.attackType,
       attackMode: input.attackMode,
       aimedTarget: input.aimedTarget,
+      targetType: input.targetType,
+      obstacleId: input.obstacleId,
     },
   });
 }

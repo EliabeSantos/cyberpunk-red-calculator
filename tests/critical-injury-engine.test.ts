@@ -349,18 +349,15 @@ test("localização: head usa a tabela head; corpo/braço/perna usam a tabela bo
     const result = execute(state, dano(ALVO_ID, 20, { hitLocation: loc, damageRolls: [6, 6, 3] }), rng);
     const dmg = danoOk(result);
     assert.equal(dmg.hitLocation, loc, "a localização declarada é a exposta no resultado");
-    if (loc === "leg") {
-      assert.equal(dmg.specialCriticalInjury?.name, "Broken Leg");
-    } else {
-      const inj = lesao(dmg);
-      assert.equal(inj.roll.total, 7);
-      assert.equal(
-        inj.injury,
-        criticalInjuryTables[loc].find((entry) => entry.roll === 7),
-        `${loc} escolhe a tabela certa — por IDENTIDADE, não por cópia`,
-      );
-    }
-    if (loc !== "leg") assert.equal(rng.d10(), 9, "cada lesão consome exatamente 2 valores");
+    const inj = lesao(dmg);
+    assert.equal(inj.roll.total, 7);
+    assert.equal(
+      inj.injury,
+      criticalInjuryTables[loc].find((entry) => entry.roll === 7),
+      `${loc} escolhe a tabela certa — por IDENTIDADE, não por cópia`,
+    );
+    assert.equal(dmg.specialCriticalInjury, undefined, "localização na perna não injeta Broken Leg automaticamente");
+    assert.equal(rng.d10(), 9, "cada lesão consome exatamente 2 valores");
   }
 });
 

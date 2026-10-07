@@ -12,6 +12,7 @@ import type { AttackModifier } from "@/types/attack";
 import type { EnemySupply } from "@/types/enemy";
 import type { EnemyAttributeName } from "@/types/enemy";
 import type { PersonalityTrait } from "@/data/personalityTraits";
+import type { CriticalInjury } from "@/data/criticalInjuries";
 
 export interface EncounterParticipant {
   enemyId: string;
@@ -30,6 +31,8 @@ export interface EncounterParticipant {
   hp: { current: number; max: number };
   armor: { head: number; body: number };
   conditions: Array<{ id: string; name: string }>;
+  /** Lesões persistentes do inimigo, compartilhando o mesmo modelo do Player. */
+  criticalInjuries?: CriticalInjury[];
   isPlayer: boolean; // false = enemy/NPC
   // Weapon info
   weaponName: string;
@@ -38,6 +41,7 @@ export interface EncounterParticipant {
   /** Granularidade disponível no catálogo de inimigos. */
   weaponAttackType?: "melee" | "ranged" | "thrown";
   weaponRateOfFire?: number;
+  requiresTwoHands?: boolean;
   weaponSkillId: string;
   weaponSkillName: string;
   refStat: number;

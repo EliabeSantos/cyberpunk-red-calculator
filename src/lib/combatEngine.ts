@@ -103,6 +103,7 @@ export interface ActionEconomy {
 export interface CombatantView extends ActionEconomy {
   id: string;
   isDead: boolean;
+  unconsciousUntilRound?: number;
 }
 
 /** Tudo que a validação precisa saber — o servidor monta isto a partir do banco. */
@@ -118,6 +119,7 @@ export interface ActionRequest {
   actionType: unknown;
   /** Metros desejados, usado apenas quando `actionType === "move"`. */
   meters?: number;
+  currentRound?: number;
 }
 
 /**
@@ -140,6 +142,13 @@ export function resolveAction(request: ActionRequest): ActionResult {
   }
 
   if (combatant.isDead) return { ok: false, reason: "combatant_defeated" };
+  if (
+    request.currentRound !== undefined &&
+    combatant.unconsciousUntilRound !== undefined &&
+    request.currentRound <= combatant.unconsciousUntilRound
+  ) {
+    return { ok: false, reason: "not_allowed" };
+  }
 
   // A autoridade de turno é do combatente, não do papel de quem fez a
   // requisição. O GM pode comandar qualquer combatente, mas somente aquele

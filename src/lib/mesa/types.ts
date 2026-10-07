@@ -11,6 +11,80 @@ export type ParticipantRole = "gm" | "player";
 export type CombatStatus = "active" | "finished";
 export type CombatantKind = "character" | "enemy";
 
+export interface TacticalPosition {
+  x: number;
+  y: number;
+}
+
+export type TacticalPoint = TacticalPosition;
+
+import type { TacticalCoverThickness } from "@/lib/mesa/tacticalCoverCatalog";
+import { TACTICAL_COVER_MATERIALS as OFFICIAL_TACTICAL_COVER_MATERIALS } from "@/lib/mesa/tacticalCoverCatalog";
+
+export const TACTICAL_COVER_MATERIALS = OFFICIAL_TACTICAL_COVER_MATERIALS;
+export const TACTICAL_LEGACY_COVER_MATERIALS = ["brick", "custom"] as const;
+export type TacticalCoverMaterial = (typeof TACTICAL_COVER_MATERIALS)[number] | (typeof TACTICAL_LEGACY_COVER_MATERIALS)[number];
+export type { TacticalCoverThickness } from "@/lib/mesa/tacticalCoverCatalog";
+
+export interface TacticalWall {
+  id: string;
+  type: "wall";
+  start: TacticalPoint;
+  end: TacticalPoint;
+  /** Espessura normalizada em relação ao mapa. */
+  /** Normalized thickness; omitted only in legacy maps and normalized on load. */
+  thickness?: number;
+  /** Optional future RED material semantics; no default is inferred. */
+  coverMaterial?: TacticalCoverMaterial | null;
+  /** Null/omitted means a legacy obstacle awaiting migration. */
+  coverThickness?: TacticalCoverThickness | null;
+  /** Current HP. Maximum/base HP is derived from the catalog profile. */
+  coverHP?: number | null;
+  /** Derived VTT DV; legacy only when no profile exists. */
+  coverDV?: number | null;
+  destroyed?: boolean;
+}
+
+export interface TacticalDoor {
+  id: string;
+  type: "door";
+  start: TacticalPoint;
+  end: TacticalPoint;
+  /** Espessura normalizada em relação ao mapa. */
+  /** Normalized thickness; omitted only in legacy maps and normalized on load. */
+  thickness?: number;
+  /** Optional future RED material semantics; no default is inferred. */
+  coverMaterial?: TacticalCoverMaterial | null;
+  coverThickness?: TacticalCoverThickness | null;
+  coverHP?: number | null;
+  coverDV?: number | null;
+  destroyed?: boolean;
+  state: "open" | "closed";
+}
+
+export interface TacticalGeometry {
+  walls: TacticalWall[];
+  doors: TacticalDoor[];
+}
+
+export interface TacticalMap {
+  imageUrl: string;
+  enabled: boolean;
+  /** Dimensões lógicas da imagem, independentes do tamanho renderizado. */
+  width: number;
+  height: number;
+  pixelsPerMeter: number;
+  grid?: TacticalGridConfig;
+  geometry?: TacticalGeometry;
+}
+
+export interface TacticalGridConfig {
+  enabled: boolean;
+  /** Tamanho da célula em metros lógicos. */
+  size: number;
+  snap: boolean;
+}
+
 export interface MesaSession {
   id: string;
   name: string;
@@ -18,6 +92,7 @@ export interface MesaSession {
   status: SessionStatus;
   joinCode: string;
   createdAt: string;
+  tacticalMap?: TacticalMap;
 }
 
 export interface MesaParticipant {
@@ -81,6 +156,8 @@ export interface MesaCombatant {
   actionsRemaining: number;
   movementMax: number;
   movementRemaining: number;
+  /** Rodada até a qual uma Critical Injury mantém o combatente inconsciente. */
+  unconsciousUntilRound?: number;
   hpCurrent: number;
   hpMax: number;
   isDead: boolean;
@@ -89,6 +166,9 @@ export interface MesaCombatant {
   deathSaveFailures?: number;
   conditions: string[];
   sortOrder: number;
+  position?: TacticalPosition;
+  /** Foto pública do personagem; nunca inclui dados privados da ficha. */
+  avatarUrl?: string;
 }
 
 export interface MesaEvent {
@@ -110,6 +190,15 @@ export interface MesaEvent {
     | "join"
     | "roll";
   text: string;
+  /** Dados imutáveis da rolagem, quando `kind === "roll"`. Eventos antigos
+   * continuam válidos sem este campo e exibem apenas o texto resumido. */
+  roll?: {
+    type: string;
+    label: string;
+    expression: string;
+    total: number;
+    rolls: number[];
+  };
 }
 
 export interface MesaCombat {

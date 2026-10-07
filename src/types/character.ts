@@ -18,7 +18,7 @@ export interface CombatStats { hp: { current: number; max: number }; stamina: { 
  * a ficha NUNCA a grava por conta própria durante `mesa-combat`.
  * `undefined`/`null` = ninguém registrou ainda.
  */ initiative?: number | null; }
-export interface Weapon { id: string; catalogItemId?: string; name: string; damage: string; rateOfFire?: number; magazine?: number; ammo?: number; skill?: string; attackType?: import("@/types/attack").AttackType; }
+export interface Weapon { id: string; catalogItemId?: string; name: string; damage: string; rateOfFire?: number; magazine?: number; ammo?: number; skill?: string; attackType?: import("@/types/attack").AttackType; requiresTwoHands?: boolean; }
 export interface CyberwareItem { id: string; /** Referência ao catálogo: é ela que permite resolver efeitos, requisitos e remoção. */ catalogItemId?: string; name: string; humanityLoss?: string; installedAt: string; isBorgware?: boolean; /** Armas integradas criadas na instalação (ex.: Mantis Blades), removidas junto com o cyberware. */ integratedWeaponIds?: string[]; /** Índice do estágio de ativação ativo; undefined = inativo (toggle manual). */ activeStage?: number; }
 export interface InventoryItem { id: string; name: string; quantity: number; category?: string; catalogItemId?: string; notes?: string; }
 export interface Progression { improvementPoints: number; }

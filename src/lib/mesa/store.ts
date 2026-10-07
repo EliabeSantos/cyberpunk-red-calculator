@@ -27,6 +27,7 @@ import {
   type CombatActionType,
 } from "@/lib/combatEngine";
 import { getCyberwareMoveModifier } from "@/lib/cyberwareEffects";
+import { getCriticalInjuryModifiers } from "@/lib/calculations";
 import { ENEMY_DAMAGE_POLICY, isDefeatedBy } from "@/lib/combat/damage";
 import { resolveDeathSave } from "@/lib/damage";
 import { getSupplyHealAmount, isAmmoRelevantToWeapons, planReload, applyReload } from "@/data/enemySupplies";
@@ -58,11 +59,18 @@ import type {
   MesaSession,
   MesaState,
   MesaSupplies,
+  TacticalDoor,
+  TacticalGeometry,
+  TacticalMap,
+  TacticalPosition,
+  TacticalWall,
   PlayerDamageOutcome,
   PlayerHealingOutcome,
   PlayerDeathSaveOutcome,
   PlayerInitiativeOutcome,
 } from "@/lib/mesa/types";
+import { TACTICAL_COVER_MATERIALS, TACTICAL_LEGACY_COVER_MATERIALS } from "@/lib/mesa/types";
+import { getTacticalCoverProfile, TACTICAL_COVER_THICKNESSES } from "@/lib/mesa/tacticalCoverCatalog";
 import { DatabaseQueryError, getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { ACTION_LABELS, DENIAL_MESSAGES } from "@/lib/mesa/messages";
 import {
@@ -77,6 +85,12 @@ import { rollInitiative } from "@/lib/initiative";
 import type { Character } from "@/types/character";
 import type { EncounterParticipant } from "@/types/encounter";
 import { toCombatParticipant } from "@/lib/combat/adapters";
+import { formatMesaAttackEvent } from "@/lib/mesa/attackAudit";
+import { applyTacticalCoverDamage, coverHPAfterProfileChange, deriveTacticalCoverProfile, isValidTacticalCoverDV, normalizeTacticalPosition, tacticalDistance, tacticalPositionsOverlap } from "@/lib/mesa/tacticalMap";
+import { calculateLineOfSight, calculateTacticalCover } from "@/lib/mesa/tacticalGeometry";
+import type { TacticalCoverResult } from "@/lib/mesa/tacticalGeometry";
+import { DEFAULT_TACTICAL_OBSTACLE_THICKNESS } from "@/lib/mesa/tacticalGeometry";
+export { isValidTacticalCoverDV, normalizeTacticalPosition, tacticalDistance, tacticalPositionsOverlap } from "@/lib/mesa/tacticalMap";
 
 /** Erro de domínio com status HTTP correspondente. */
 export class MesaError extends Error {
@@ -274,6 +288,8 @@ function withoutSourceKey(rows: Array<Record<string, unknown>>): Array<Record<st
  */
 let suppliesSupport: "unknown" | "yes" | "no" = "unknown";
 
+let tacticalPositionSupport: "unknown" | "yes" | "no" = "unknown";
+
 function mentionsSupplies(error: unknown): boolean {
   return error instanceof Error && error.message.includes("supplies");
 }
@@ -286,11 +302,20 @@ function withoutSupplies(rows: Array<Record<string, unknown>>): Array<Record<str
   });
 }
 
+function mentionsTacticalPosition(error: unknown): boolean {
+  return error instanceof Error && (error.message.includes("position") || error.message.includes("avatar_url"));
+}
+
+function withoutTacticalPosition(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return rows.map((row) => { const copy = { ...row }; delete copy.position; delete copy.avatar_url; return copy; });
+}
+
 /** Linhas sem as colunas de migração já sabidas como ausentes. */
 function withOptionalColumns(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   let next = rows;
   if (sourceKeySupport === "no") next = withoutSourceKey(next);
   if (suppliesSupport === "no") next = withoutSupplies(next);
+  if (tacticalPositionSupport === "no") next = withoutTacticalPosition(next);
   return next;
 }
 
@@ -306,6 +331,7 @@ async function insertCombatantRows(rows: Array<Record<string, unknown>>, context
   // não prova nada sobre a migração.
   const testsSourceKey = rows.some((row) => "source_key" in row);
   const testsSupplies = rows.some((row) => "supplies" in row);
+  const testsTacticalPosition = rows.some((row) => "position" in row || "avatar_url" in row);
 
   let attempt = rows;
   for (;;) {
@@ -313,6 +339,7 @@ async function insertCombatantRows(rows: Array<Record<string, unknown>>, context
       await query(db().from("mesa_combatants").insert(attempt), context);
       if (testsSourceKey && "source_key" in attempt[0]) sourceKeySupport = "yes";
       if (testsSupplies && "supplies" in attempt[0]) suppliesSupport = "yes";
+      if (testsTacticalPosition && "position" in attempt[0]) tacticalPositionSupport = "yes";
       return;
     } catch (error) {
       const pending =
@@ -320,10 +347,13 @@ async function insertCombatantRows(rows: Array<Record<string, unknown>>, context
           ? "source_key"
           : suppliesSupport !== "no" && mentionsSupplies(error)
             ? "supplies"
+            : tacticalPositionSupport !== "no" && mentionsTacticalPosition(error)
+              ? "tactical_position"
             : null;
       if (!pending) throw error;
-      if (pending === "source_key") sourceKeySupport = "no";
-      else suppliesSupport = "no";
+       if (pending === "source_key") sourceKeySupport = "no";
+       else if (pending === "supplies") suppliesSupport = "no";
+       else tacticalPositionSupport = "no";
       attempt = withOptionalColumns(rows);
     }
   }
@@ -553,6 +583,7 @@ interface SessionRow {
   join_code: string;
   created_at: string;
   updated_at?: string;
+  tactical_map?: TacticalMap | null;
 }
 
 interface ParticipantRow {
@@ -606,10 +637,15 @@ interface CombatantRow {
   death_save_failures?: number;
   conditions: string[] | null;
   sort_order: number;
+  position?: TacticalPosition | null;
+  avatar_url?: string | null;
 }
 
 type IntegratedAttackResponse = {
   attackResult: NonNullable<ReturnType<typeof execute>["attackResult"]>;
+  /** Geometria server-side usada nesta resolução; não é um modificador. */
+  tacticalCover?: TacticalCoverResult;
+  coverDamage?: { obstacleId: string; hpBefore: number; hpAfter: number; damage: number; destroyed: boolean };
   weaponDamage?: DiceResult;
   damageResult?: DamageResult;
   damageError?: { code: string; message: string };
@@ -674,7 +710,139 @@ function toSession(row: SessionRow): MesaSession {
     status: row.status,
     joinCode: row.join_code,
     createdAt: row.created_at,
+    tacticalMap: sanitizeTacticalMap(row.tactical_map),
   };
+}
+
+const DEFAULT_TACTICAL_GEOMETRY: TacticalGeometry = { walls: [], doors: [] };
+const DEFAULT_TACTICAL_MAP: TacticalMap = { imageUrl: "", enabled: false, width: 1000, height: 600, pixelsPerMeter: 50, grid: { enabled: false, size: 1, snap: false }, geometry: DEFAULT_TACTICAL_GEOMETRY };
+
+function sanitizeGeometryPoint(raw: unknown): TacticalPosition | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  const x = Number(value.x);
+  const y = Number(value.y);
+  return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
+}
+
+function sanitizeGeometry(raw: unknown): TacticalGeometry {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return DEFAULT_TACTICAL_GEOMETRY;
+  const value = raw as Record<string, unknown>;
+  const usedIds = new Set<string>();
+  const sanitizeId = (id: unknown) => typeof id === "string" && id.trim().length > 0 && id.trim().length <= 120 ? id.trim() : null;
+  const readSegment = (entry: unknown, type: "wall" | "door"): TacticalWall | TacticalDoor | null => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+    const item = entry as Record<string, unknown>;
+    const id = sanitizeId(item.id);
+    const start = sanitizeGeometryPoint(item.start);
+    const end = sanitizeGeometryPoint(item.end);
+    if (!id || usedIds.has(id) || !start || !end) return null;
+    usedIds.add(id);
+    const thickness = Number(item.thickness);
+    const safeThickness = Number.isFinite(thickness) && thickness > 0 && thickness <= 1 ? thickness : DEFAULT_TACTICAL_OBSTACLE_THICKNESS;
+    const acceptedMaterials = [...TACTICAL_COVER_MATERIALS, ...TACTICAL_LEGACY_COVER_MATERIALS] as readonly string[];
+    const coverMaterial = acceptedMaterials.includes(item.coverMaterial as string)
+      ? item.coverMaterial as TacticalWall["coverMaterial"]
+      : undefined;
+    const coverThickness = TACTICAL_COVER_THICKNESSES.includes(item.coverThickness as (typeof TACTICAL_COVER_THICKNESSES)[number])
+      ? item.coverThickness as (typeof TACTICAL_COVER_THICKNESSES)[number]
+      : null;
+    const profile = getTacticalCoverProfile(coverMaterial, coverThickness);
+    const rawCoverHP = item.coverHP === null || item.coverHP === undefined ? null : Number(item.coverHP);
+    const safeLegacyHP = rawCoverHP !== null && Number.isFinite(rawCoverHP) && rawCoverHP >= 0 ? rawCoverHP : null;
+    const safeCoverHP = profile ? Math.min(safeLegacyHP ?? profile.hp, profile.hp) : safeLegacyHP;
+    const safeLegacyDV = item.coverDV === null || item.coverDV === undefined ? null : item.coverDV;
+    const safeCoverDV = profile ? profile.dv : safeLegacyDV !== null && isValidTacticalCoverDV(safeLegacyDV) ? safeLegacyDV : null;
+    const destroyed = item.destroyed === true || safeCoverHP === 0;
+    const normalizedCoverHP = destroyed && safeCoverHP !== null ? 0 : safeCoverHP;
+    const coverFields = coverMaterial !== undefined || coverThickness !== null || safeCoverHP !== null || safeCoverDV !== null || destroyed
+      ? { ...(coverMaterial !== undefined ? { coverMaterial } : {}), ...(coverThickness !== null || coverMaterial !== undefined ? { coverThickness } : {}), ...(normalizedCoverHP !== null ? { coverHP: normalizedCoverHP } : {}), ...(safeCoverDV !== null ? { coverDV: safeCoverDV } : {}), ...(destroyed ? { destroyed: true } : {}) }
+      : {};
+    if (type === "wall") return { id, type, start, end, thickness: safeThickness, ...coverFields };
+    const state = item.state === "open" || item.state === "closed" ? item.state : null;
+    return state ? { id, type, start, end, thickness: safeThickness, state, ...coverFields } : null;
+  };
+  const walls = Array.isArray(value.walls) ? value.walls.slice(0, 500).map((entry) => readSegment(entry, "wall")).filter((entry): entry is TacticalWall => entry?.type === "wall") : [];
+  const doors = Array.isArray(value.doors) ? value.doors.slice(0, 500).map((entry) => readSegment(entry, "door")).filter((entry): entry is TacticalDoor => entry?.type === "door") : [];
+  return { walls, doors };
+}
+
+/** Valida metadados enviados por uma mutação GM sem quebrar mapas legados na leitura. */
+function validateTacticalCoverMetadata(raw: unknown): void {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return;
+  const geometry = (raw as Record<string, unknown>).geometry;
+  if (typeof geometry !== "object" || geometry === null || Array.isArray(geometry)) return;
+  const value = geometry as Record<string, unknown>;
+  const entries = [
+    ...(Array.isArray(value.walls) ? value.walls : []),
+    ...(Array.isArray(value.doors) ? value.doors : []),
+  ];
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const item = entry as Record<string, unknown>;
+    const material = item.coverMaterial;
+    const hasMaterial = material !== undefined && material !== null && material !== "";
+    const isOfficialMaterial = TACTICAL_COVER_MATERIALS.includes(material as (typeof TACTICAL_COVER_MATERIALS)[number]);
+    const isLegacyMaterial = TACTICAL_LEGACY_COVER_MATERIALS.includes(material as (typeof TACTICAL_LEGACY_COVER_MATERIALS)[number]);
+    if (hasMaterial && !isOfficialMaterial && !isLegacyMaterial) {
+      throw new MesaError("Material de Cover inválido.", 400, "invalid_cover_material");
+    }
+    const thickness = item.coverThickness;
+    const hasThickness = thickness !== undefined && thickness !== null && thickness !== "";
+    if (hasThickness && !TACTICAL_COVER_THICKNESSES.includes(thickness as (typeof TACTICAL_COVER_THICKNESSES)[number])) {
+      throw new MesaError("Espessura de Cover inválida.", 400, "invalid_cover_thickness");
+    }
+    if (hasThickness && (!isOfficialMaterial || !hasMaterial)) {
+      throw new MesaError("Espessura exige um material oficial do catálogo.", 400, "invalid_cover_profile");
+    }
+    if (isOfficialMaterial && hasThickness) {
+      const profile = getTacticalCoverProfile(material, thickness);
+      if (!profile) throw new MesaError("Combinação de material e espessura inválida.", 400, "invalid_cover_profile");
+      // HP/DV são derivados e não podem ser enviados como autoridade pelo cliente.
+      if (item.coverHP !== undefined || item.coverDV !== undefined) {
+        throw new MesaError("HP e DV de Cover são derivados do catálogo.", 400, "derived_cover_values_forbidden");
+      }
+    }
+  }
+}
+
+function sanitizeTacticalMap(raw: unknown): TacticalMap {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { ...DEFAULT_TACTICAL_MAP };
+  const value = raw as Record<string, unknown>;
+  const positive = (input: unknown, fallback: number, max: number) => {
+    const number = Number(input);
+    return Number.isFinite(number) && number > 0 ? Math.min(max, number) : fallback;
+  };
+  return {
+    imageUrl: typeof value.imageUrl === "string" ? value.imageUrl.trim().slice(0, 2_000_000) : "",
+    enabled: value.enabled === true,
+    width: positive(value.width, 1000, 100_000),
+    height: positive(value.height, 600, 100_000),
+    pixelsPerMeter: positive(value.pixelsPerMeter, 50, 10_000),
+    grid: {
+      enabled: typeof value.grid === "object" && value.grid !== null && (value.grid as Record<string, unknown>).enabled === true,
+      size: positive(typeof value.grid === "object" && value.grid !== null ? (value.grid as Record<string, unknown>).size : undefined, 1, 100),
+      snap: typeof value.grid === "object" && value.grid !== null && (value.grid as Record<string, unknown>).snap === true,
+    },
+    geometry: sanitizeGeometry(value.geometry),
+  };
+}
+
+async function ensurePositionAvailable(
+  sessionId: string,
+  combatId: string,
+  combatantId: string,
+  target: TacticalPosition,
+  map: TacticalMap,
+): Promise<void> {
+  const rows = (await query(
+    db().from("mesa_combatants").select("id,position").eq("session_id", sessionId).eq("combat_id", combatId),
+    "Falha ao verificar espaço no mapa",
+  )) as Array<{ id: string; position?: TacticalPosition | null }> | null;
+  const occupied = (rows ?? []).some((row) => row.id !== combatantId && tacticalPositionsOverlap(
+    normalizeTacticalPosition(row.position), target, map,
+  ));
+  if (occupied) throw new MesaError("Esse espaço já está ocupado.", 409, "position_occupied");
 }
 
 function toParticipant(row: ParticipantRow): MesaParticipant {
@@ -702,7 +870,31 @@ function toCombat(row: CombatRow): MesaCombat {
   };
 }
 
+function effectiveMovementForRow(row: CombatantRow): { max: number; remaining: number } {
+  const injuryState = row.combat_snapshot?.combat
+    ? getCriticalInjuryModifiers({
+        combat: {
+          ...row.combat_snapshot.combat,
+          criticalInjuries: row.critical_injuries ?? row.combat_snapshot.combat.criticalInjuries,
+        } as unknown as Character["combat"],
+      })
+    : null;
+  const max = injuryState?.moveZero
+    ? 0
+    : Math.max(0, row.movement_max + (injuryState?.moveModifier ?? 0) * 2);
+  return { max, remaining: Math.min(row.movement_remaining, max) };
+}
+
+function unconsciousUntilRoundForRow(row: CombatantRow): number | undefined {
+  const rounds = (row.critical_injuries ?? [])
+    .map((injury) => injury.unconsciousUntilRound ?? 0)
+    .filter((round) => round > 0);
+  return rounds.length > 0 ? Math.max(...rounds) : undefined;
+}
+
 function toCombatant(row: CombatantRow): MesaCombatant {
+  const movement = effectiveMovementForRow(row);
+  const unconsciousUntilRound = unconsciousUntilRoundForRow(row);
   return {
     id: row.id,
     combatId: row.combat_id,
@@ -720,8 +912,9 @@ function toCombatant(row: CombatantRow): MesaCombatant {
     initiativeDetail: row.initiative_detail ?? null,
     actionsMax: row.actions_max,
     actionsRemaining: row.actions_remaining,
-    movementMax: row.movement_max,
-    movementRemaining: row.movement_remaining,
+    movementMax: movement.max,
+    movementRemaining: movement.remaining,
+    unconsciousUntilRound,
     hpCurrent: row.hp_current,
     hpMax: row.hp_max,
     isDead: row.is_dead,
@@ -729,6 +922,10 @@ function toCombatant(row: CombatantRow): MesaCombatant {
     deathSaveFailures: row.death_save_failures ?? 0,
     conditions: Array.isArray(row.conditions) ? row.conditions : [],
     sortOrder: row.sort_order,
+    position: normalizeTacticalPosition(row.position, { x: row.kind === "enemy" ? 0.78 : 0.22, y: 0.2 + (row.sort_order % 5) * 0.15 }),
+    ...(typeof row.avatar_url === "string" && row.avatar_url.length > 0
+      ? { avatarUrl: row.avatar_url }
+      : {}),
   };
 }
 
@@ -761,8 +958,8 @@ export function combatParticipantFromRow(row: CombatantRow): CombatParticipant |
     economy: {
       actionsMax: row.actions_max,
       actionsRemaining: row.actions_remaining,
-      movementMax: row.movement_max,
-      movementRemaining: row.movement_remaining,
+      movementMax: effectiveMovementForRow(row).max,
+      movementRemaining: effectiveMovementForRow(row).remaining,
     },
   };
 }
@@ -1008,6 +1205,62 @@ export async function getMesaControlMetadata(sessionId: string, participantId: s
   )) as Array<{ id: string; kind: "enemy"; combat_snapshot: CombatParticipant | null }> | null;
 
   return (rows ?? []).map((row) => ({ combatantId: row.id, weapons: row.combat_snapshot?.weapons ?? [] }));
+}
+
+export async function updateTacticalMap(input: { sessionId: unknown; token: unknown; map: unknown }): Promise<void> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireGM({ session, participant });
+  validateTacticalCoverMetadata(input.map);
+  const requestedMap = sanitizeTacticalMap(input.map);
+  const currentRow = (await query(
+    db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(),
+    "Falha ao consultar o mapa tático atual",
+  )) as { tactical_map?: unknown } | null;
+  const currentMap = sanitizeTacticalMap(currentRow?.tactical_map);
+  const currentGeometry = currentMap.geometry ?? { walls: [], doors: [] };
+  const requestedGeometry = requestedMap.geometry ?? { walls: [], doors: [] };
+  const currentById = new Map([...currentGeometry.walls, ...currentGeometry.doors].map((entry) => [entry.id, entry]));
+  const preserveCoverState = <T extends TacticalWall | TacticalDoor>(entry: T): T => {
+    const previous = currentById.get(entry.id);
+    const { destroyed: _requestedDestroyed, ...entryWithoutDestroyed } = entry;
+    const profile = deriveTacticalCoverProfile(entry.coverMaterial, entry.coverThickness);
+    if (!profile) return previous && entry.coverMaterial === previous.coverMaterial ? { ...entryWithoutDestroyed, coverHP: previous.coverHP, coverDV: previous.coverDV, ...(previous.destroyed === true ? { destroyed: true } : {}) } as T : entryWithoutDestroyed as T;
+    const oldProfile = previous ? deriveTacticalCoverProfile(previous.coverMaterial, previous.coverThickness) : null;
+    const destroyed = previous?.destroyed === true;
+    const coverHP = coverHPAfterProfileChange(previous?.coverHP, destroyed, oldProfile?.hp ?? null, profile.hp);
+    return { ...entryWithoutDestroyed, coverHP, coverDV: profile.dv, ...(destroyed || coverHP === 0 ? { destroyed: true } : {}) } as T;
+  };
+  const map: TacticalMap = {
+    ...requestedMap,
+    geometry: {
+      walls: requestedGeometry.walls.map(preserveCoverState),
+      doors: requestedGeometry.doors.map(preserveCoverState),
+    },
+  };
+  await query(
+    db().from("mesa_sessions").update({ tactical_map: map, updated_at: new Date().toISOString() }).eq("id", session.id),
+    "Falha ao salvar o mapa tático",
+  );
+}
+
+/** Posicionamento de preparação: só o GM, sem economia/turno. */
+export async function positionCombatantPreparation(input: { sessionId: unknown; token: unknown; combatantId: unknown; position: unknown }): Promise<void> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireGM({ session, participant });
+  const id = typeof input.combatantId === "string" ? input.combatantId.trim() : "";
+  const position = normalizeTacticalPosition(input.position, { x: 0.5, y: 0.5 });
+  const combat = (await query(db().from("mesa_combats").select("id,status,initiative_started").eq("session_id", session.id).maybeSingle(), "Falha ao consultar o combate")) as Pick<CombatRow, "id" | "status" | "initiative_started"> | null;
+  if (!combat || (combat.status === "active" && combat.initiative_started)) {
+    throw new MesaError("O posicionamento livre só existe antes da iniciativa.", 409, "combat_active");
+  }
+  let map = DEFAULT_TACTICAL_MAP;
+  try {
+    const sessionMap = (await query(db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(), "Falha ao consultar mapa")) as { tactical_map?: TacticalMap | null } | null;
+    map = sanitizeTacticalMap(sessionMap?.tactical_map);
+  } catch { /* migration ainda não aplicada: usa escala padrão */ }
+  await ensurePositionAvailable(session.id, combat.id, id, position, map);
+  const written = await query(db().from("mesa_combatants").update({ position }).eq("id", id).eq("session_id", session.id).select("id"), "Falha ao salvar a posição");
+  if (!written || written.length !== 1) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
 }
 
 // ---------------------------------------------------------------------------
@@ -1314,7 +1567,9 @@ function movementBudgetFor(sheet: Character): number {
   if (typeof move !== "number" || !Number.isFinite(move)) return MOVEMENT_PER_TURN;
   // Ficha antiga pode vir sem a lista de cyberware: não derruba o combate por isso.
   const cyberware = Array.isArray(sheet.cyberware) ? sheet.cyberware : [];
-  return movementMetersPerTurn(move + getCyberwareMoveModifier({ cyberware }));
+  const injuries = getCriticalInjuryModifiers({ combat: sheet.combat });
+  if (injuries.moveZero) return 0;
+  return movementMetersPerTurn(move + getCyberwareMoveModifier({ cyberware }) + injuries.moveModifier);
 }
 
 /**
@@ -1430,6 +1685,9 @@ export async function startCombat(input: {
     // Reutiliza a linha de combate (session_id é único) para permitir um novo
     // combate depois de um anterior encerrado.
     let combatId: string;
+    const priorPositions = existingCombat
+      ? ((await query(db().from("mesa_combatants").select("participant_id,source_key,kind,position").eq("combat_id", existingCombat.id), "Falha ao consultar posições anteriores")) as Array<Pick<CombatantRow, "participant_id" | "source_key" | "kind" | "position">> | null) ?? []
+      : [];
     if (existingCombat) {
       await query(db().from("mesa_combatants").delete().eq("combat_id", existingCombat.id), "Falha ao limpar combatentes");
       const reset = (await query(
@@ -1496,11 +1754,13 @@ export async function startCombat(input: {
         combat_armor: { ...snapshot.combat.armor },
         critical_injuries: [...snapshot.combat.criticalInjuries],
         sort_order: sortOrder++,
+        position: priorPositions.find((old) => old.participant_id === row.id)?.position ?? { x: 0.22, y: 0.2 + (sortOrder % 5) * 0.14 },
+        avatar_url: typeof sheet.identity?.photoUrl === "string" ? sheet.identity.photoUrl.slice(0, 2_000_000) : null,
       });
     }
 
   for (const enemy of enemies) {
-      const movement = enemyMovementBudget(enemy.move);
+      const movement = enemyMovementBudget(enemy.move, enemy.snapshot);
       rows.push({
         combat_id: combatId,
         session_id: session.id,
@@ -1529,6 +1789,7 @@ export async function startCombat(input: {
          death_save_dc: 0,
          death_save_failures: 0,
         sort_order: sortOrder++,
+        position: priorPositions.find((old) => old.kind === "enemy" && old.source_key === enemy.key)?.position ?? { x: 0.78, y: 0.2 + (sortOrder % 5) * 0.14 },
       });
     }
 
@@ -1572,7 +1833,12 @@ interface EnemyInput {
 }
 
 /** MOVE × 2 metros quando o encontro informa o MOVE; senão o fallback do motor. */
-function enemyMovementBudget(move: number | null): number {
+function enemyMovementBudget(move: number | null, snapshot?: CombatState["participants"][number] | null): number {
+  if (snapshot) {
+    const injuries = getCriticalInjuryModifiers({ combat: snapshot.combat as unknown as Character["combat"] });
+    if (injuries.moveZero) return 0;
+    if (move !== null) return movementMetersPerTurn(move + injuries.moveModifier);
+  }
   return move === null ? MOVEMENT_PER_TURN : movementMetersPerTurn(move);
 }
 
@@ -1730,7 +1996,7 @@ export async function addEnemies(input: {
   let sortOrder = (current[0]?.sort_order ?? -1) + 1;
 
   const rows = enemies.map((enemy) => {
-    const movement = enemyMovementBudget(enemy.move);
+    const movement = enemyMovementBudget(enemy.move, enemy.snapshot);
     return {
       combat_id: combat.id,
       session_id: session.id,
@@ -1759,6 +2025,7 @@ export async function addEnemies(input: {
        death_save_dc: 0,
        death_save_failures: 0,
       sort_order: sortOrder++,
+      position: { x: 0.78, y: 0.2 + (sortOrder % 5) * 0.14 },
     };
   });
 
@@ -1817,6 +2084,21 @@ export async function updateCombatant(input: {
 
   const patch = (typeof input.patch === "object" && input.patch !== null ? input.patch : {}) as Record<string, unknown>;
   const update: Record<string, unknown> = {};
+
+  if (patch.position !== undefined) {
+    const activeCombat = await getActiveCombat(session.id);
+    if (activeCombat?.initiative_started) throw new MesaError("Durante o combate, arraste pelo Movement Gateway.", 409, "combat_active");
+    update.position = normalizeTacticalPosition(patch.position);
+    const combat = (await query(db().from("mesa_combats").select("id,status").eq("session_id", session.id).maybeSingle(), "Falha ao consultar o combate")) as Pick<CombatRow, "id" | "status"> | null;
+    if (combat) {
+      let map = DEFAULT_TACTICAL_MAP;
+      try {
+        const sessionMap = (await query(db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(), "Falha ao consultar mapa")) as { tactical_map?: TacticalMap | null } | null;
+        map = sanitizeTacticalMap(sessionMap?.tactical_map);
+      } catch { /* usa escala padrão durante rollout */ }
+      await ensurePositionAvailable(session.id, combat.id, row.id, update.position as TacticalPosition, map);
+    }
+  }
 
   // F1.12.1 (Fase 9) — durante combate ativo, HP/morte de PERSONAGEM é
   // autoridade da Mesa: nenhum cliente define o valor final. O caminho é o
@@ -2247,7 +2529,7 @@ export async function resolveEnemyDamage(input: {
           hp: { current: row.hp_current, max: row.hp_max },
           armor,
           cyberwareSP: { head: 0, body: bodySP }, // `head` sempre 0 (F1.3)
-          criticalInjuries: [], // encontro não rastreia lesões (recorte dos adapters)
+          criticalInjuries: row.critical_injuries ?? [],
           conditions: [],
           initiative: row.initiative,
           isDead: row.is_dead,
@@ -2781,7 +3063,13 @@ export async function registerPlayerDeathSave(input: {
     const currentDc = row.death_save_dc ?? 0;
     const currentFailures = row.death_save_failures ?? 0;
     const dcBefore = currentDc === 0 && currentFailures === 0 ? snapshotBody : currentDc;
-    const resolved = resolveDeathSave({ dc: dcBefore, failures: currentFailures }, serverRandom);
+    const injuryModifiers = getCriticalInjuryModifiers({
+      combat: (row.combat_snapshot?.combat ?? { criticalInjuries: [] }) as unknown as Character["combat"],
+    });
+    const resolved = resolveDeathSave(
+      { dc: dcBefore, failures: currentFailures, deathSavePenalty: injuryModifiers.deathSaveModifier },
+      serverRandom,
+    );
     const outcome: PlayerDeathSaveOutcome = {
       combatantId: row.id,
       diceRoll: resolved.diceRoll,
@@ -3613,6 +3901,8 @@ export async function performAction(input: {
 
   const actionType = input.actionType;
   const meters = typeof input.meters === "number" ? input.meters : 0;
+  const movement = effectiveMovementForRow(row);
+  const unconsciousUntilRound = unconsciousUntilRoundForRow(row);
 
   const result = resolveAction({
     combatStatus: combat ? combat.status : null,
@@ -3625,11 +3915,13 @@ export async function performAction(input: {
       isDead: row.is_dead,
       actionsMax: row.actions_max,
       actionsRemaining: row.actions_remaining,
-      movementMax: row.movement_max,
-      movementRemaining: row.movement_remaining,
+       movementMax: movement.max,
+       movementRemaining: movement.remaining,
+       unconsciousUntilRound,
     },
     actionType,
     meters,
+    currentRound: combat?.round,
   });
 
   if (!result.ok) {
@@ -3641,8 +3933,8 @@ export async function performAction(input: {
     {
       actionsMax: row.actions_max,
       actionsRemaining: row.actions_remaining,
-      movementMax: row.movement_max,
-      movementRemaining: row.movement_remaining,
+      movementMax: movement.max,
+      movementRemaining: movement.remaining,
     },
     actionType as CombatActionType,
     meters,
@@ -3683,7 +3975,7 @@ export async function movePlayerCombatant(input: {
 }): Promise<{ result: { combatantId: string; distance: number; movementRemaining: number; actionsRemaining: number }; committed: boolean }> {
   const body = typeof input.body === "object" && input.body !== null && !Array.isArray(input.body)
     ? input.body as Record<string, unknown> : {};
-  const extra = Object.keys(body).filter((key) => !["resolutionId", "actorCombatantId", "distance"].includes(key));
+  const extra = Object.keys(body).filter((key) => !["resolutionId", "actorCombatantId", "distance", "targetPosition"].includes(key));
   if (extra.length) throw new MesaError(`Envie somente a intenção de movimento (${extra.join(", ")}).`, 400, "client_authority_forbidden");
 
   const { session, participant } = await authenticate(input.sessionId, input.token);
@@ -3696,10 +3988,12 @@ export async function movePlayerCombatant(input: {
   if (!actorCombatantId) throw new MesaError("Combatente ausente.", 400, "combatant_not_found");
   // O motor legado truncava metros fracionários. O gateway recebe somente
   // metros inteiros para não aceitar uma intenção diferente da registrada.
-  if (typeof body.distance !== "number" || !Number.isSafeInteger(body.distance) || body.distance <= 0) {
+  const requestedPosition = body.targetPosition === undefined ? null : normalizeTacticalPosition(body.targetPosition, { x: -1, y: -1 });
+  const hasPosition = requestedPosition !== null && requestedPosition.x >= 0 && requestedPosition.y >= 0;
+  if (!hasPosition && (typeof body.distance !== "number" || !Number.isSafeInteger(body.distance) || body.distance <= 0)) {
     throw new MesaError("Informe uma distância inteira e positiva em metros.", 400, "invalid_distance");
   }
-  const distance = body.distance;
+  const requestedDistance = hasPosition ? null : body.distance as number;
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
 
@@ -3719,9 +4013,10 @@ export async function movePlayerCombatant(input: {
     throw new MesaError("O Mestre só pode mover inimigos ou o próprio personagem.", 403, "player_only");
   }
 
-  type MoveResult = { combatantId: string; distance: number; movementRemaining: number; actionsRemaining: number };
+  type MoveResult = { combatantId: string; distance: number; movementRemaining: number; actionsRemaining: number; position: TacticalPosition };
   const replay = (result: MoveResult) => {
-    if (result.combatantId !== actorCombatantId || result.distance !== distance) {
+    if (result.combatantId !== actorCombatantId || (requestedDistance !== null && result.distance !== requestedDistance) ||
+      (hasPosition && JSON.stringify(result.position) !== JSON.stringify(requestedPosition))) {
       throw new MesaError("Esta resolução pertence a outro movimento.", 409, "resolution_conflict");
     }
     return { result, committed: false };
@@ -3757,6 +4052,22 @@ export async function movePlayerCombatant(input: {
     // Uma nova leitura reduz a janela entre claim e validação; o CAS abaixo
     // protege também o orçamento contra dois movimentos simultâneos.
     const currentCombat = await getActiveCombat(session.id);
+    const movement = effectiveMovementForRow(row);
+    let sessionMap: { tactical_map?: TacticalMap | null } | null = null;
+    try {
+      sessionMap = (await query(db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(), "Falha ao consultar escala do mapa")) as { tactical_map?: TacticalMap | null } | null;
+    } catch {
+      // Compatibilidade durante o rollout: movimentos antigos continuam usando
+      // o contrato de metros até a migration do mapa chegar ao ambiente.
+      sessionMap = null;
+    }
+    const map = sanitizeTacticalMap(sessionMap?.tactical_map);
+    const currentPosition = normalizeTacticalPosition(row.position, { x: row.kind === "enemy" ? 0.78 : 0.22, y: 0.5 });
+    const targetPosition = hasPosition ? requestedPosition as TacticalPosition : currentPosition;
+    const distance = hasPosition ? tacticalDistance(currentPosition, targetPosition, map) : requestedDistance as number;
+    if (hasPosition && distance <= 0) throw new MesaError("Escolha uma posição diferente.", 400, "invalid_distance");
+    if (hasPosition) await ensurePositionAvailable(session.id, combat.id, row.id, targetPosition, map);
+    const unconsciousUntilRound = unconsciousUntilRoundForRow(row);
     const validation = resolveAction({
       combatStatus: currentCombat?.status ?? null,
       initiativeStarted: currentCombat?.initiative_started ?? false,
@@ -3765,19 +4076,21 @@ export async function movePlayerCombatant(input: {
       actorOwnsCombatant: true,
       combatant: {
         id: row.id, isDead: row.is_dead, actionsMax: row.actions_max,
-        actionsRemaining: row.actions_remaining, movementMax: row.movement_max,
-        movementRemaining: row.movement_remaining,
+         actionsRemaining: row.actions_remaining, movementMax: movement.max,
+         movementRemaining: movement.remaining,
+         unconsciousUntilRound,
       },
       actionType: "move", meters: distance,
+      currentRound: currentCombat?.round,
     });
     if (!validation.ok) throw new MesaError(DENIAL_MESSAGES[validation.reason], 403, validation.reason);
 
     const economy = applyAction({
       actionsMax: row.actions_max, actionsRemaining: row.actions_remaining,
-      movementMax: row.movement_max, movementRemaining: row.movement_remaining,
+      movementMax: movement.max, movementRemaining: movement.remaining,
     }, "move", distance);
     const written = (await query(db().from("mesa_combatants")
-      .update({ movement_remaining: economy.movementRemaining })
+      .update({ movement_remaining: economy.movementRemaining, ...(hasPosition ? { position: targetPosition } : {}) })
       .eq("id", row.id).eq("combat_id", combat.id)
       .eq("movement_remaining", row.movement_remaining)
       .eq("actions_remaining", row.actions_remaining)
@@ -3788,6 +4101,7 @@ export async function movePlayerCombatant(input: {
     const result: MoveResult = {
       combatantId: row.id, distance, movementRemaining: economy.movementRemaining,
       actionsRemaining: economy.actionsRemaining,
+      position: targetPosition,
     };
     const stamped = (await query(db().from("mesa_attack_resolutions").update({
       status: "committed", result, committed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
@@ -3985,6 +4299,8 @@ export async function attackIntegrated(input: {
   attackType?: unknown;
   attackMode?: unknown;
   aimedTarget?: unknown;
+  targetType?: unknown;
+  obstacleId?: unknown;
 }): Promise<IntegratedAttackOutcome> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   const resolutionId = requireResolutionId(input.resolutionId);
@@ -4019,6 +4335,7 @@ export async function attackIntegrated(input: {
 
   const actorRowId = typeof input.actorId === "string" ? input.actorId : "";
   const targetRowId = typeof input.targetId === "string" ? input.targetId : "";
+  const coverAttack = input.targetType === "cover";
   const rows = (await query(
     db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
     "Falha ao consultar os combatentes",
@@ -4026,6 +4343,14 @@ export async function attackIntegrated(input: {
   const actorRow = rows.find((row) => row.id === actorRowId);
   const targetRow = rows.find((row) => row.id === targetRowId);
   if (!actorRow) throw new MesaError("Ator não encontrado.", 404, "actor_not_found");
+  if (coverAttack) {
+    const obstacleId = typeof input.obstacleId === "string" ? input.obstacleId.trim() : "";
+    if (!obstacleId) throw new MesaError("Cover não informada.", 400, "cover_not_found");
+    authorizeCombatAttackActor({ session, participant }, actorRow);
+    const coverOutcome = await attackTacticalCover({ input, inputResolutionId: resolutionId, session, participant, combat, rows, actorRow, obstacleId, claimToken });
+    committed = coverOutcome.committed;
+    return coverOutcome;
+  }
   if (!targetRow) throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
   validateCombatAttackTarget(combat, targetRow);
   authorizeCombatAttackActor({ session, participant }, actorRow);
@@ -4120,6 +4445,37 @@ export async function attackIntegrated(input: {
   });
   if (!economyCheck.ok) throw new MesaError(DENIAL_MESSAGES[economyCheck.reason], 403, economyCheck.reason);
 
+  // Tactical visibility is an authoritative combat rule: use only persisted
+  // combatant positions and the sanitized Tactical Map loaded with the
+  // authenticated session. Nothing from the attack request can influence this
+  // decision. Cover is currently informational because the project has no
+  // approved mechanical Cover modifier; only fully blocked visibility denies.
+  const persistedPosition = (value: unknown): TacticalPosition | null => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+    const point = value as Record<string, unknown>;
+    const x = Number(point.x);
+    const y = Number(point.y);
+    return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
+  };
+  const actorPosition = persistedPosition(actorRow.position);
+  const targetPosition = persistedPosition(targetRow.position);
+  if (!actorPosition || !targetPosition) {
+    throw new MesaError("Não foi possível determinar a posição tática do ataque.", 409, "tactical_position_missing");
+  }
+  const currentMapRow = (await query(
+    db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(),
+    "Falha ao consultar a geometria tática",
+  )) as { tactical_map?: unknown } | null;
+  const currentTacticalMap = sanitizeTacticalMap(currentMapRow?.tactical_map);
+  const tacticalCover = calculateTacticalCover(
+    actorPosition,
+    targetPosition,
+    currentTacticalMap.geometry ?? { walls: [], doors: [] },
+  );
+  if (tacticalCover.lineOfSight === "blocked") {
+    throw new MesaError("Linha de visão bloqueada por geometria tática.", 409, "line_of_sight_blocked");
+  }
+
   const result = execute(state, action, serverRandom);
   if (!result.ok || !result.attackResult) {
     const error = result.errors?.[0];
@@ -4186,7 +4542,20 @@ export async function attackIntegrated(input: {
     }
   }
 
-  response = { ...response, actionAfter: economy.actionsRemaining };
+  response = { ...response, tacticalCover, actionAfter: economy.actionsRemaining };
+
+  // O texto do evento é a trilha de auditoria também para instalações que só
+  // conhecem a coluna `text` (eventos antigos, exportações e a tela do GM).
+  // Não recalcula nada: todos os números abaixo vêm do resultado já decidido
+  // pelo Combat Engine nesta resolução.
+  const attackEventText = formatMesaAttackEvent({
+    actorName: actorRow.name,
+    targetName: targetRow.name,
+    attackResult: response.attackResult,
+    tacticalCover: response.tacticalCover,
+    weaponDamage: response.weaponDamage,
+    damageResult: response.damageResult,
+  });
 
   const committedResult = (await query(
     db().rpc("commit_mesa_attack_resolution", {
@@ -4204,7 +4573,7 @@ export async function attackIntegrated(input: {
       p_target_dead_before: targetRow.is_dead,
       p_target_patch: targetPatch,
       p_result: response,
-      p_event_text: `${actorRow.name}: ataque integrado`,
+       p_event_text: attackEventText,
     }),
     "Falha ao confirmar a resolução do ataque",
   )) as IntegratedAttackResponse | null;
@@ -4229,6 +4598,111 @@ export async function attackIntegrated(input: {
     }
     throw databaseResolutionError(error) ?? error;
   }
+}
+
+/** Ataque contra Cover: usa a rolagem normal, mas aplica dano somente ao JSON do obstáculo. */
+async function attackTacticalCover(input: {
+  input: { weaponId?: unknown; skillId?: unknown; attackType?: unknown; attackMode?: unknown; aimedTarget?: unknown };
+  inputResolutionId: string;
+  session: MesaSession;
+  participant: MesaParticipant;
+  combat: CombatRow;
+  rows: CombatantRow[];
+  actorRow: CombatantRow;
+  obstacleId: string;
+  claimToken: string;
+}): Promise<IntegratedAttackOutcome> {
+  const currentMapRow = (await query(
+    db().from("mesa_sessions").select("tactical_map").eq("id", input.session.id).maybeSingle(),
+    "Falha ao consultar a Cover",
+  )) as { tactical_map?: unknown } | null;
+  const map = sanitizeTacticalMap(currentMapRow?.tactical_map);
+  const obstacle = [...(map.geometry?.walls ?? []), ...(map.geometry?.doors ?? [])].find((entry) => entry.id === input.obstacleId);
+  if (!obstacle || obstacle.destroyed === true) throw new MesaError("Cover não encontrada ou já destruída.", 404, "cover_not_found");
+  if (obstacle.type === "door" && obstacle.state !== "closed") throw new MesaError("Porta aberta não pode ser atacada como Cover.", 409, "cover_not_destructible");
+  if (obstacle.coverHP === null || obstacle.coverHP === undefined) throw new MesaError("Cover não possui HP configurado.", 409, "cover_hp_unavailable");
+  const coverProfile = deriveTacticalCoverProfile(obstacle.coverMaterial, obstacle.coverThickness);
+  const authoritativeCoverDV = coverProfile?.dv ?? obstacle.coverDV;
+  if (authoritativeCoverDV === null || authoritativeCoverDV === undefined) throw new MesaError("Cover não possui DV configurado.", 409, "cover_dv_unavailable");
+
+  const persistedPosition = (value: unknown): TacticalPosition | null => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+    const point = value as Record<string, unknown>;
+    const x = Number(point.x);
+    const y = Number(point.y);
+    return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
+  };
+  const actorPosition = persistedPosition(input.actorRow.position);
+  if (!actorPosition) throw new MesaError("Não foi possível determinar a posição tática do ataque.", 409, "tactical_position_missing");
+  const coverPoint = { x: (obstacle.start.x + obstacle.end.x) / 2, y: (obstacle.start.y + obstacle.end.y) / 2 };
+  // O obstáculo que é o alvo não pode bloquear a própria linha até seu centro;
+  // os demais obstáculos continuam sendo avaliados autoritativamente.
+  const geometryWithoutTarget = map.geometry
+    ? { walls: map.geometry.walls.filter((entry) => entry.id !== obstacle.id), doors: map.geometry.doors.filter((entry) => entry.id !== obstacle.id) }
+    : { walls: [], doors: [] };
+  if (!calculateLineOfSight(actorPosition, coverPoint, geometryWithoutTarget).visible) {
+    throw new MesaError("Linha de visão até a Cover bloqueada.", 409, "line_of_sight_blocked");
+  }
+
+  const snapshots = input.rows.map((row) => ({ row, participant: combatParticipantFromRow(row) }));
+  if (snapshots.some(({ participant: value }) => !value)) throw new MesaError("Combate sem snapshot server-side completo.", 409, "combat_snapshot_missing");
+  const actor = snapshots.find(({ row }) => row.id === input.actorRow.id)?.participant;
+  if (!actor) throw new MesaError("Snapshot de combate ausente.", 409, "combat_snapshot_missing");
+  const skillId = actor.weapons?.find((weapon) => weapon.id === String(input.input.weaponId ?? ""))?.skill ?? (typeof input.input.skillId === "string" ? input.input.skillId : undefined);
+  const attackType = actor.weapons?.find((weapon) => weapon.id === String(input.input.weaponId ?? ""))?.attackType ?? input.input.attackType;
+  if (!skillId || !actor.skills?.[skillId]) throw new MesaError("Skill não pertence ao ator.", 400, "skill_not_found");
+  if (typeof attackType !== "string") throw new MesaError("Tipo de ataque ausente.", 400, "invalid_attack_type");
+  const requestedWeaponId = input.input.weaponId === undefined || input.input.weaponId === null ? undefined : String(input.input.weaponId);
+  const targetId = `cover:${input.obstacleId}`;
+  const target: CombatParticipant = {
+    id: targetId,
+    type: "enemy",
+    name: "Cover",
+    source: { characterId: null, sourceKey: targetId, enemyId: null },
+    stats: {},
+    skills: {},
+    combat: { hp: { current: 1, max: 1 }, armor: { head: 0, body: 0 }, criticalInjuries: [], conditions: [], initiative: null, isDead: false },
+  };
+  const state: CombatState = {
+    id: input.combat.id,
+    status: input.combat.status,
+    round: input.combat.round,
+    initiativeStarted: input.combat.initiative_started,
+    activeParticipantId: input.combat.active_combatant_id,
+    participants: [...snapshots.map(({ participant: value }) => value as CombatParticipant), target],
+  };
+  const rawMode = input.input.attackMode;
+  if (rawMode !== "normal" && rawMode !== "aimed" && rawMode !== "autofire" && rawMode !== "suppressive") throw new MesaError("Modo de ataque inválido.", 400, "invalid_attack_mode");
+  const action: AttackAction = {
+    type: "attack", actorId: actor.id, targetId, ...(requestedWeaponId ? { weaponId: requestedWeaponId } : {}), skillId,
+    attackType: attackType as AttackAction["attackType"], attackMode: rawMode, defense: { type: "dv", value: authoritativeCoverDV, source: "range_table", reason: "tactical_cover" },
+    ...(typeof input.input.aimedTarget === "string" ? { aimedTarget: input.input.aimedTarget as AttackAction["aimedTarget"] } : {}),
+  };
+  const economyCheck = resolveAction({ combatStatus: input.combat.status, initiativeStarted: input.combat.initiative_started, activeCombatantId: input.combat.active_combatant_id, actorRole: input.participant.role, actorOwnsCombatant: input.actorRow.participant_id === input.participant.id, combatant: { id: input.actorRow.id, isDead: input.actorRow.is_dead, actionsMax: input.actorRow.actions_max, actionsRemaining: input.actorRow.actions_remaining, movementMax: input.actorRow.movement_max, movementRemaining: input.actorRow.movement_remaining }, actionType: "attack", meters: 0 });
+  if (!economyCheck.ok) throw new MesaError(DENIAL_MESSAGES[economyCheck.reason], 403, economyCheck.reason);
+  const result = execute(state, action, serverRandom);
+  if (!result.ok || !result.attackResult) throw new MesaError(result.errors?.[0]?.message ?? "O Combat Engine recusou o ataque.", 400, result.errors?.[0]?.code ?? "engine_refused");
+  const ammoChange = result.changes.find((change): change is Extract<(typeof result.changes)[number], { type: "ammo_changed" }> => change.type === "ammo_changed");
+  const ammoAfter = requestedWeaponId ? result.state.participants.find((value) => value.id === actor.id)?.weapons?.find((value) => value.id === requestedWeaponId)?.ammo : undefined;
+  let damage = 0;
+  if (result.attackResult.hit) {
+    const damageRoll = rollWeaponDamage(actor, result.attackResult, serverRandom);
+    if (!damageRoll.ok) throw new MesaError(damageRoll.error.message, 400, damageRoll.error.code);
+    damage = damageRoll.roll.total;
+  }
+  const hpBefore = obstacle.coverHP;
+  const coverDamage = applyTacticalCoverDamage(hpBefore, damage);
+  const hpAfter = coverDamage.hpAfter;
+  const response: IntegratedAttackResponse = { attackResult: result.attackResult, ammoAfter, tacticalCover: { status: "clear", lineOfSight: "clear", covered: false, blockedSamples: 0, totalSamples: 0 }, coverDamage: { obstacleId: input.obstacleId, hpBefore, hpAfter, damage, destroyed: coverDamage.destroyed } };
+  const economy = applyAction({ actionsMax: input.actorRow.actions_max, actionsRemaining: input.actorRow.actions_remaining, movementMax: input.actorRow.movement_max, movementRemaining: input.actorRow.movement_remaining }, "attack", 0);
+  const eventText = [
+    `${input.actorRow.name} → Cover: ataque ${result.attackResult.total} vs DV ${result.attackResult.defenseValue}`,
+    result.attackResult.hit ? "ACERTOU" : "ERROU",
+    result.attackResult.hit ? (hpAfter === 0 ? "Cover destruída" : `Cover: ${hpBefore} → ${hpAfter} HP`) : "",
+  ].filter(Boolean).join(" · ");
+  const committed = (await query(db().rpc("commit_mesa_attack_cover_resolution", { p_session_id: input.session.id, p_combat_id: input.combat.id, p_resolution_id: input.inputResolutionId, p_claim_token: input.claimToken, p_actor_id: actor.id, p_actions_before: input.actorRow.actions_remaining, p_actions_after: economy.actionsRemaining, p_ammo_before: input.actorRow.combat_ammo ?? null, p_ammo_after: ammoChange?.weaponId ? { ...(input.actorRow.combat_ammo ?? {}), [ammoChange.weaponId]: ammoChange.after } : input.actorRow.combat_ammo ?? null, p_obstacle_id: input.obstacleId, p_hp_before: hpBefore, p_hp_after: hpAfter, p_destroyed: hpAfter === 0, p_result: { ...response, actionAfter: economy.actionsRemaining }, p_event_text: eventText }), "Falha ao confirmar dano da Cover")) as IntegratedAttackResponse | null;
+  if (!committed) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
+  return { result: committed, committed: true };
 }
 
 /**
@@ -4357,7 +4831,18 @@ export async function registerRoll(input: {
   }
   await appendEvent(
     combat.id,
-    { kind: "roll", text: eventText, ...(eventResolutionId ? { resolutionId: eventResolutionId } : {}) },
+    {
+      kind: "roll",
+      text: eventText,
+      roll: {
+        type: roll.type,
+        label: roll.label,
+        expression: roll.expression,
+        total: roll.total,
+        rolls: roll.rolls,
+      },
+      ...(eventResolutionId ? { resolutionId: eventResolutionId } : {}),
+    },
   );
 
   return { registered: true, debited };

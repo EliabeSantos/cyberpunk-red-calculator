@@ -19,7 +19,7 @@ export interface RunOptions {
    * Captura a falha INLINE (ex.: erro do ataque no próprio painel). Sem
    * `onError`, o aviso geral da tela é usado — nunca os dois.
    */
-  onError?: (message: string) => void;
+  onError?: (message: string, code?: string) => void;
 }
 
 /** Executa uma mutação com busy global + refresh obrigatório no fim. */

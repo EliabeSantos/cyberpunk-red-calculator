@@ -12,9 +12,11 @@
 
 import { useRef, useState } from "react";
 
-import { attackMesa, moveMesa } from "@/lib/mesa/client";
+import { attackMesa, formatAttackGatewayError, moveMesa } from "@/lib/mesa/client";
 import { evaluateMesaAction } from "@/lib/mesa/actionGate";
 import { findCombatant } from "@/lib/mesa/playerScreen";
+import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
+import { getTacticalCoverProfile } from "@/lib/mesa/tacticalCoverCatalog";
 import type { Character } from "@/types/character";
 import type { MesaCombatant } from "@/lib/mesa/types";
 import type { PlayerPanelBase } from "./types";
@@ -31,6 +33,8 @@ interface Props extends PlayerPanelBase {
   targets: MesaCombatant[];
   selectedTargetId: string;
   onSelectTarget: (combatantId: string) => void;
+  selectedWeaponId: string;
+  onSelectWeapon: (weaponId: string) => void;
   sessionFinished: boolean;
 }
 
@@ -43,9 +47,10 @@ export default function PlayerActionsPanel({
   targets,
   selectedTargetId,
   onSelectTarget,
+  selectedWeaponId,
+  onSelectWeapon,
   sessionFinished,
 }: Props) {
-  const [weaponId, setWeaponId] = useState("");
   const [attackMode, setAttackMode] = useState<AttackMode>("aimed");
   const [aimedTarget, setAimedTarget] = useState<AimedLocation>("head");
   const [moveDraft, setMoveDraft] = useState("");
@@ -61,7 +66,12 @@ export default function PlayerActionsPanel({
   const active = findCombatant(state, combat?.activeCombatantId ?? null);
   const myTurn = Boolean(active && me && active.id === me.id);
 
-  const selectedWeapon = weapons.find((weapon) => weapon.id === weaponId) ?? weapons[0] ?? null;
+  const selectedWeapon = weapons.find((weapon) => weapon.id === selectedWeaponId) ?? weapons[0] ?? null;
+  const selectedCoverId = tacticalCoverObstacleId(selectedTargetId);
+  const selectedCover = selectedCoverId
+    ? [...(state.session.tacticalMap?.geometry?.walls ?? []), ...(state.session.tacticalMap?.geometry?.doors ?? [])].find((entry) => entry.id === selectedCoverId && entry.destroyed !== true && !(entry.type === "door" && entry.state === "open")) ?? null
+    : null;
+  const selectedCoverProfile = selectedCover ? getTacticalCoverProfile(selectedCover.coverMaterial, selectedCover.coverThickness) : null;
   const ammo = selectedWeapon?.id ? me?.ammoByWeapon?.[selectedWeapon.id] : undefined;
   const hasMagazine = typeof selectedWeapon?.magazine === "number" && selectedWeapon.magazine > 0;
   const outOfAmmo = hasMagazine && ammo !== undefined && ammo <= 0;
@@ -81,11 +91,13 @@ export default function PlayerActionsPanel({
     setAttackError(null);
     await run(
       async () => {
+        const coverObstacleId = tacticalCoverObstacleId(selectedTargetId);
         const result = await attackMesa({
           sessionId: state.session.id,
           resolutionId: crypto.randomUUID(),
           actorId: me.id,
-          targetId: selectedTargetId,
+          targetId: coverObstacleId ? "" : selectedTargetId,
+          ...(coverObstacleId ? { targetType: "cover" as const, obstacleId: coverObstacleId } : {}),
           weaponId: selectedWeapon.id,
           skillId: selectedWeapon.skill,
           attackType: selectedWeapon.attackType,
@@ -95,8 +107,8 @@ export default function PlayerActionsPanel({
         setFeedback(result);
       },
       {
-        onError: (message) => {
-          setAttackError(message);
+        onError: (message, code) => {
+          setAttackError(formatAttackGatewayError(message, code));
           setFeedback(null);
         },
       },
@@ -145,27 +157,34 @@ export default function PlayerActionsPanel({
           Alvo
           <select
             value={selectedTargetId}
-            disabled={busy || targets.length === 0}
+             disabled={busy || (targets.length === 0 && !selectedCover)}
             onChange={(event) => onSelectTarget(event.target.value)}
           >
-            {targets.length === 0 ? (
+            {targets.length === 0 && !selectedCover ? (
               <option value="">Nenhum inimigo disponível</option>
             ) : (
-              targets.map((target) => (
+              <>{selectedCover && <option value={selectedTargetId}>Cover · {selectedCover.coverHP ?? "—"} HP</option>}
+              {targets.map((target) => (
                 <option key={target.id} value={target.id}>
                   {target.name} · {target.hpCurrent}/{target.hpMax} HP
                 </option>
-              ))
+              ))}</>
             )}
           </select>
         </label>
+
+        {selectedCover && <div className="player-mesa-target-readout" aria-label="Alvo Cover">
+          <strong>ALVO: COVER</strong>
+          <span>DV para atacar: {selectedCover.coverDV ?? "não definido"}</span>
+          <span>HP: {selectedCover.coverHP ?? "não definido"}{selectedCoverProfile ? ` / ${selectedCoverProfile.hp}` : ""}</span>
+        </div>}
 
         <label>
           Arma
           <select
             value={selectedWeapon?.id ?? ""}
             disabled={busy || weapons.length === 0}
-            onChange={(event) => setWeaponId(event.target.value)}
+            onChange={(event) => onSelectWeapon(event.target.value)}
           >
             {weapons.length === 0 ? (
               <option value="">Nenhuma arma vinculada</option>
@@ -291,10 +310,17 @@ function AttackFeedbackView({ feedback }: { feedback: AttackFeedback }) {
   const damage = feedback.damageResult;
   return (
     <div className="player-mesa-feedback">
-      <strong>{attack.hit ? "HIT" : "MISS"}</strong>
-      <span>
-        Ataque: {attack.total} · Defesa: {attack.defenseValue}
+       <strong>{feedback.coverDamage ? (attack.hit ? "ACERTOU COVER" : "ERROU COVER") : attack.hit ? "HIT" : "MISS"}</strong>
+       <span>
+         {feedback.coverDamage ? `ATAQUE ${attack.total} vs DV ${attack.defenseValue}` : `Ataque: ${attack.total} · Defesa do alvo: ${attack.defenseValue}`}
       </span>
+      {feedback.tacticalCover && <span>
+        Cover: {feedback.tacticalCover.status.toUpperCase()} ({feedback.tacticalCover.blockedSamples}/{feedback.tacticalCover.totalSamples})
+        {feedback.tacticalCover.status !== "clear" && " · sem modificador mecânico definido"}
+      </span>}
+      {feedback.coverDamage && <span>
+        Cover: {feedback.coverDamage.hpBefore} → {feedback.coverDamage.hpAfter} HP{feedback.coverDamage.destroyed ? " · DESTRUÍDA" : ""}
+      </span>}
       {damage && (
         <span>
           Dano: {damage.rawDamage} · Armor: {damage.armorValue} · Final: {damage.damageAfterArmor} · HP:{" "}

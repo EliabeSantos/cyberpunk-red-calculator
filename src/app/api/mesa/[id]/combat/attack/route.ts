@@ -24,6 +24,8 @@ export async function POST(request: Request, context: Context): Promise<Response
       attackType: body.attackType,
       attackMode: body.attackMode,
       aimedTarget: body.aimedTarget,
+      targetType: body.targetType,
+      obstacleId: body.obstacleId,
     });
     if (outcome.committed) await publishMesaState(id);
     return ok(outcome.result);

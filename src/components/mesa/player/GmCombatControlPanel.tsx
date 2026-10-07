@@ -6,6 +6,7 @@ import { getSupplyHealAmount } from "@/data/enemySupplies";
 import { resolveSupplyItemId } from "@/data/supplyItems";
 import {
   attackMesa,
+  formatAttackGatewayError,
   applyMesaHealingItem,
   consumeMesaItem,
   endTurn,
@@ -14,6 +15,8 @@ import {
   rollInitiative,
 } from "@/lib/mesa/client";
 import { evaluateMesaAction } from "@/lib/mesa/actionGate";
+import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
+import { getTacticalCoverProfile } from "@/lib/mesa/tacticalCoverCatalog";
 import type { CombatWeapon } from "@/lib/combat/contract";
 import type { MesaState } from "@/lib/mesa/types";
 import type { RunAction } from "./types";
@@ -25,6 +28,10 @@ interface Props {
   metadata: Record<string, CombatWeapon[]>;
   sessionFinished: boolean;
   controlledCombatantId: string | null;
+  selectedTargetId: string;
+  onSelectTarget: (combatantId: string) => void;
+  selectedWeaponId: string;
+  onSelectWeapon: (weaponId: string) => void;
 }
 
 type AttackMode = "normal" | "aimed";
@@ -37,19 +44,27 @@ export default function GmCombatControlPanel({
   metadata,
   sessionFinished,
   controlledCombatantId,
+  selectedTargetId,
+  onSelectTarget,
+  selectedWeaponId,
+  onSelectWeapon,
 }: Props) {
-  const [targetId, setTargetId] = useState<string | null>(null);
-  const [selectedWeaponId, setSelectedWeaponId] = useState<string | null>(null);
   const [moveDraft, setMoveDraft] = useState("");
   const [attackMode, setAttackMode] = useState<AttackMode>("normal");
   const [aimedTarget, setAimedTarget] = useState<AimedTarget>("head");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [attackError, setAttackError] = useState<string | null>(null);
 
   const players = state.combatants.filter((combatant) => combatant.kind === "character" && !combatant.isDead);
   const selected = state.combatants.find((combatant) => combatant.id === controlledCombatantId) ?? null;
   const weapons = selected ? metadata[selected.id] ?? [] : [];
   const selectedWeapon = weapons.find((weapon) => weapon.id === selectedWeaponId) ?? weapons[0] ?? null;
-  const target = players.find((combatant) => combatant.id === targetId) ?? players[0] ?? null;
+  const target = players.find((combatant) => combatant.id === selectedTargetId) ?? players[0] ?? null;
+  const coverObstacleId = tacticalCoverObstacleId(selectedTargetId);
+  const selectedCover = coverObstacleId
+    ? [...(state.session.tacticalMap?.geometry?.walls ?? []), ...(state.session.tacticalMap?.geometry?.doors ?? [])].find((entry) => entry.id === coverObstacleId && entry.destroyed !== true && !(entry.type === "door" && entry.state === "open")) ?? null
+    : null;
+  const selectedCoverProfile = selectedCover ? getTacticalCoverProfile(selectedCover.coverMaterial, selectedCover.coverThickness) : null;
   const moveMeters = Number.isSafeInteger(Number(moveDraft)) ? Number(moveDraft) : 0;
   const isActive = Boolean(selected && selected.id === state.combat?.activeCombatantId);
   const actionGate = selected
@@ -68,22 +83,25 @@ export default function GmCombatControlPanel({
     : { ok: false, message: "Selecione um inimigo." };
 
   async function doAttack() {
-    if (!selected || !target || !selectedWeapon || busy) return;
+    if (!selected || (!target && !coverObstacleId) || !selectedWeapon || busy) return;
+    setAttackError(null);
+    setFeedback(null);
     await run(
       async () => {
-        await attackMesa({
+        const result = await attackMesa({
           sessionId: state.session.id,
           actorId: selected.id,
-          targetId: target.id,
+          targetId: coverObstacleId ? "" : target?.id ?? "",
+          ...(coverObstacleId ? { targetType: "cover" as const, obstacleId: coverObstacleId } : {}),
           weaponId: selectedWeapon.id,
           skillId: selectedWeapon.skill,
           attackType: selectedWeapon.attackType,
           attackMode,
           ...(attackMode === "aimed" ? { aimedTarget } : {}),
         });
-        setFeedback(`${selected.name} atacou ${target.name}.`);
+        setFeedback(`${selected.name} atacou ${coverObstacleId ? "a Cover" : target?.name ?? "o alvo"}.${result.coverDamage ? ` Cover: ${result.coverDamage.hpBefore}→${result.coverDamage.hpAfter} HP${result.coverDamage.destroyed ? " · DESTRUÍDA" : ""}` : result.tacticalCover ? ` Cover: ${result.tacticalCover.status.toUpperCase()} (${result.tacticalCover.blockedSamples}/${result.tacticalCover.totalSamples})${result.tacticalCover.status !== "clear" ? " · sem modificador mecânico definido" : ""}` : ""}`);
       },
-      { onError: setFeedback },
+      { onError: (message, code) => setAttackError(formatAttackGatewayError(message, code)) },
     );
   }
 
@@ -208,7 +226,7 @@ export default function GmCombatControlPanel({
                         className="player-mesa-gm-weapon-select"
                         disabled={busy}
                         aria-pressed={isSelected}
-                        onClick={() => setSelectedWeaponId(weapon.id ?? null)}
+                        onClick={() => onSelectWeapon(weapon.id ?? "")}
                       >
                         <strong>{weapon.name}</strong>
                         <span>{hasMagazine ? `${typeof ammo === "number" ? ammo : "—"}/${weapon.magazine}` : "Sem magazine"}</span>
@@ -271,10 +289,16 @@ export default function GmCombatControlPanel({
 
           <label className="player-mesa-gm-target">
             Alvo
-            <select value={target?.id ?? ""} disabled={busy || players.length === 0} onChange={(event) => setTargetId(event.target.value)}>
-              {players.length === 0 ? <option value="">Nenhum Player disponível</option> : players.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}
-            </select>
-          </label>
+             <select value={selectedTargetId} disabled={busy || (players.length === 0 && !selectedCover)} onChange={(event) => onSelectTarget(event.target.value)}>
+               {selectedCover && <option value={selectedTargetId}>Cover · {selectedCover.coverHP ?? "—"} HP</option>}
+               {players.length === 0 ? <option value="">Nenhum Player disponível</option> : players.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}
+             </select>
+           </label>
+           {selectedCover && <div className="player-mesa-target-readout" aria-label="Alvo Cover">
+             <strong>ALVO: COVER</strong>
+             <span>DV para atacar: {selectedCover.coverDV ?? "não definido"}</span>
+             <span>HP: {selectedCover.coverHP ?? "não definido"}{selectedCoverProfile ? ` / ${selectedCoverProfile.hp}` : ""}</span>
+           </div>}
 
           <label className="player-mesa-gm-target">
             Ataque
@@ -295,7 +319,7 @@ export default function GmCombatControlPanel({
           )}
 
           <div className="player-mesa-gm-actions">
-            <button type="button" className="mesa-primary" disabled={busy || sessionFinished || !actionGate.ok || !target || !selectedWeapon} title={actionGate.message || undefined} onClick={() => void doAttack()}>
+            <button type="button" className="mesa-primary" disabled={busy || sessionFinished || !actionGate.ok || (!target && !coverObstacleId) || !selectedWeapon} title={actionGate.message || undefined} onClick={() => void doAttack()}>
               {busy ? "PROCESSANDO..." : attackMode === "aimed" ? "[ AIMED ATTACK ]" : "[ ATTACK ]"}
             </button>
             <div className="player-mesa-gm-move">
@@ -307,6 +331,7 @@ export default function GmCombatControlPanel({
         </>
       )}
 
+      {attackError && <p className="player-mesa-error" role="alert">{attackError}</p>}
       {feedback && <p className="player-mesa-feedback" role="status">{feedback}</p>}
       {!selected && <p className="mesa-hint">Nenhum inimigo disponível para controle.</p>}
     </section>

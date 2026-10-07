@@ -84,6 +84,11 @@ export function rollSkillCheck(
   
   // Determina quais modificadores se aplicam a esta perícia
   const physicalSkill = isPhysicalSkill(skillId);
+  const areaModifier =
+    injuryModifiers.areaModifiers.leg * (skillId === "athletics" || skillId === "dance" || skillId === "contortionist" || skillId === "stealth" ? 1 : 0) +
+    injuryModifiers.areaModifiers.hand * (skillId === "first_aid" || skillId === "paramedic" || skillId === "cybertech" || skillId === "basic_tech" || skillId === "weaponstech" ? 1 : 0) +
+    injuryModifiers.areaModifiers.arm * (skillId === "heavy_weapons" || skillId === "shoulder_arms" || skillId === "handgun" || skillId === "autofire" ? 1 : 0) +
+    injuryModifiers.areaModifiers.torso * (physicalSkill ? 1 : 0);
 
   const isMentalSkill = ["concentration", "education", "perception", "tracking", "accounting", "animal_handling", "bureaucracy", "business", "composition", "criminology", "cryptography", "deduction", "education", "gamble", "language", "library_search", "local_expert", "science", "tactics", "wilderness_survival"].includes(skillId);
   
@@ -94,7 +99,7 @@ export function rollSkillCheck(
   const cyberwarePhysicalModifier = cyberwarePhysical.reduce((total, modifier) => total + modifier.value, 0);
 
   // Calcula o modificador total
-  let totalModifier = statModifier + skillModifier + allActions + cyberwareModifier + cyberwarePhysicalModifier;
+  let totalModifier = statModifier + skillModifier + allActions + areaModifier + cyberwareModifier + cyberwarePhysicalModifier;
 
   if (physicalSkill) {
     totalModifier += allPhysicalModifier;

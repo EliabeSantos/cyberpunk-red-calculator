@@ -28,6 +28,7 @@ import { evaluateMesaAction } from "@/lib/mesa/actionGate";
 import { denialMessage } from "@/lib/mesa/messages";
 import { isHealingSupply } from "@/data/enemySupplies";
 import type { MesaCombatant, MesaState } from "@/lib/mesa/types";
+import RollAuditDetails from "@/components/mesa/RollAuditDetails";
 
 interface Props {
   sessionId: string;
@@ -467,6 +468,7 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
             {recentRolls.map((event, index) => (
               <li key={`${event.at}-${index}`}>
                 <span aria-hidden="true">🎲</span> {event.text}
+                <RollAuditDetails event={event} />
               </li>
             ))}
           </ul>
@@ -477,9 +479,10 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
         <summary>Registro do combate</summary>
         <ul>
           {[...combat.eventLog].reverse().map((event, index) => (
-            <li key={`${event.at}-${index}`}>
-              <time>{new Date(event.at).toLocaleTimeString()}</time> {event.text}
-            </li>
+             <li key={`${event.at}-${index}`}>
+               <time>{new Date(event.at).toLocaleTimeString()}</time> {event.text}
+               <RollAuditDetails event={event} />
+             </li>
           ))}
         </ul>
       </details>

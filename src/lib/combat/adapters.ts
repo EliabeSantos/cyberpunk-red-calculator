@@ -79,6 +79,7 @@ function toCombatWeapon(weapon: Weapon): CombatWeapon {
       magazine: weapon.magazine,
       ammo: weapon.ammo,
       catalogItemId: weapon.catalogItemId,
+      requiresTwoHands: weapon.requiresTwoHands,
     }),
   };
 }
@@ -263,13 +264,13 @@ function fromEncounterParticipant(
     // F1.7: a PERÍCIA DA ARMA com o nível puro recuperado do `skillValue`
     // — ver `encounterWeaponSkills` (fecha a pendência §6 do F1.1).
     ...(skills ? { skills } : {}),
-    weapons: [
-      {
+      weapons: [
+        {
         ...(participant.weaponId ? { id: participant.weaponId } : {}),
         name: participant.weaponName,
         damage: participant.damageExpression,
         skill: participant.weaponSkillId,
-        ...pickDefined({ attackType: encounterAttackType(participant.weaponAttackType), rateOfFire: participant.weaponRateOfFire }),
+        ...pickDefined({ attackType: encounterAttackType(participant.weaponAttackType), rateOfFire: participant.weaponRateOfFire, requiresTwoHands: participant.requiresTwoHands }),
         // Base pronta do encontro (F1.7): é o número que
         // `combat/enemyAttacks.ts` soma hoje (`p.attackBase`); a ficha não
         // tem equivalente (`Weapon` não possui `attackBase`).
@@ -288,8 +289,8 @@ function fromEncounterParticipant(
       // de `getParticipantArmorSP` — cabeça sempre 0.
       cyberwareSP: { head: 0, body: getEnemyBodySP(participant.implants) },
       // O encontro não rastreia lesões críticas do inimigo (o campo não existe
-      // em `EncounterParticipant`) — lista vazia, como no caso da ficha.
-      criticalInjuries: [],
+      // mais: o encontro preserva a mesma lista do Player.
+      criticalInjuries: [...(participant.criticalInjuries ?? [])],
       conditions: participant.conditions.map((condition) => ({ ...condition })),
       // Sem death save: inimigo/NPC não rola (divergência F1.0 nº 1).
       initiative: participant.initiative,

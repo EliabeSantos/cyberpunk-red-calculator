@@ -1,4 +1,4 @@
-import { getSkillBase, getCriticalInjuryModifiers, getWoundPenalty } from "@/lib/calculations";
+import { getSkillBase, getCriticalInjuryModifiers, getCriticalInjuryRestrictions, getWoundPenalty } from "@/lib/calculations";
 import { rollDice } from "@/lib/dice";
 import type { RandomSource } from "@/lib/combat/contract";
 import { getCatalogItem } from "@/data/items";
@@ -153,6 +153,21 @@ export function rollAttack(
 
   // Calcula modificadores de Critical Injuries
   const injuryModifiers = getCriticalInjuryModifiers(character);
+  const injuryRestrictions = getCriticalInjuryRestrictions(character);
+  const twoHandedSkills = ["heavy_weapons", "shoulder_arms", "martial_arts", "melee_weapon", "brawling"];
+  const selectedWeapon = context.weaponId ? character.weapons.find((weapon) => weapon.id === context.weaponId) : undefined;
+  if (
+    injuryRestrictions.has("cannot_use_two_handed_weapons") &&
+    (selectedWeapon?.requiresTwoHands === true || twoHandedSkills.includes(skillId))
+  ) {
+    return { error: "Esta lesão impede o uso de armas ou ações que exigem as duas mãos." };
+  }
+  if (
+    injuryRestrictions.has("cannot_use_lower_body") &&
+    ["melee", "martial_arts", "brawling", "unarmed"].includes(attackType)
+  ) {
+    return { error: "Esta lesão impede ataques corpo a corpo que dependem da parte inferior do corpo." };
+  }
   
   // Distância/corpo a corpo a partir do TIPO RESOLVIDO do ataque (ver isRangedAttackType).
   const isRanged = isRangedAttackType(attackType, skillId);
@@ -175,6 +190,14 @@ export function rollAttack(
   }
   if (injuryModifiers.twoHandedModifier !== 0) {
     attackModifiers.push({ source: "Duas mãos (lesão)", value: injuryModifiers.twoHandedModifier });
+  }
+  const areaAttackModifier = isRanged
+    ? injuryModifiers.areaModifiers.arm
+    : isMelee
+      ? injuryModifiers.areaModifiers.leg
+      : 0;
+  if (areaAttackModifier !== 0) {
+    attackModifiers.push({ source: "Área afetada (lesão)", value: areaAttackModifier });
   }
   if (injuryModifiers.statModifiers[skill.stat]) {
     attackModifiers.push({ source: "STAT (lesão)", value: injuryModifiers.statModifiers[skill.stat] });

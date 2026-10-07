@@ -70,6 +70,17 @@ export function attackTargets(state: MesaState): MesaCombatant[] {
   return state.combatants.filter((combatant) => combatant.kind === "enemy" && !combatant.isDead);
 }
 
+/** Elegibilidade visual do clique no mapa; o gateway sempre revalida o alvo. */
+export function tacticalTargetSelectable(
+  state: MesaState,
+  combatant: MesaCombatant,
+  controlledCombatantId: string | null = null,
+): boolean {
+  if (combatant.isDead) return false;
+  if (state.viewer.role === "gm") return combatant.kind === "character" && combatant.id !== controlledCombatantId;
+  return combatant.kind === "enemy" && combatant.participantId !== state.viewer.participantId;
+}
+
 /**
  * Faixa de status que a tela desenha no topo. A ordem das verificações é
  * proposital: sessão encerrada > combate parado > iniciativa pendente >
