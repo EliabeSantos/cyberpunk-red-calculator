@@ -17,7 +17,10 @@ import { evaluateMesaAction } from "@/lib/mesa/actionGate";
 import { findCombatant } from "@/lib/mesa/playerScreen";
 import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
 import { getTacticalCoverProfile } from "@/lib/mesa/tacticalCoverCatalog";
+import { rangeBandLabel } from "@/lib/combat/weaponRange";
+import { DEFAULT_TACTICAL_GRID_SIZE_METERS, isMeleeAttackType, resolveMeleeRange } from "@/lib/mesa/tacticalMap";
 import type { Character } from "@/types/character";
+import type { AvailableAttack } from "@/types/attack";
 import type { MesaCombatant } from "@/lib/mesa/types";
 import type { PlayerPanelBase } from "./types";
 
@@ -29,12 +32,14 @@ type AttackFeedback = Awaited<ReturnType<typeof attackMesa>>;
 
 interface Props extends PlayerPanelBase {
   weapons: Character["weapons"];
+  attacks: AvailableAttack[];
   /** Inimigos vivos — é deles que sai o alvo do ataque. */
   targets: MesaCombatant[];
   selectedTargetId: string;
-  onSelectTarget: (combatantId: string) => void;
   selectedWeaponId: string;
   onSelectWeapon: (weaponId: string) => void;
+  selectedAttackId: string;
+  onSelectAttack: (attackId: string) => void;
   sessionFinished: boolean;
 }
 
@@ -44,11 +49,13 @@ export default function PlayerActionsPanel({
   busy,
   run,
   weapons,
+  attacks,
   targets,
   selectedTargetId,
-  onSelectTarget,
   selectedWeaponId,
   onSelectWeapon,
+  selectedAttackId,
+  onSelectAttack,
   sessionFinished,
 }: Props) {
   const [attackMode, setAttackMode] = useState<AttackMode>("aimed");
@@ -66,7 +73,10 @@ export default function PlayerActionsPanel({
   const active = findCombatant(state, combat?.activeCombatantId ?? null);
   const myTurn = Boolean(active && me && active.id === me.id);
 
-  const selectedWeapon = weapons.find((weapon) => weapon.id === selectedWeaponId) ?? weapons[0] ?? null;
+  const selectedAttack = attacks.find((attack) => attack.id === selectedAttackId) ?? attacks[0] ?? null;
+  const selectedWeapon = selectedAttack?.context.weaponId
+    ? weapons.find((weapon) => weapon.id === selectedAttack.context.weaponId) ?? null
+    : null;
   const selectedCoverId = tacticalCoverObstacleId(selectedTargetId);
   const selectedCover = selectedCoverId
     ? [...(state.session.tacticalMap?.geometry?.walls ?? []), ...(state.session.tacticalMap?.geometry?.doors ?? [])].find((entry) => entry.id === selectedCoverId && entry.destroyed !== true && !(entry.type === "door" && entry.state === "open")) ?? null
@@ -76,6 +86,12 @@ export default function PlayerActionsPanel({
   const hasMagazine = typeof selectedWeapon?.magazine === "number" && selectedWeapon.magazine > 0;
   const outOfAmmo = hasMagazine && ammo !== undefined && ammo <= 0;
   const ammoUnavailable = hasMagazine && ammo === undefined;
+  const resolvedAttackType = selectedWeapon?.attackType ?? selectedAttack?.context.type;
+   const meleeAttack = Boolean(resolvedAttackType && isMeleeAttackType(resolvedAttackType, selectedWeapon?.skill ?? selectedAttack?.context.skillId));
+  const selectedTarget = targets.find((target) => target.id === selectedTargetId) ?? null;
+   const meleeRange = selectedTarget?.position && me?.position
+     ? resolveMeleeRange(me.position, selectedTarget.position, state.session.tacticalMap ?? { imageUrl: "", enabled: false, width: 1000, height: 600, pixelsPerMeter: 50 })
+     : null;
 
   const moveMeters = (() => {
     const value = Number(moveDraft);
@@ -86,21 +102,21 @@ export default function PlayerActionsPanel({
   const moveGate = me ? evaluateMesaAction({ state, combatant: me, actionType: "move", meters: moveMeters }) : null;
 
   async function submitAttack() {
-    if (!me || !selectedTargetId || !selectedWeapon || busy) return;
+    if (!me || !selectedTargetId || !selectedAttack || busy) return;
     setFeedback(null);
     setAttackError(null);
     await run(
       async () => {
         const coverObstacleId = tacticalCoverObstacleId(selectedTargetId);
-        const result = await attackMesa({
+           const result = await attackMesa({
           sessionId: state.session.id,
           resolutionId: crypto.randomUUID(),
           actorId: me.id,
           targetId: coverObstacleId ? "" : selectedTargetId,
           ...(coverObstacleId ? { targetType: "cover" as const, obstacleId: coverObstacleId } : {}),
-          weaponId: selectedWeapon.id,
-          skillId: selectedWeapon.skill,
-          attackType: selectedWeapon.attackType,
+           ...(selectedAttack.context.weaponId ? { weaponId: selectedAttack.context.weaponId } : {}),
+           skillId: selectedAttack.context.skillId ?? selectedWeapon?.skill,
+           attackType: selectedWeapon?.attackType ?? selectedAttack.context.type,
           attackMode,
           ...(attackMode === "aimed" ? { aimedTarget } : {}),
         });
@@ -151,58 +167,50 @@ export default function PlayerActionsPanel({
         <p className="mesa-hint">Sem Actions restantes — finalize o turno.</p>
       )}
 
-      {/* --- Seleção de alvo + ataque ------------------------------------- */}
-      <div className="player-mesa-attack-form">
-        <label>
-          Alvo
-          <select
-            value={selectedTargetId}
-             disabled={busy || (targets.length === 0 && !selectedCover)}
-            onChange={(event) => onSelectTarget(event.target.value)}
-          >
-            {targets.length === 0 && !selectedCover ? (
-              <option value="">Nenhum inimigo disponível</option>
-            ) : (
-              <>{selectedCover && <option value={selectedTargetId}>Cover · {selectedCover.coverHP ?? "—"} HP</option>}
-              {targets.map((target) => (
-                <option key={target.id} value={target.id}>
-                  {target.name} · {target.hpCurrent}/{target.hpMax} HP
-                </option>
-              ))}</>
-            )}
-          </select>
-        </label>
-
-        {selectedCover && <div className="player-mesa-target-readout" aria-label="Alvo Cover">
+       {/* --- Seleção de alvo + ataque ------------------------------------- */}
+       <div className="player-mesa-attack-form">
+         {selectedCover && <div className="player-mesa-target-readout" aria-label="Alvo Cover">
           <strong>ALVO: COVER</strong>
           <span>DV para atacar: {selectedCover.coverDV ?? "não definido"}</span>
           <span>HP: {selectedCover.coverHP ?? "não definido"}{selectedCoverProfile ? ` / ${selectedCoverProfile.hp}` : ""}</span>
         </div>}
 
-        <label>
-          Arma
-          <select
-            value={selectedWeapon?.id ?? ""}
-            disabled={busy || weapons.length === 0}
-            onChange={(event) => onSelectWeapon(event.target.value)}
-          >
-            {weapons.length === 0 ? (
-              <option value="">Nenhuma arma vinculada</option>
-            ) : (
-              weapons.map((weapon) => <option key={weapon.id} value={weapon.id}>{weapon.name}</option>)
-            )}
-          </select>
-          {selectedWeapon && (
-            <small className="player-mesa-weapon-ammo">
-              {hasMagazine
-                ? ammo === undefined
-                  ? "Munição indisponível"
-                  : `Munição ${ammo}/${selectedWeapon.magazine}`
-                : "Sem magazine"}
-              {typeof selectedWeapon.rateOfFire === "number" ? ` · ROF ${selectedWeapon.rateOfFire}` : ""}
-            </small>
+         <label>
+           Ataque
+           <select
+             value={selectedAttack?.id ?? ""}
+             disabled={busy || attacks.length === 0}
+             onChange={(event) => {
+               const attack = attacks.find((candidate) => candidate.id === event.target.value);
+               onSelectAttack(event.target.value);
+               if (attack?.context.weaponId) onSelectWeapon(attack.context.weaponId);
+             }}
+           >
+             {attacks.length === 0 ? (
+               <option value="">Nenhum ataque disponível</option>
+             ) : (
+               attacks.map((attack) => <option key={attack.id} value={attack.id}>{attack.label}</option>)
+             )}
+           </select>
+           {selectedAttack && (
+             <small className="player-mesa-weapon-ammo">
+               {selectedWeapon && hasMagazine
+                 ? ammo === undefined
+                   ? "Munição indisponível"
+                   : `Munição ${ammo}/${selectedWeapon.magazine}`
+                 : selectedAttack.detail}
+               {selectedWeapon && typeof selectedWeapon.rateOfFire === "number" ? ` · ROF ${selectedWeapon.rateOfFire}` : ""}
+             </small>
+           )}
+         </label>
+
+          {meleeAttack && selectedTarget && (
+            <div className="player-mesa-target-readout" aria-label="Alcance corpo a corpo">
+              <strong>{meleeRange?.inRange ? "ALVO AO ALCANCE" : "FORA DO ALCANCE CORPO A CORPO"}</strong>
+              <span>Distância: {meleeRange === null ? "—" : `${meleeRange.distanceMeters}m`}</span>
+              <span>Adjacência de grid: ortogonal ou diagonal · célula {meleeRange?.cellSizeMeters ?? DEFAULT_TACTICAL_GRID_SIZE_METERS}m</span>
+            </div>
           )}
-        </label>
 
         <label>
           Modo
@@ -237,8 +245,10 @@ export default function PlayerActionsPanel({
             Boolean(me?.isDead) ||
             (me?.actionsRemaining ?? 0) <= 0 ||
             !selectedTargetId ||
-            !selectedWeapon ||
-            outOfAmmo ||
+             !selectedAttack ||
+             (selectedAttack.context.weaponId !== undefined && !selectedWeapon) ||
+             (meleeAttack && meleeRange !== null && !meleeRange.inRange) ||
+             outOfAmmo ||
             ammoUnavailable
           }
           title={
@@ -313,7 +323,8 @@ function AttackFeedbackView({ feedback }: { feedback: AttackFeedback }) {
        <strong>{feedback.coverDamage ? (attack.hit ? "ACERTOU COVER" : "ERROU COVER") : attack.hit ? "HIT" : "MISS"}</strong>
        <span>
          {feedback.coverDamage ? `ATAQUE ${attack.total} vs DV ${attack.defenseValue}` : `Ataque: ${attack.total} · Defesa do alvo: ${attack.defenseValue}`}
-      </span>
+       </span>
+       {feedback.weaponRange?.status === "valid" && <span>Alcance: {rangeBandLabel(feedback.weaponRange.band)} · DV {feedback.weaponRange.dv} · {feedback.weaponRange.distanceMeters}m</span>}
       {feedback.tacticalCover && <span>
         Cover: {feedback.tacticalCover.status.toUpperCase()} ({feedback.tacticalCover.blockedSamples}/{feedback.tacticalCover.totalSamples})
         {feedback.tacticalCover.status !== "clear" && " · sem modificador mecânico definido"}

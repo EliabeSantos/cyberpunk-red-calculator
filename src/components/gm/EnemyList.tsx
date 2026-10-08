@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, Fragment } from "react";
+import { useState, useEffect } from "react";
 import type { Enemy } from "@/types/enemy";
 import { loadEnemies, removeEnemy, importCatalogEnemies } from "@/lib/gmStorage";
-import { threatLevelLabels, threatLevelColors } from "@/data/enemies";
-import { gmEnemyCatalog, availableFactions, getEnemyById } from "@/data/gm-enemies";
+import { threatLevelLabels } from "@/data/enemies";
+import { gmEnemyCatalog } from "@/data/gm-enemies";
 
 interface EnemyListProps {
   onEdit?: (enemy: Enemy) => void;
@@ -90,73 +90,98 @@ export default function EnemyList({ onEdit }: EnemyListProps) {
         </button>
       </div>
       <div className="enemy-list" role="list" aria-label="Lista de inimigos">
-        {enemies.map((enemy) => (
+        {enemies.map((enemy, index) => {
+          const hpPercent = enemy.combat.hp.max > 0
+            ? Math.max(0, Math.min(100, (enemy.combat.hp.current / enemy.combat.hp.max) * 100))
+            : 0;
+          const hpStatus = enemy.combat.hp.current <= 0
+            ? "Derrotado"
+            : hpPercent <= 25
+              ? "Crítico"
+              : "Operacional";
+          const hpTone = enemy.combat.hp.current <= 0 ? "dead" : hpPercent <= 25 ? "critical" : "normal";
+
+          return (
           <article
             key={enemy.id}
             className="enemy-card"
             data-threat-level={enemy.identity.threatLevel}
           >
-            <div className="enemy-card-header">
+            <div className="enemy-card-console-line" aria-hidden="true">
+              <span>NPC // {String(index + 1).padStart(2, "0")}</span>
+              <span>{enemy.identity.faction || "ROSTER LOCAL"}</span>
+              <i />
+            </div>
+
+            <header className="enemy-card-header">
               <div className="enemy-card-main">
+                <span className="enemy-card-kicker">Perfil de ameaça</span>
                 <h4 className="enemy-card-name">{enemy.identity.name || "Sem nome"}</h4>
                 <div className="enemy-card-meta">
                   <span className="enemy-card-archetype">{enemy.identity.archetype || "Sem arquétipo"}</span>
-                  <span className="enemy-card-threat" style={{ backgroundColor: threatLevelColors[enemy.identity.threatLevel], borderColor: threatLevelColors[enemy.identity.threatLevel] }}>
-                    {threatLevelLabels[enemy.identity.threatLevel]}
-                  </span>
+                  {enemy.identity.role && <span className="enemy-card-role">{enemy.identity.role}</span>}
                 </div>
               </div>
-              <div className="enemy-card-stats">
-                <div className="enemy-stat">
-                  <span className="enemy-stat-label">HP</span>
-                  <span className="enemy-stat-value">{enemy.combat.hp.current}{" "}<small>/ {enemy.combat.hp.max}</small></span>
+              <div className="enemy-card-threat-box">
+                <span className="enemy-card-threat-label">Ameaça</span>
+                <span className="enemy-card-threat">{threatLevelLabels[enemy.identity.threatLevel]}</span>
+              </div>
+            </header>
+
+            <section className="enemy-card-vitals" aria-label={`Status de ${enemy.identity.name || "inimigo"}`}>
+              <div className="enemy-card-hp-block">
+                <div className="enemy-card-hp-values">
+                  <span className="enemy-card-vital-label">HP</span>
+                  <strong>{enemy.combat.hp.current}</strong>
+                  <span>/ {enemy.combat.hp.max}</span>
+                  <em className={`enemy-card-hp-status hp-${hpTone}`}>{hpStatus}</em>
                 </div>
-                <div className="enemy-stat">
-                  <span className="enemy-stat-label">Armadura</span>
-                  <span className="enemy-stat-value">C {enemy.combat.armor.body}{" "}<small>H {enemy.combat.armor.head}</small></span>
+                <div className="enemy-card-hp-bar" role="progressbar" aria-label="HP" aria-valuenow={enemy.combat.hp.current} aria-valuemin={0} aria-valuemax={enemy.combat.hp.max}>
+                  <i className={`hp-${hpTone}`} style={{ width: `${hpPercent}%` }} />
                 </div>
               </div>
-            </div>
+              <div className="enemy-card-armor-block">
+                <span className="enemy-card-vital-label">Armadura</span>
+                <strong>C {enemy.combat.armor.body}</strong>
+                <span>H {enemy.combat.armor.head}</span>
+              </div>
+            </section>
 
             {enemy.identity.description && (
               <p className="enemy-card-description">{enemy.identity.description}</p>
             )}
 
-            <div className="enemy-card-preview">
-              <div className="enemy-preview-item">
-                <span className="enemy-preview-label">Atributos</span>
-                <span className="enemy-preview-value">
-                  {CARD_STAT_ORDER.map((stat, idx) => (
-                    <Fragment key={stat}>
-                      <span className="enemy-attr-token">
-                        <span className="enemy-attr-label">{stat}</span>{" "}
-                        <span className="enemy-attr-value">{enemy.stats[stat]}</span>
-                      </span>
-                      {idx < CARD_STAT_ORDER.length - 1 && (
-                        <span className="enemy-attr-sep">{" · "}</span>
-                      )}
-                    </Fragment>
-                  ))}
-                </span>
+            <section className="enemy-card-systems" aria-label="Sistemas do inimigo">
+              <div className="enemy-card-section-heading">
+                <span className="enemy-card-kicker">Leitura tática</span>
+                <strong>Atributos</strong>
               </div>
-              <div className="enemy-preview-item">
-                <span className="enemy-preview-label">Perícias</span>
-                <span className="enemy-preview-value">
-                  {Object.keys(enemy.skills).length} perícias
-                </span>
+              <div className="enemy-card-stat-grid">
+                {CARD_STAT_ORDER.map((stat) => (
+                  <div key={stat} className="enemy-card-stat-cell">
+                    <span>{stat}</span>
+                    <strong>{enemy.stats[stat]}</strong>
+                  </div>
+                ))}
               </div>
-              <div className="enemy-preview-item">
-                <span className="enemy-preview-label">Armas</span>
-                <span className="enemy-preview-value">
-                  {enemy.weapons.length} arma(s)
-                </span>
+            </section>
+
+            <div className="enemy-card-loadout">
+              <div className="enemy-card-loadout-item">
+                <span>Perícias</span>
+                <strong>{Object.keys(enemy.skills).length}</strong>
+              </div>
+              <div className="enemy-card-loadout-item">
+                <span>Armas</span>
+                <strong>{enemy.weapons.length}</strong>
               </div>
               {enemy.conditions.length > 0 && (
-                <div className="enemy-preview-item enemy-preview-conditions">
-                  <span className="enemy-preview-label">Condições</span>
-                  <span className="enemy-preview-value">
-                    {enemy.conditions.map((c) => c.name).join(", ")}
-                  </span>
+                <div className="enemy-card-loadout-item enemy-card-condition-item">
+                  <span>Condições</span>
+                  <strong>{enemy.conditions.length}</strong>
+                  <small title={enemy.conditions.map((condition) => condition.name).join(", ")}>
+                    {enemy.conditions.map((condition) => condition.name).join(", ")}
+                  </small>
                 </div>
               )}
             </div>
@@ -183,7 +208,8 @@ export default function EnemyList({ onEdit }: EnemyListProps) {
               </button>
             </div>
           </article>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

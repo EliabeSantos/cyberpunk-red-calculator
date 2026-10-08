@@ -9,9 +9,11 @@
  * (`cyberpunk-red-toolkit:characters:v1`); aqui só mandamos uma CÓPIA quando
  * o jogador vincula o personagem a uma mesa.
  */
-import type { MesaBattle, MesaParticipant, MesaSession, MesaState, PlayerDamageOutcome, PlayerHealingOutcome, PlayerInitiativeOutcome, TacticalMap, TacticalPosition } from "@/lib/mesa/types";
+import type { MesaBattle, MesaParticipant, MesaSession, MesaState, NetArchitecture, PlayerDamageOutcome, PlayerHealingOutcome, PlayerInitiativeOutcome, TacticalMap, TacticalPosition } from "@/lib/mesa/types";
 import type { AttackResult, DamageResult } from "@/lib/combat/contract";
+import type { WeaponRangeResolution } from "@/lib/combat/weaponRange";
 import type { TacticalCoverResult } from "@/lib/mesa/tacticalGeometry";
+import type { TacticalMeleeRangeResolution } from "@/lib/mesa/tacticalMap";
 import type { DiceResult } from "@/lib/dice";
 import type { MesaRollSummary } from "@/lib/mesa/rollPolicy";
 import {
@@ -40,9 +42,9 @@ export class MesaApiError extends Error {
 
 /** Mensagem de UX para o erro específico do Attack Gateway; demais códigos preservam o texto atual. */
 export function formatAttackGatewayError(message: string, code?: string): string {
-  return code === "line_of_sight_blocked"
-    ? "LINHA DE VISÃO BLOQUEADA — não é possível atacar este alvo."
-    : message;
+  if (code === "line_of_sight_blocked") return "LINHA DE VISÃO BLOQUEADA — não é possível atacar este alvo.";
+  if (code === "melee_out_of_range") return "FORA DO ALCANCE CORPO A CORPO — aproxime-se de uma casa adjacente.";
+  return message;
 }
 
 async function api<T>(
@@ -222,6 +224,31 @@ export async function moveMesa(input: {
   });
 }
 
+export async function jackInMesa(input: { sessionId: string; combatantId: string; accessPointId: string; connectionType: "wireless" | "cable" }): Promise<void> {
+  await api(`/api/mesa/${input.sessionId}/combat/net/connection`, { method: "POST", body: { action: "jack_in", combatantId: input.combatantId, accessPointId: input.accessPointId, connectionType: input.connectionType } });
+}
+
+export async function safeJackOutMesa(sessionId: string, combatantId: string): Promise<void> {
+  await api(`/api/mesa/${sessionId}/combat/net/connection`, { method: "POST", body: { action: "safe_jack_out", combatantId } });
+}
+
+export async function equipMesaQuickhacks(sessionId: string, combatantId: string, quickhackIds: string[]): Promise<void> {
+  await api(`/api/mesa/${sessionId}/combat/net/loadout`, { method: "PATCH", body: { combatantId, quickhackIds } });
+}
+
+export async function executeMesaQuickhack(input: { sessionId: string; quickhackId: string; targetCombatantId: string; resolutionId?: string }): Promise<unknown> {
+  return api(`/api/mesa/${input.sessionId}/combat/net/quickhack`, { method: "POST", body: { ...input, resolutionId: input.resolutionId ?? crypto.randomUUID() } });
+}
+
+export async function updateMesaNetArchitectures(sessionId: string, architectures: NetArchitecture[]): Promise<void> {
+  await api(`/api/mesa/${sessionId}/net/architecture`, { method: "PUT", body: { architectures } });
+}
+
+export async function executeMesaNetAction(input: { sessionId: string; action: "pathfinder" | "backdoor" | "control" | "zap" | "slide"; targetId?: string; resolutionId?: string }): Promise<unknown> {
+  const { sessionId, ...intent } = input;
+  return api(`/api/mesa/${sessionId}/combat/net/action`, { method: "POST", body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() } });
+}
+
 export async function saveTacticalMap(sessionId: string, map: TacticalMap): Promise<void> {
   await api(`/api/mesa/${sessionId}/tactical-map`, { method: "PATCH", body: { map } });
 }
@@ -234,6 +261,7 @@ export async function positionCombatant(sessionId: string, combatantId: string, 
 export interface MesaControlMetadata {
   combatantId: string;
   weapons: import("@/lib/combat/contract").CombatWeapon[];
+  attacks: import("@/types/attack").AvailableAttack[];
 }
 
 export async function fetchMesaControlMetadata(sessionId: string): Promise<MesaControlMetadata[]> {
@@ -258,6 +286,9 @@ export async function attackMesa(input: {
 }): Promise<{
   attackResult: AttackResult;
   tacticalCover?: TacticalCoverResult;
+  weaponRange?: WeaponRangeResolution;
+  meleeRange?: TacticalMeleeRangeResolution;
+  meleeDistanceMeters?: number;
   coverDamage?: { obstacleId: string; hpBefore: number; hpAfter: number; damage: number; destroyed: boolean };
   weaponDamage?: DiceResult;
   damageResult?: DamageResult;

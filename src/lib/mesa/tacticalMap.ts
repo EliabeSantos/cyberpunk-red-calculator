@@ -1,10 +1,14 @@
-import type { TacticalCoverMaterial, TacticalCoverThickness, TacticalDoor, TacticalGeometry, TacticalMap, TacticalPosition, TacticalWall } from "@/lib/mesa/types";
+import type { TacticalCoverMaterial, TacticalCoverThickness, TacticalDoor, TacticalGeometry, TacticalHackableObject, TacticalMap, TacticalPosition, TacticalWall } from "@/lib/mesa/types";
 import type { CombatWeapon } from "@/lib/combat/contract";
 import { getCatalogItem } from "@/data/items";
-import { DEFAULT_TACTICAL_OBSTACLE_THICKNESS } from "@/lib/mesa/tacticalGeometry";
+import { getWeaponRangeProfile, rangeBandLabel, resolveWeaponRangeBand, type WeaponRangeBand } from "@/lib/combat/weaponRange";
+import { DEFAULT_TACTICAL_OBSTACLE_THICKNESS, DEFAULT_TACTICAL_TOKEN_RADIUS } from "@/lib/mesa/tacticalGeometry";
 import { getTacticalCoverProfile } from "@/lib/mesa/tacticalCoverCatalog";
 
-const defaultGrid = { enabled: false, size: 1, snap: false };
+/** O grid do VTT representa os espaços de 2m do mapa de combate. */
+export const DEFAULT_TACTICAL_GRID_SIZE_METERS = 2;
+const defaultGrid = { enabled: false, size: DEFAULT_TACTICAL_GRID_SIZE_METERS, snap: false };
+const MELEE_RANGE_EPSILON = 1e-9;
 
 export const EMPTY_TACTICAL_GEOMETRY: TacticalGeometry = { walls: [], doors: [] };
 const TACTICAL_COVER_TARGET_PREFIX = "cover:";
@@ -86,6 +90,18 @@ export function removeTacticalGeometrySegment(geometry: TacticalGeometry, id: st
   return { walls: geometry.walls.filter((wall) => wall.id !== id), doors: geometry.doors.filter((door) => door.id !== id) };
 }
 
+export function addTacticalHackableObject(map: TacticalMap, object: TacticalHackableObject): TacticalMap {
+  return { ...map, hackableObjects: [...(map.hackableObjects ?? []), object] };
+}
+
+export function updateTacticalHackableObject(map: TacticalMap, id: string, patch: Partial<TacticalHackableObject>): TacticalMap {
+  return { ...map, hackableObjects: (map.hackableObjects ?? []).map((object) => object.id === id ? { ...object, ...patch } : object) };
+}
+
+export function removeTacticalHackableObject(map: TacticalMap, id: string): TacticalMap {
+  return { ...map, hackableObjects: (map.hackableObjects ?? []).filter((object) => object.id !== id) };
+}
+
 export function toggleTacticalDoor(geometry: TacticalGeometry, id: string): TacticalGeometry {
   return { ...geometry, doors: geometry.doors.map((door) => door.id === id ? { ...door, state: door.state === "open" ? "closed" : "open" } : door) };
 }
@@ -105,25 +121,112 @@ export function tacticalDistance(from: TacticalPosition, to: TacticalPosition, m
   return Math.ceil(Math.sqrt(dx * dx + dy * dy) / map.pixelsPerMeter);
 }
 
+export type TacticalMeleeRangeReason = "adjacent" | "out_of_range";
+
+export interface TacticalMeleeRangeResolution {
+  inRange: boolean;
+  reason: TacticalMeleeRangeReason;
+  /** Distância visual existente do Tactical Map, em metros lógicos. */
+  distanceMeters: number;
+  /** Tamanho da célula usado pelo mapa para resolver adjacência. */
+  cellSizeMeters: number;
+}
+
+/**
+ * Resolve o alcance corpo a corpo usando a única escala espacial do Tactical
+ * Map. A regra do livro não usa a Weapon Range Table: no VTT, "adjacente" é
+ * um espaço vizinho ortogonal ou diagonal. A comparação por eixo (Chebyshev)
+ * preserva essa convenção sem transformar uma diagonal em um DV ou em um
+ * limite euclidiano arbitrário de 2m.
+ *
+ * `grid.enabled` controla somente a apresentação. `grid.size` continua sendo
+ * a unidade lógica do mapa mesmo quando o snap/grade visual está desligado,
+ * permitindo resolver também posições contínuas persistidas. A comparação
+ * desconta o diâmetro lógico dos tokens: alcance é medido entre as bordas,
+ * não apenas entre os centros.
+ */
+export function resolveMeleeRange(
+  from: TacticalPosition,
+  to: TacticalPosition,
+  map: TacticalMap,
+): TacticalMeleeRangeResolution {
+  const configuredCellSize = map.grid?.size;
+  const cellSizeMeters = typeof configuredCellSize === "number"
+    && Number.isFinite(configuredCellSize)
+    && configuredCellSize > 0
+    ? configuredCellSize
+    : DEFAULT_TACTICAL_GRID_SIZE_METERS;
+  const dxMeters = Math.abs(to.x - from.x) * map.width / map.pixelsPerMeter;
+  const dyMeters = Math.abs(to.y - from.y) * map.height / map.pixelsPerMeter;
+  const tokenDiameterX = DEFAULT_TACTICAL_TOKEN_RADIUS * map.width * 2 / map.pixelsPerMeter;
+  const tokenDiameterY = DEFAULT_TACTICAL_TOKEN_RADIUS * map.height * 2 / map.pixelsPerMeter;
+  const edgeDistanceX = Math.max(0, dxMeters - tokenDiameterX);
+  const edgeDistanceY = Math.max(0, dyMeters - tokenDiameterY);
+  const separated = dxMeters > MELEE_RANGE_EPSILON || dyMeters > MELEE_RANGE_EPSILON;
+  const inRange = separated
+    && Math.max(edgeDistanceX, edgeDistanceY) <= cellSizeMeters + MELEE_RANGE_EPSILON;
+
+  return {
+    inRange,
+    reason: inRange ? "adjacent" : "out_of_range",
+    distanceMeters: tacticalDistance(from, to, map),
+    cellSizeMeters,
+  };
+}
+
+/** Os quatro ataques sem Range Table que usam a adjacência do grid. */
+export function isMeleeAttackType(attackType?: string, skillId?: string): boolean {
+  return new Set(["melee", "brawling", "martial_arts", "unarmed", "weaponless"]).has(attackType ?? "")
+    || skillId === "brawling"
+    || skillId === "melee_weapon"
+    || skillId?.startsWith("martial_arts_") === true
+    || skillId === "martial_arts";
+}
+
 export interface TacticalWeaponRangeFeedback {
   distance: number;
   rangeMeters: number | null;
   withinRange: boolean | null;
+  band?: WeaponRangeBand;
+  bandLabel?: string;
+  dv?: number;
+  profileId?: string;
 }
 
 /**
- * Retorna feedback visual sem criar uma tabela paralela de alcance. O projeto
- * só possui alcance estruturado quando o item do catálogo o declara (ex.:
- * `range: "4m"`). Armas sem esse dado ficam deliberadamente indeterminadas.
+ * Retorna feedback visual usando o mesmo resolver do gateway. O campo `range`
+ * legado continua sendo lido somente para ataques especiais como Monowire,
+ * que têm alcance físico próprio mas não usam a tabela de armas de fogo.
  */
 export function tacticalWeaponRangeFeedback(
   from: TacticalPosition,
   to: TacticalPosition,
   map: TacticalMap,
-  weapon: CombatWeapon,
+  weapon: CombatWeapon | null | undefined,
 ): TacticalWeaponRangeFeedback {
   const distance = tacticalDistance(from, to, map);
-  const rawRange = weapon.catalogItemId ? getCatalogItem(weapon.catalogItemId)?.range : undefined;
+  const profile = getWeaponRangeProfile(weapon);
+  if (profile) {
+    const resolution = resolveWeaponRangeBand(distance, profile);
+    if (resolution.status === "valid") {
+      return {
+        distance,
+        rangeMeters: profile.bands[profile.bands.length - 1].maxMeters,
+        withinRange: true,
+        band: resolution.band,
+        bandLabel: rangeBandLabel(resolution.band),
+        dv: resolution.dv,
+        profileId: resolution.profileId,
+      };
+    }
+    return {
+      distance,
+      rangeMeters: resolution.status === "out_of_range" ? resolution.maxMeters : null,
+      withinRange: resolution.status === "out_of_range" ? false : null,
+      ...(resolution.status === "out_of_range" ? { profileId: resolution.profileId } : {}),
+    };
+  }
+  const rawRange = weapon?.catalogItemId ? getCatalogItem(weapon.catalogItemId)?.range : undefined;
   const match = typeof rawRange === "string" ? rawRange.match(/(\d+(?:\.\d+)?)\s*m/i) : null;
   const rangeMeters = match ? Number(match[1]) : null;
   return {

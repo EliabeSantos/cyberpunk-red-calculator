@@ -317,7 +317,8 @@ export default function CreateEnemyPageClient() {
   return (
     <div className="gm-page gm-create-page">
       <header className="gm-page-header">
-        <div>
+        <div className="gm-page-header-main">
+          <span className="gm-page-eyebrow">EDITOR // AMEAÇAS</span>
           <h1 className="gm-page-title">{isEditing ? "Editar Inimigo" : "Criar Inimigo"}</h1>
           <p className="gm-page-subtitle">{isEditing ? "Modifique os dados do inimigo" : "Preencha as informações do novo inimigo"}</p>
         </div>

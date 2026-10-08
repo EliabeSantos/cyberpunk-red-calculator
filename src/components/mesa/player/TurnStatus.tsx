@@ -18,6 +18,8 @@ import type { MesaCombatant, MesaState } from "@/lib/mesa/types";
 interface Props {
   state: MesaState;
   me: MesaCombatant | null;
+  isGM?: boolean;
+  isControllingEnemy?: boolean;
 }
 
 const HP_LABEL: Record<HpCondition, string> = {
@@ -27,15 +29,36 @@ const HP_LABEL: Record<HpCondition, string> = {
   ok: "ESTABILIZADO",
 };
 
-export default function TurnStatus({ state, me }: Props) {
-  const status = deriveTurnStatus(state, me);
+export default function TurnStatus({
+  state,
+  me,
+  isGM = false,
+  isControllingEnemy = false,
+}: Props) {
+  const baseStatus = deriveTurnStatus(state, me);
+  const status = isGM && state.combat?.status === "active" && state.combat.initiativeStarted && !me
+    ? {
+        ...baseStatus,
+        label: "NENHUM INIMIGO CONTROLADO",
+        detail: "Selecione um inimigo na ordem de iniciativa para controlar suas ações.",
+        myTurn: false,
+      }
+    : isControllingEnemy && baseStatus.myTurn && me
+      ? {
+          ...baseStatus,
+          label: "TURNO DO INIMIGO",
+          detail: `Controlando ${me.name}. ${baseStatus.detail}`,
+        }
+      : baseStatus;
   const combat = state.combat;
   const condition = hpCondition(me);
 
   return (
     <section className={`player-mesa-turnstatus tone-${status.tone}`} aria-live="polite">
       <div className="player-mesa-turnstatus-main">
-        <span className="mesa-eyebrow">{status.myTurn ? "SEU TURNO" : "STATUS"}</span>
+        <span className="mesa-eyebrow">
+          {isControllingEnemy && status.myTurn ? "CONTROLE GM" : status.myTurn ? "SEU TURNO" : "STATUS"}
+        </span>
         <strong>{status.label}</strong>
         <p>{status.detail}</p>
       </div>

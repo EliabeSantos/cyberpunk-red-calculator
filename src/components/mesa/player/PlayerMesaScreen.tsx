@@ -30,6 +30,8 @@ import { endCombat, fetchMesaControlMetadata, leaveMesa, MesaApiError } from "@/
 import { attackTargets, myCombatant } from "@/lib/mesa/playerScreen";
 import type { MesaState } from "@/lib/mesa/types";
 import type { CombatWeapon } from "@/lib/combat/contract";
+import { getAvailableAttacks } from "@/lib/attacks";
+import type { AvailableAttack } from "@/types/attack";
 import { useAutoLinkCharacter } from "@/lib/mesa/useAutoLinkCharacter";
 import { loadCharacters } from "@/lib/storage";
 import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
@@ -43,6 +45,8 @@ import PlayerActionsPanel from "./PlayerActionsPanel";
 import PlayerEquipmentPanel from "./PlayerEquipmentPanel";
 import PlayerInventoryPanel from "./PlayerInventoryPanel";
 import PlayerSkillCheckPanel from "./PlayerSkillCheckPanel";
+import PlayerNetrunnerPanel from "./PlayerNetrunnerPanel";
+import GmNetArchitecturePanel from "./GmNetArchitecturePanel";
 import PlayerStatusPanel from "./PlayerStatusPanel";
 import TurnStatus from "./TurnStatus";
 import TacticalView from "./TacticalView";
@@ -63,8 +67,11 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
   const [targetDraft, setTargetDraft] = useState("");
   const [gmTargetDraft, setGmTargetDraft] = useState("");
   const [selectedWeaponId, setSelectedWeaponId] = useState("");
+  const [selectedAttackId, setSelectedAttackId] = useState("");
   const [gmControlledCombatantId, setGmControlledCombatantId] = useState<string | null>(null);
-  const [controlWeapons, setControlWeapons] = useState<Record<string, CombatWeapon[]>>({});
+  const [selectedHackableObjectId, setSelectedHackableObjectId] = useState<string | null>(null);
+  const [gmControlMode, setGmControlMode] = useState<"enemy" | "map">("enemy");
+  const [controlWeapons, setControlWeapons] = useState<Record<string, { weapons: CombatWeapon[]; attacks: AvailableAttack[] }>>({});
 
   const onNotice = useCallback<NoticeFn>((message, kind) => {
     setNotice({ message, kind });
@@ -98,6 +105,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
   useAutoLinkCharacter(state, onRefresh);
 
   const sessionFinished = state.session.status === "finished";
+  const isGM = state.viewer.role === "gm";
   const me = myCombatant(state);
   const targets = useMemo(() => attackTargets(state), [state]);
 
@@ -124,6 +132,8 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
   }, [gmTargetDraft, gmTargets, state.session.tacticalMap?.geometry]);
 
   const gmSelectedCombatant = state.combatants.find((combatant) => combatant.id === gmControlledCombatantId) ?? null;
+  const isControllingEnemy = isGM && gmSelectedCombatant?.kind === "enemy";
+  const displayedCombatant = isControllingEnemy ? gmSelectedCombatant : me;
 
   useEffect(() => {
     if (state.session.status === "finished" || state.combat?.status !== "active") {
@@ -153,14 +163,32 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
     if (!linkedCharacterId) return [];
     return loadCharacters().find((entry) => entry.id === linkedCharacterId)?.weapons ?? [];
   }, [linkedCharacterId]);
+  const attacks = useMemo<AvailableAttack[]>(() => {
+    if (!linkedCharacterId) return [];
+    const character = loadCharacters().find((entry) => entry.id === linkedCharacterId);
+    return character ? getAvailableAttacks(character) : [];
+  }, [linkedCharacterId]);
   const playerSelectedWeapon = useMemo(
-    () => weapons.find((weapon) => weapon.id === selectedWeaponId) ?? weapons[0] ?? null,
-    [selectedWeaponId, weapons],
+    () => {
+      const selected = attacks.find((attack) => attack.id === selectedAttackId);
+      const weaponId = selected?.context.weaponId;
+      return weapons.find((weapon) => weapon.id === weaponId) ?? null;
+    },
+    [attacks, selectedAttackId, weapons],
   );
   const gmSelectedWeapon = useMemo(
-    () => (gmSelectedCombatant ? (controlWeapons[gmSelectedCombatant.id] ?? []).find((weapon) => weapon.id === selectedWeaponId) ?? controlWeapons[gmSelectedCombatant.id]?.[0] ?? null : null),
-    [controlWeapons, gmSelectedCombatant, selectedWeaponId],
+    () => {
+      if (!gmSelectedCombatant) return null;
+      const control = controlWeapons[gmSelectedCombatant.id];
+      const selected = control?.attacks.find((attack) => attack.id === selectedAttackId) ?? control?.attacks[0];
+      return selected?.context.weaponId ? control?.weapons.find((weapon) => weapon.id === selected.context.weaponId) ?? null : null;
+    },
+    [controlWeapons, gmSelectedCombatant, selectedAttackId],
   );
+  const gmSelectedAttack = gmSelectedCombatant
+    ? controlWeapons[gmSelectedCombatant.id]?.attacks.find((attack) => attack.id === selectedAttackId) ?? controlWeapons[gmSelectedCombatant.id]?.attacks[0] ?? null
+    : null;
+  const playerSelectedAttack = attacks.find((attack) => attack.id === selectedAttackId) ?? attacks[0] ?? null;
 
   async function handleLeave() {
     if (!window.confirm("Sair da mesa? Para voltar você vai precisar do código de novo.")) return;
@@ -177,7 +205,6 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
     }
   }
 
-  const isGM = state.viewer.role === "gm";
   const combatId = state.combat?.id ?? null;
 
   useEffect(() => {
@@ -186,7 +213,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
     void fetchMesaControlMetadata(state.session.id)
       .then((entries) => {
         if (cancelled) return;
-        setControlWeapons(Object.fromEntries(entries.map((entry) => [entry.combatantId, entry.weapons])));
+         setControlWeapons(Object.fromEntries(entries.map((entry) => [entry.combatantId, { weapons: entry.weapons, attacks: entry.attacks }])));
       })
       .catch(() => {
         if (!cancelled) setControlWeapons({});
@@ -216,11 +243,21 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
 
       <ActionFeedback busy={busy} />
 
-      <TurnStatus state={state} me={me} />
+      <TurnStatus
+        state={state}
+        me={displayedCombatant}
+        isGM={isGM}
+        isControllingEnemy={isControllingEnemy}
+      />
 
       <div className="player-mesa-grid player-mesa-grid-table player-mesa-hud-grid">
         <aside className="player-mesa-column player-mesa-left-rail" aria-label="Player status">
-          <PlayerStatusPanel me={me} characterName={characterName} />
+          <PlayerStatusPanel
+            me={displayedCombatant}
+            characterName={isControllingEnemy ? null : characterName}
+            isGM={isGM}
+            isControllingEnemy={isControllingEnemy}
+          />
           <InitiativePanel
             state={state}
             me={me}
@@ -239,6 +276,11 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
              onSelectTarget={isGM ? setGmTargetDraft : setTargetDraft}
              controlledCombatantId={isGM ? gmControlledCombatantId : null}
              selectedWeapon={isGM ? gmSelectedWeapon : playerSelectedWeapon}
+             selectedAttackType={isGM ? gmSelectedWeapon?.attackType ?? gmSelectedAttack?.context.type : playerSelectedWeapon?.attackType ?? playerSelectedAttack?.context.type}
+             selectedSkillId={isGM ? gmSelectedWeapon?.skill ?? gmSelectedAttack?.context.skillId : playerSelectedWeapon?.skill ?? playerSelectedAttack?.context.skillId}
+             selectedHackableObjectId={selectedHackableObjectId}
+             onSelectHackableObject={setSelectedHackableObjectId}
+             gmMapToolsVisible={!isGM || gmControlMode === "map"}
            />
           <div className="player-mesa-stage-tools">
             <PlayerEquipmentPanel
@@ -257,14 +299,25 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
               onChanged={onChanged}
               supplies={me?.supplies ?? null}
             />
-            <PlayerSkillCheckPanel
+           <PlayerSkillCheckPanel
               state={state}
               me={me}
               busy={busy}
               run={run}
               onChanged={onChanged}
-              characterId={linkedCharacterId}
-            />
+             characterId={linkedCharacterId}
+           />
+           <PlayerNetrunnerPanel
+             state={state}
+             me={me}
+             character={linkedCharacterId ? loadCharacters().find((entry) => entry.id === linkedCharacterId) ?? null : null}
+              target={targets.find((target) => target.id === selectedTargetId) ?? null}
+              selectedHackableObject={(state.session.tacticalMap?.hackableObjects ?? []).find((object) => object.id === selectedHackableObjectId) ?? null}
+             busy={busy}
+             run={run}
+             onChanged={onChanged}
+           />
+           <GmNetArchitecturePanel state={state} />
           </div>
         </section>
 
@@ -274,13 +327,16 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
               state={state}
               busy={busy}
               run={run}
-              metadata={controlWeapons}
+               metadata={controlWeapons}
               sessionFinished={sessionFinished}
                controlledCombatantId={gmControlledCombatantId}
                selectedTargetId={selectedGmTargetId}
-               onSelectTarget={setGmTargetDraft}
                selectedWeaponId={selectedWeaponId}
                onSelectWeapon={setSelectedWeaponId}
+               selectedAttackId={selectedAttackId}
+               onSelectAttack={setSelectedAttackId}
+               controlMode={gmControlMode}
+               onControlModeChange={setGmControlMode}
              />
           ) : (
             <PlayerActionsPanel
@@ -289,12 +345,14 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
               busy={busy}
               run={run}
               onChanged={onChanged}
-              weapons={weapons}
+               weapons={weapons}
+               attacks={attacks}
               targets={targets}
               selectedTargetId={selectedTargetId}
-               onSelectTarget={setTargetDraft}
                selectedWeaponId={selectedWeaponId}
                onSelectWeapon={setSelectedWeaponId}
+               selectedAttackId={selectedAttackId}
+               onSelectAttack={setSelectedAttackId}
               sessionFinished={sessionFinished}
             />
           )}

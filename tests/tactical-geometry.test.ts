@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateLineOfSight, calculateTacticalCover, DEFAULT_TACTICAL_OBSTACLE_THICKNESS, tacticalObstacleArea, tacticalSegmentIntersectsArea, tacticalSegmentsIntersect, tacticalTokenSamplePoints } from "../src/lib/mesa/tacticalGeometry.ts";
+import { calculateLineOfSight, calculateTacticalCover, DEFAULT_TACTICAL_OBSTACLE_THICKNESS, tacticalObstacleArea, tacticalSegmentIntersectsArea, tacticalSegmentsIntersect, tacticalTokenSamplePoints, validateMovementPath } from "../src/lib/mesa/tacticalGeometry.ts";
 import type { TacticalGeometry } from "../src/lib/mesa/types.ts";
 
 const clear: TacticalGeometry = { walls: [], doors: [] };
-const wall = (id: string, x: number, y1 = 0.2, y2 = 0.8) => ({ id, type: "wall" as const, start: { x, y: y1 }, end: { x, y: y2 } });
+const wall = (id: string, x = 0.5, y1 = 0.2, y2 = 0.8) => ({ id, type: "wall" as const, start: { x, y: y1 }, end: { x, y: y2 } });
 const door = (id: string, state: "open" | "closed", x = 0.5) => ({ id, type: "door" as const, start: { x, y: 0.2 }, end: { x, y: 0.8 }, state });
 
 test("LOS sem geometria é clear", () => {
@@ -126,4 +126,106 @@ test("múltiplos obstáculos são avaliados por raio", () => {
     doors: [],
   };
   assert.equal(calculateTacticalCover({ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }, geometry).status, "full_cover");
+});
+
+test("trajetória de movimento livre é válida", () => {
+  assert.deepEqual(validateMovementPath({ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.1 }, clear), { valid: true });
+});
+
+test("trajetória que atravessa parede é bloqueada e identifica o obstáculo", () => {
+  assert.deepEqual(validateMovementPath({ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }, { walls: [wall("movement-wall")], doors: [] }), {
+    valid: false,
+    blockedBy: { id: "movement-wall", type: "wall" },
+  });
+});
+
+test("trajetória que termina antes da parede permanece válida", () => {
+  assert.deepEqual(validateMovementPath({ x: 0.1, y: 0.5 }, { x: 0.4, y: 0.5 }, { walls: [wall("far-wall")], doors: [] }), { valid: true });
+});
+
+test("trajetória começando encostada na parede é tratada como interseção", () => {
+  assert.equal(validateMovementPath({ x: 0.5, y: 0.5 }, { x: 0.9, y: 0.5 }, { walls: [wall("touching-wall")], doors: [] }).valid, false);
+});
+
+test("trajetória paralela à parede não é bloqueada", () => {
+  assert.deepEqual(validateMovementPath({ x: 0.1, y: 0.1 }, { x: 0.1, y: 0.9 }, { walls: [wall("parallel-wall")], doors: [] }), { valid: true });
+});
+
+test("porta fechada bloqueia e porta aberta é ignorada no movimento", () => {
+  const closed = { walls: [], doors: [door("closed-door", "closed")] };
+  assert.deepEqual(validateMovementPath({ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }, closed), {
+    valid: false,
+    blockedBy: { id: "closed-door", type: "door" },
+  });
+  assert.deepEqual(validateMovementPath({ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }, {
+    walls: [], doors: [{ ...closed.doors[0], state: "open" as const }],
+  }), { valid: true });
+});
+
+test("obstáculo destruído não bloqueia movimento", () => {
+  assert.deepEqual(validateMovementPath({ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }, {
+    walls: [{ ...wall("destroyed-wall"), destroyed: true }],
+    doors: [{ ...door("destroyed-door", "closed"), destroyed: true }],
+  }), { valid: true });
+});
+
+test("espessura física da parede bloqueia a trajetória", () => {
+  const thickWall = { id: "thick-wall", type: "wall" as const, start: { x: 0.4, y: 0.5 }, end: { x: 0.6, y: 0.5 }, thickness: 0.2 };
+  assert.equal(validateMovementPath({ x: 0.1, y: 0.56 }, { x: 0.9, y: 0.56 }, { walls: [thickWall], doors: [] }).valid, false);
+});
+
+test("margem de movimento libera somente a passagem próxima da borda", () => {
+  const thickWall = { id: "tolerance-wall", type: "wall" as const, start: { x: 0.4, y: 0.5 }, end: { x: 0.6, y: 0.5 }, thickness: 0.2 };
+  const geometry = { walls: [thickWall], doors: [] };
+  // A linha fica dentro dos 0.1 de espessura física, mas fora dos 0.08
+  // usados exclusivamente pela colisão de movimento.
+  assert.equal(validateMovementPath({ x: 0.1, y: 0.59 }, { x: 0.9, y: 0.59 }, geometry).valid, true);
+  assert.equal(validateMovementPath({ x: 0.1, y: 0.54 }, { x: 0.9, y: 0.54 }, geometry).valid, false);
+});
+
+test("a tolerância não reduz a geometria usada por LOS e Cover", () => {
+  const geometry = {
+    walls: [{ id: "los-cover-wall", type: "wall" as const, start: { x: 0.4, y: 0.5 }, end: { x: 0.6, y: 0.5 }, thickness: 0.2 }],
+    doors: [],
+  };
+  const observer = { x: 0.1, y: 0.59 };
+  const target = { x: 0.9, y: 0.59 };
+  assert.equal(validateMovementPath(observer, target, geometry).valid, true);
+  assert.equal(calculateLineOfSight(observer, target, geometry).visible, false);
+  assert.notEqual(calculateTacticalCover(observer, target, geometry).status, "clear");
+});
+
+test("porta fechada usa a mesma margem, enquanto porta aberta e destruída continuam livres", () => {
+  const closed = {
+    walls: [],
+    doors: [{ id: "tolerance-door", type: "door" as const, start: { x: 0.4, y: 0.5 }, end: { x: 0.6, y: 0.5 }, thickness: 0.2, state: "closed" as const }],
+  };
+  assert.equal(validateMovementPath({ x: 0.1, y: 0.59 }, { x: 0.9, y: 0.59 }, closed).valid, true);
+  assert.equal(validateMovementPath({ x: 0.1, y: 0.54 }, { x: 0.9, y: 0.54 }, closed).valid, false);
+  assert.equal(validateMovementPath({ x: 0.1, y: 0.54 }, { x: 0.9, y: 0.54 }, {
+    walls: [], doors: [{ ...closed.doors[0], state: "open" as const }],
+  }).valid, true);
+  assert.equal(validateMovementPath({ x: 0.1, y: 0.54 }, { x: 0.9, y: 0.54 }, {
+    walls: [], doors: [{ ...closed.doors[0], destroyed: true }],
+  }).valid, true);
+});
+
+test("múltiplos obstáculos retornam o primeiro bloqueador da trajetória", () => {
+  const result = validateMovementPath({ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }, {
+    walls: [wall("far-wall", 0.75), wall("near-wall", 0.25)],
+    doors: [door("middle-door", "closed", 0.5)],
+  });
+  assert.deepEqual(result.blockedBy, { id: "near-wall", type: "wall" });
+});
+
+test("trajetória diagonal é avaliada pelo mesmo segmento do LOS", () => {
+  assert.deepEqual(validateMovementPath({ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.9 }, { walls: [wall("diagonal-wall")], doors: [] }), {
+    valid: false,
+    blockedBy: { id: "diagonal-wall", type: "wall" },
+  });
+});
+
+test("geometria inválida falha fechada e não libera bypass", () => {
+  const invalidGeometry = { walls: [{ id: "bad", type: "wall", start: { x: Number.NaN, y: 0.2 }, end: { x: 0.5, y: 0.8 } }], doors: [] } as unknown as TacticalGeometry;
+  assert.deepEqual(validateMovementPath({ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }, invalidGeometry), { valid: false, reason: "invalid_geometry" });
 });

@@ -671,7 +671,15 @@ select:focus-visible {
 }
 
 .sheet-layout {
+  /* Cada coluna deve ter a altura do próprio conteúdo. O stretch padrão do
+     grid fazia a ficha principal acompanhar a altura do aside e alongava os
+     painéis internos. */
+  align-items: start;
   margin-top: 0.8rem;
+}
+
+.sheet-main {
+  align-content: start;
 }
 
 .sheet-panel {
@@ -1064,6 +1072,509 @@ select:focus-visible {
   }
 }
 
+/* --------------------------------------------------------------------------
+ * Mesa / armas do Player
+ *
+ * O painel de equipamento vive dentro do conjunto de ferramentas do palco,
+ * que pode ficar estreito mesmo em telas largas. Duas colunas fixas faziam
+ * cada arma disputar espaço com a munição e a recarga. A grade só abre uma
+ * segunda coluna quando cada cartão tem largura suficiente para respirar.
+ */
+.player-mesa-weapons .player-mesa-weapon-list {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  align-items: stretch;
+}
+
+.player-mesa-weapons .player-mesa-weapon-card {
+  grid-template-rows: auto auto auto;
+  min-width: 0;
+}
+
+.player-mesa-weapons .player-mesa-weapon-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-mesa-weapons .player-mesa-weapon-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: .45rem;
+  min-width: 0;
+}
+
+.player-mesa-weapons .player-mesa-weapon-details small {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-mesa-weapons .player-mesa-reload {
+  min-width: 0;
+  width: 100%;
+}
+
+@media (max-width: 680px) {
+  .player-mesa-weapons .player-mesa-weapon-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * GM / cards de inimigo como HUD da Mesa
+ *
+ * O catálogo agora lê como uma formação de combate: status primeiro, depois
+ * sistemas e, por fim, as ações. A estrutura toma emprestados da Mesa os
+ * painéis escuros, barras de HP, grades de vitais e filetes de estado, mas
+ * mantém o catálogo rápido de consultar.
+ */
+.enemy-list {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+  gap: var(--redline-gm-gap);
+}
+
+.enemy-card {
+  position: relative;
+  overflow: hidden;
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--redline-line);
+  border-left: 3px solid var(--redline-line-bright);
+  border-radius: var(--redline-radius-md);
+  background:
+    linear-gradient(145deg, rgb(21 35 38 / 84%), transparent 48%),
+    var(--redline-cockpit-surface);
+  box-shadow: 0 18px 55px rgb(0 0 0 / 18%);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.enemy-card::before {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 3.5rem;
+  height: 2px;
+  background: var(--redline-teal);
+  box-shadow: 0 0 14px rgb(126 231 215 / 35%);
+  content: "";
+}
+
+.enemy-card:hover {
+  border-color: var(--redline-line-bright);
+  background:
+    linear-gradient(145deg, rgb(21 35 38 / 96%), transparent 52%),
+    var(--redline-cockpit-surface);
+  box-shadow: 0 22px 65px rgb(0 0 0 / 28%), 0 0 0 1px rgb(126 231 215 / 8%);
+  transform: translateY(-2px);
+}
+
+.enemy-card[data-threat-level="low"] { border-left-color: #5acd8a; }
+.enemy-card[data-threat-level="medium"] { border-left-color: var(--redline-yellow); }
+.enemy-card[data-threat-level="high"] { border-left-color: var(--redline-danger); }
+.enemy-card[data-threat-level="extreme"] { border-left-color: #c98cff; }
+.enemy-card[data-threat-level="high"]::before,
+.enemy-card[data-threat-level="extreme"]::before { background: var(--redline-coral); }
+
+.enemy-card-console-line {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  min-height: 2rem;
+  padding: .4rem 1rem;
+  border-bottom: 1px solid var(--redline-line);
+  background: rgb(7 11 13 / 32%);
+  color: var(--redline-faint);
+  font: 600 .52rem var(--font-geist-mono), monospace;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.enemy-card-console-line span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enemy-card-console-line i {
+  width: .38rem;
+  height: .38rem;
+  margin-left: auto;
+  flex: 0 0 auto;
+  border: 1px solid var(--redline-teal);
+  border-radius: 50%;
+  background: var(--redline-teal);
+  box-shadow: 0 0 9px var(--redline-teal);
+}
+
+.enemy-card-header {
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.05rem 1.1rem .95rem;
+  border-bottom: 1px solid var(--redline-line);
+}
+
+.enemy-card-main {
+  min-width: 0;
+}
+
+.enemy-card-kicker,
+.enemy-card-vital-label,
+.enemy-card-threat-label,
+.enemy-card-loadout-item span {
+  color: var(--redline-muted);
+  font: 700 .52rem var(--font-geist-mono), monospace;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.enemy-card-name {
+  margin: .28rem 0 .4rem;
+  color: var(--redline-paper);
+  font-size: clamp(1.1rem, 2vw, 1.45rem);
+  letter-spacing: -.04em;
+  line-height: 1.05;
+}
+
+.enemy-card-meta {
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+
+.enemy-card-archetype,
+.enemy-card-role {
+  color: var(--redline-soft);
+  font: 600 .61rem var(--font-geist-mono), monospace;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.enemy-card-role {
+  color: var(--redline-muted);
+}
+
+.enemy-card-role::before {
+  margin-right: .5rem;
+  color: var(--redline-faint);
+  content: "//";
+}
+
+.enemy-card-threat-box {
+  display: grid;
+  justify-items: end;
+  gap: .35rem;
+  flex: 0 0 auto;
+}
+
+.enemy-card-threat {
+  padding: .28rem .5rem;
+  border: 1px solid currentColor;
+  border-radius: var(--redline-radius-sm);
+  background: transparent;
+  color: var(--redline-teal);
+  font: 700 .58rem var(--font-geist-mono), monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.enemy-card[data-threat-level="low"] .enemy-card-threat { color: #5acd8a; }
+.enemy-card[data-threat-level="medium"] .enemy-card-threat { color: var(--redline-yellow); }
+.enemy-card[data-threat-level="high"] .enemy-card-threat { color: var(--redline-danger); }
+.enemy-card[data-threat-level="extreme"] .enemy-card-threat { color: #c98cff; }
+
+.enemy-card-vitals {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--redline-line);
+  background: rgb(7 11 13 / 30%);
+}
+
+.enemy-card-hp-block {
+  display: grid;
+  gap: .55rem;
+  min-width: 0;
+}
+
+.enemy-card-hp-values {
+  display: flex;
+  align-items: baseline;
+  gap: .35rem;
+}
+
+.enemy-card-hp-values strong {
+  margin-left: .25rem;
+  color: var(--redline-paper);
+  font: 700 clamp(1.8rem, 4vw, 2.45rem) var(--font-geist-mono), monospace;
+  letter-spacing: -.09em;
+  line-height: .85;
+}
+
+.enemy-card-hp-values > span:not(.enemy-card-vital-label) {
+  color: var(--redline-muted);
+  font: .7rem var(--font-geist-mono), monospace;
+}
+
+.enemy-card-hp-status {
+  margin-left: auto;
+  color: var(--redline-teal);
+  font: 700 .54rem var(--font-geist-mono), monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.enemy-card-hp-status.hp-critical { color: var(--redline-yellow); }
+.enemy-card-hp-status.hp-dead { color: var(--redline-danger); }
+
+.enemy-card-hp-bar {
+  height: .45rem;
+  overflow: hidden;
+  border: 1px solid var(--redline-line);
+  background: var(--redline-void);
+}
+
+.enemy-card-hp-bar i {
+  display: block;
+  height: 100%;
+  background: var(--redline-teal);
+  box-shadow: 0 0 14px rgb(126 231 215 / 35%);
+  transition: width 220ms ease, background 220ms ease;
+}
+
+.enemy-card-hp-bar i.hp-critical {
+  background: var(--redline-yellow);
+  box-shadow: 0 0 14px rgb(243 201 105 / 28%);
+}
+
+.enemy-card-hp-bar i.hp-dead {
+  background: var(--redline-danger);
+  box-shadow: 0 0 14px rgb(255 119 112 / 28%);
+}
+
+.enemy-card-armor-block {
+  display: grid;
+  align-content: center;
+  justify-items: end;
+  gap: .25rem;
+  min-width: 5.6rem;
+  padding-left: 1rem;
+  border-left: 1px solid var(--redline-line);
+}
+
+.enemy-card-armor-block strong {
+  color: var(--redline-soft);
+  font: 700 .95rem var(--font-geist-mono), monospace;
+}
+
+.enemy-card-armor-block > span:last-child {
+  color: var(--redline-muted);
+  font: .62rem var(--font-geist-mono), monospace;
+}
+
+.enemy-card-description {
+  margin: 0;
+  padding: .9rem 1.1rem 0;
+  color: var(--redline-soft);
+  font-size: .75rem;
+  line-height: 1.5;
+}
+
+.enemy-card-systems {
+  margin: 1rem 1.1rem 0;
+  padding-top: .85rem;
+  border-top: 1px solid var(--redline-line);
+}
+
+.enemy-card-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-bottom: .65rem;
+}
+
+.enemy-card-section-heading strong {
+  color: var(--redline-soft);
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.enemy-card-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-top: 1px solid var(--redline-line);
+  border-left: 1px solid var(--redline-line);
+}
+
+.enemy-card-stat-cell {
+  display: grid;
+  gap: .2rem;
+  min-height: 3.25rem;
+  padding: .5rem .55rem;
+  border-right: 1px solid var(--redline-line);
+  border-bottom: 1px solid var(--redline-line);
+  background: rgb(7 11 13 / 24%);
+}
+
+.enemy-card-stat-cell span {
+  color: var(--redline-muted);
+  font: 600 .5rem var(--font-geist-mono), monospace;
+  letter-spacing: .06em;
+}
+
+.enemy-card-stat-cell strong {
+  color: var(--redline-teal);
+  font: 700 .85rem var(--font-geist-mono), monospace;
+}
+
+.enemy-card-loadout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin: 1rem 1.1rem 0;
+  border-top: 1px solid var(--redline-line);
+  border-left: 1px solid var(--redline-line);
+}
+
+.enemy-card-loadout-item {
+  display: grid;
+  gap: .25rem;
+  padding: .65rem .7rem;
+  border-right: 1px solid var(--redline-line);
+  border-bottom: 1px solid var(--redline-line);
+  background: rgb(7 11 13 / 20%);
+}
+
+.enemy-card-loadout-item strong {
+  color: var(--redline-paper);
+  font: 700 .85rem var(--font-geist-mono), monospace;
+}
+
+.enemy-card-loadout-item small {
+  overflow: hidden;
+  color: var(--redline-muted);
+  font-size: .58rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enemy-card-condition-item strong {
+  color: var(--redline-coral-soft);
+}
+
+.enemy-card-actions {
+  display: flex;
+  gap: .5rem;
+  margin-top: 1rem;
+  padding: .85rem 1.1rem 1rem;
+  border-top: 1px solid var(--redline-line);
+  background: rgb(7 11 13 / 24%);
+}
+
+.enemy-card-actions .enemy-action-button {
+  min-height: 2.35rem;
+  padding: .55rem .75rem;
+  border-color: var(--redline-line-bright);
+  border-radius: var(--redline-radius-sm);
+  color: var(--redline-soft);
+  font-size: .62rem;
+}
+
+.enemy-card-actions .enemy-action-edit {
+  border-color: rgb(126 231 215 / 45%);
+  color: var(--redline-teal);
+}
+
+.enemy-card-actions .enemy-action-edit:hover {
+  background: rgb(126 231 215 / 9%);
+}
+
+.enemy-card-actions .enemy-action-delete {
+  margin-left: auto;
+  border-color: rgb(255 119 112 / 35%);
+  color: var(--redline-danger);
+}
+
+.enemy-card-actions .enemy-action-delete:hover {
+  background: rgb(255 119 112 / 9%);
+}
+
+@media (max-width: 620px) {
+  .enemy-card-header {
+    gap: .75rem;
+    padding: .9rem .95rem .85rem;
+  }
+
+  .enemy-card-console-line {
+    padding-inline: .85rem;
+  }
+
+  .enemy-card-vitals {
+    gap: .75rem;
+    padding: .9rem .95rem;
+  }
+
+  .enemy-card-hp-status {
+    font-size: .5rem;
+  }
+
+  .enemy-card-systems,
+  .enemy-card-loadout {
+    margin-inline: .95rem;
+  }
+
+  .enemy-card-stat-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .enemy-card-stat-cell {
+    min-height: 2.8rem;
+    padding: .4rem .3rem;
+  }
+
+  .enemy-card-stat-cell span {
+    font-size: .45rem;
+  }
+
+  .enemy-card-actions {
+    padding: .75rem .95rem .9rem;
+  }
+}
+
+@media (max-width: 380px) {
+  .enemy-card-vitals {
+    grid-template-columns: 1fr;
+  }
+
+  .enemy-card-armor-block {
+    grid-template-columns: auto auto auto;
+    justify-items: start;
+    min-width: 0;
+    padding-top: .65rem;
+    padding-left: 0;
+    border-top: 1px solid var(--redline-line);
+    border-left: 0;
+  }
+
+  .enemy-card-armor-block .enemy-card-vital-label {
+    margin-right: .3rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enemy-card,
+  .enemy-card-hp-bar i {
+    transition: none;
+  }
+}
+
 /* Combate ativo: participação + iniciativa compartilham a mesma faixa. */
 .encounter-combat-actions {
   display: grid;
@@ -1443,8 +1954,12 @@ select:focus-visible {
 .tactical-los-readout.is-clear { border-color: var(--redline-teal); color: var(--redline-teal); }
 .tactical-los-readout.is-cover { border-color: var(--redline-yellow); color: var(--redline-yellow); }
 .tactical-los-readout.is-blocked { border-color: var(--redline-coral); color: var(--redline-coral); }
-.tactical-token { position: absolute; z-index: 2; display: grid; justify-items: center; gap: .15rem; width: 3.8rem; padding: .15rem; border: 2px solid var(--redline-teal); border-radius: 50%; background: rgb(8 15 18 / 92%); color: var(--redline-paper); transform: translate(-50%, -50%); cursor: default; touch-action: none; transition: filter .15s, transform .15s; }
-.tactical-token img { width: 2.7rem; height: 2.7rem; border-radius: 50%; object-fit: cover; pointer-events: none; }
+.tactical-info-toggle { position: absolute; z-index: 8; right: .75rem; bottom: 2rem; padding: .3rem .5rem; border: 1px solid var(--redline-line-bright); background: rgb(8 15 18 / 92%); color: var(--redline-muted); font: 700 .58rem var(--font-geist-mono), monospace; letter-spacing: .04em; cursor: pointer; }
+.tactical-info-toggle:hover, .tactical-info-toggle:focus-visible { border-color: var(--redline-teal); color: var(--redline-teal); outline: none; }
+.tactical-info-toggle[aria-pressed="false"] { border-color: var(--redline-yellow); color: var(--redline-yellow); }
+.tactical-token { position: absolute; z-index: 2; display: grid; justify-items: center; gap: .1rem; width: 2.65rem; padding: .1rem; border: 2px solid var(--redline-teal); border-radius: 50%; background: rgb(8 15 18 / 92%); color: var(--redline-paper); transform: translate(-50%, -50%); cursor: default; touch-action: none; transition: filter .15s, transform .15s; }
+.tactical-token img { width: 1.7rem; height: 1.7rem; border-radius: 50%; object-fit: cover; pointer-events: none; }
+.tactical-token.is-remote { will-change: left, top; transition: filter .15s, transform .15s, left .45s ease-out, top .45s ease-out; }
 .tactical-token span { max-width: 6rem; overflow: hidden; color: var(--redline-paper); font-size: .58rem; font-weight: 700; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
 .tactical-token.is-enemy { border-color: var(--redline-coral); }
 .tactical-token.is-active { box-shadow: 0 0 0 .2rem rgb(255 105 92 / 25%), 0 0 1.5rem rgb(255 105 92 / 35%); }
@@ -1455,8 +1970,70 @@ select:focus-visible {
 .tactical-token.is-processing::after { position: absolute; right: -.15rem; top: -.2rem; width: .45rem; height: .45rem; border: 2px solid rgb(126 231 215 / 35%); border-top-color: var(--redline-teal); border-radius: 50%; animation: tactical-token-spin .7s linear infinite; content: ""; }
 .tactical-token.is-rejected { animation: tactical-token-rejected .22s ease-out; }
 .tactical-token.is-out-of-range { filter: grayscale(.55) saturate(.7); opacity: .72; }
+.tactical-hackable-object { position: absolute; z-index: 3; display: grid; justify-items: center; gap: .08rem; min-width: 2.7rem; padding: .22rem .3rem; border: 1px solid rgb(247 196 90 / 75%); border-radius: .2rem; background: rgb(26 20 12 / 94%); color: var(--redline-yellow); transform: translate(-50%, -50%); cursor: pointer; font: 700 .52rem var(--font-geist-mono), monospace; letter-spacing: .04em; text-transform: uppercase; touch-action: none; }
+.tactical-hackable-object:hover, .tactical-hackable-object:focus-visible, .tactical-hackable-object.is-selected { border-color: var(--redline-paper); outline: none; box-shadow: 0 0 0 .2rem rgb(247 196 90 / 25%), 0 0 1rem rgb(247 196 90 / 28%); }
+.tactical-hackable-object.is-disabled { opacity: .38; filter: grayscale(.8); }
+.tactical-hackable-icon { display: grid; place-items: center; width: 1.25rem; height: 1.25rem; border: 1px solid currentColor; border-radius: .18rem; font-size: .9rem; }
+.tactical-hackable-object > span:last-child { max-width: 6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tactical-hackable-tools { display: grid; gap: .35rem; padding: .55rem 0; border-top: 1px solid rgb(247 196 90 / 18%); }
+.tactical-hackable-editor { display: grid; grid-template-columns: repeat(4, minmax(8rem, 1fr)); gap: .5rem; padding: .65rem; border: 1px solid rgb(247 196 90 / 35%); background: rgb(247 196 90 / 5%); }
+.tactical-hackable-editor label { display: grid; gap: .2rem; color: var(--redline-muted); font-size: .58rem; }
+.tactical-hackable-editor input, .tactical-hackable-editor select { min-width: 0; width: 100%; box-sizing: border-box; }
+.netrunner-resource-hud { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin: .7rem 0; }
+.netrunner-resource-hud > div { display: grid; gap: .25rem; }
+.netrunner-resource-hud span { color: var(--redline-muted); font: 700 .55rem var(--font-geist-mono), monospace; letter-spacing: .12em; }
+.netrunner-resource-hud strong { color: var(--redline-paper); font: 700 .9rem var(--font-geist-mono), monospace; }
+.netrunner-resource-hud i { display: flex; height: .42rem; overflow: hidden; border: 1px solid rgb(126 231 215 / 35%); background: rgb(8 15 18 / 85%); }
+.netrunner-resource-hud i:not(.net-action-pips) b { display: block; background: var(--redline-teal); transition: width .25s ease; }
+.netrunner-resource-hud .net-action-pips { gap: .16rem; overflow: visible; border: 0; background: transparent; }
+.net-action-pips b { flex: 1; border: 1px solid rgb(247 196 90 / 38%); background: transparent; }
+.net-action-pips b.is-full { background: var(--redline-yellow); box-shadow: 0 0 .35rem rgb(247 196 90 / 45%); }
+.netrunner-connection-status { padding: .4rem .5rem; border: 1px solid; font: 700 .58rem var(--font-geist-mono), monospace; letter-spacing: .1em; }
+.netrunner-connection-status.is-online { border-color: rgb(126 231 215 / 45%); color: var(--redline-teal); background: rgb(126 231 215 / 6%); }
+.netrunner-connection-status strong, .netrunner-connection-status span { display: block; }
+.netrunner-connection-status span { margin-top: .2rem; color: var(--redline-muted); font-size: .52rem; letter-spacing: .06em; }
+.netrunner-connection-status.is-offline { border-color: rgb(255 105 92 / 45%); color: var(--redline-coral); background: rgb(255 105 92 / 5%); }
+.netrunner-turn-hud { display: flex; flex-wrap: wrap; gap: .35rem; margin: .45rem 0; }
+.netrunner-turn-hud span { flex: 1 1 8rem; padding: .3rem .4rem; border: 1px solid rgb(126 231 215 / 22%); color: var(--redline-muted); font: 700 .52rem var(--font-geist-mono), monospace; letter-spacing: .06em; }
+.netrunner-turn-hud span.is-current { border-color: var(--redline-yellow); color: var(--redline-yellow); background: rgb(247 196 90 / 8%); }
+.netrunner-jackout { display: grid; gap: .3rem; margin: .55rem 0; }
+.netrunner-jackout.has-ice { padding: .5rem; border: 1px solid rgb(255 105 92 / 55%); background: rgb(255 105 92 / 7%); }
+.netrunner-jackout.has-ice strong { color: var(--redline-coral); font: 700 .58rem var(--font-geist-mono), monospace; }
+.netrunner-jackout.has-ice span { color: var(--redline-muted); font-size: .62rem; line-height: 1.35; }
+.quickhack-actions { display: grid; gap: .45rem; margin-top: .7rem; }
+.quickhack-actions > header, .net-architecture-view > header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: var(--redline-teal); font: 700 .58rem var(--font-geist-mono), monospace; letter-spacing: .08em; }
+.quickhack-actions > header span { color: var(--redline-muted); font-size: .5rem; letter-spacing: .04em; }
+.quickhack-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .18rem .45rem; padding: .5rem; border: 1px solid rgb(126 231 215 / 28%); background: rgb(126 231 215 / 5%); }
+.quickhack-card > div { display: flex; justify-content: space-between; gap: .4rem; min-width: 0; }
+.quickhack-card > div strong { color: var(--redline-paper); font-size: .68rem; }
+.quickhack-card > div span, .quickhack-card small { color: var(--redline-teal); font: 700 .52rem var(--font-geist-mono), monospace; }
+.quickhack-card p { grid-column: 1 / -1; margin: 0; color: var(--redline-muted); font-size: .58rem; line-height: 1.3; }
+.quickhack-card small { grid-column: 1; color: var(--redline-muted); font-weight: 400; }
+.quickhack-card button { grid-column: 2; grid-row: 2; min-width: 5.5rem; min-height: 2.1rem; border: 1px solid var(--redline-teal); background: rgb(126 231 215 / 8%); color: var(--redline-teal); font: 700 .54rem var(--font-geist-mono), monospace; cursor: pointer; }
+.quickhack-card button:disabled { border-color: rgb(255 105 92 / 35%); color: var(--redline-coral); cursor: not-allowed; }
+.quickhack-card.is-unavailable { border-color: rgb(255 105 92 / 25%); opacity: .78; }
+.net-architecture-view { display: grid; gap: .45rem; margin-top: .8rem; padding-top: .65rem; border-top: 1px solid rgb(126 231 215 / 18%); }
+.net-architecture-view > header span { color: var(--redline-yellow); }
+.net-node-list { display: grid; gap: .3rem; }
+.net-node-card { display: grid; grid-template-columns: 1.2rem minmax(0, 1fr) auto; gap: .35rem; align-items: center; padding: .35rem; border-left: 2px solid rgb(126 231 215 / 45%); background: rgb(8 15 18 / 58%); }
+.net-node-card.node-black_ice { border-left-color: var(--redline-coral); }
+.net-node-card.node-demon { border-left-color: var(--redline-yellow); }
+.net-node-symbol { color: var(--redline-teal); text-align: center; }
+.node-black_ice .net-node-symbol { color: var(--redline-coral); }
+.node-demon .net-node-symbol { color: var(--redline-yellow); }
+.net-node-card div { display: grid; gap: .08rem; min-width: 0; }
+.net-node-card div strong { overflow: hidden; color: var(--redline-paper); font-size: .62rem; text-overflow: ellipsis; white-space: nowrap; }
+.net-node-card div span, .net-node-card > b { color: var(--redline-muted); font: 600 .5rem var(--font-geist-mono), monospace; }
+.net-node-card > b { text-align: right; }
+.netrunner-object-context { display: grid; gap: .25rem; margin: .7rem 0; padding: .65rem; border: 1px solid rgb(247 196 90 / 45%); background: rgb(247 196 90 / 6%); }
+.netrunner-object-context h4, .netrunner-object-context p { margin: 0; }
+.netrunner-object-context h4 { color: var(--redline-yellow); }
+.netrunner-object-context p { color: var(--redline-muted); font: 600 .58rem var(--font-geist-mono), monospace; }
+.netrunner-object-context button { margin-top: .25rem; }
+@media (max-width: 720px) { .tactical-hackable-editor { grid-template-columns: 1fr 1fr; } .netrunner-resource-hud { gap: .4rem; } .tactical-hackable-object { min-width: 2.4rem; } }
 .tactical-movement-readout { position: absolute; z-index: 5; display: grid; gap: .1rem; min-width: 5.5rem; padding: .35rem .45rem; border: 1px solid rgb(126 231 215 / 45%); background: rgb(8 15 18 / 88%); color: var(--redline-paper); font: 600 .58rem var(--font-geist-mono), monospace; line-height: 1.2; pointer-events: none; transform: translate(.8rem, calc(-100% - .7rem)); }
 .tactical-movement-readout b { color: var(--redline-teal); }
+.tactical-movement-readout strong { color: var(--redline-coral); font-size: .55rem; line-height: 1.25; }
 .tactical-movement-readout.is-invalid { border-color: rgb(255 105 92 / 60%); }
 .tactical-movement-readout.is-invalid b { color: var(--redline-coral); }
 .tactical-attack-readout { position: absolute; z-index: 5; display: grid; gap: .12rem; min-width: 6.2rem; padding: .35rem .5rem; border: 1px solid rgb(247 196 90 / 68%); background: rgb(8 15 18 / 90%); color: var(--redline-paper); font: 600 .62rem var(--font-geist-mono), monospace; line-height: 1.2; pointer-events: none; text-align: center; transform: translate(-50%, -50%); }
@@ -2231,7 +2808,25 @@ select:focus-visible {
 }
 
 .player-mesa-attack-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: start;
+}
+
+.player-mesa-attack-form > label:first-of-type,
+.player-mesa-attack-form > .player-mesa-target-readout,
+.player-mesa-attack-form > .player-mesa-attack-button {
+  grid-column: 1 / -1;
+}
+
+.player-mesa-attack-form > .player-mesa-target-readout {
+  grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, 1fr));
+  align-items: center;
+  min-width: 0;
+}
+
+.player-mesa-attack-form > .player-mesa-target-readout strong {
+  grid-row: span 2;
 }
 
 .player-mesa-attack-form label {
@@ -2262,6 +2857,21 @@ select:focus-visible {
   border-color: var(--redline-teal);
   box-shadow: var(--redline-focus);
   outline: none;
+}
+
+@media (max-width: 700px) {
+  .player-mesa-attack-form {
+    grid-template-columns: 1fr;
+  }
+
+  .player-mesa-attack-form > .player-mesa-target-readout {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .player-mesa-attack-form > .player-mesa-target-readout strong {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
 }
 
 .player-mesa-attack-button,
@@ -2856,6 +3466,35 @@ select:focus-visible {
 .player-mesa-gm-control::before {
   background: var(--redline-yellow);
 }
+.gm-control-switch { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem; margin: .65rem 0 .8rem; padding: .2rem; border: 1px solid rgb(126 231 215 / 22%); background: rgb(8 15 18 / 60%); }
+.gm-control-switch button { border: 1px solid transparent; background: transparent; color: var(--redline-muted); padding: .42rem .35rem; font: 700 .58rem var(--font-geist-mono), monospace; letter-spacing: .08em; cursor: pointer; }
+.gm-control-switch button:hover, .gm-control-switch button:focus-visible { color: var(--redline-paper); border-color: rgb(126 231 215 / 35%); outline: none; }
+.gm-control-switch button.is-active { border-color: var(--redline-teal); background: rgb(126 231 215 / 10%); color: var(--redline-teal); box-shadow: inset 0 -2px var(--redline-teal); }
+.gm-map-mode-hint { display: grid; gap: .55rem; padding: .75rem .2rem .2rem; }
+.gm-map-mode-hint strong { color: var(--redline-paper); }
+.gm-map-mode-hint p { margin: 0; color: var(--redline-muted); font-size: .68rem; line-height: 1.45; }
+.gm-map-tools-slot { display: grid; gap: .55rem; margin: .1rem 0 .35rem; }
+.gm-map-tools-slot .tactical-map-settings { position: static; border: 1px solid rgb(126 231 215 / 25%); background: rgb(8 15 18 / 46%); }
+.gm-map-tools-slot .tactical-map-settings summary { display: flex; align-items: center; justify-content: space-between; padding: .5rem .6rem; color: var(--redline-teal); font: 700 .58rem var(--font-geist-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
+.gm-map-tools-slot .tactical-map-settings summary::after { color: var(--redline-muted); content: "⌄"; }
+.gm-map-tools-slot .tactical-map-settings[open] summary::after { content: "⌃"; }
+.gm-map-tools-slot .tactical-map-settings > div { width: auto; max-width: none; grid-template-columns: 1fr 1fr; padding: .6rem; border: 0; border-top: 1px solid rgb(126 231 215 / 16%); background: transparent; }
+.gm-map-tools-slot .tactical-map-settings > div > input,
+.gm-map-tools-slot .tactical-map-settings > div > button,
+.gm-map-tools-slot .tactical-map-settings > div > label:first-of-type { grid-column: 1 / -1; }
+.gm-map-tools-slot .tactical-map-settings label { min-width: 0; }
+.gm-map-tools-slot .tactical-map-settings .mesa-secondary { width: 100%; }
+.gm-map-tools-slot .tactical-geometry-toolbar { display: grid; gap: .55rem; margin: 0; padding: .65rem 0 0; border-top: 1px solid rgb(126 231 215 / 18%); }
+.gm-map-tools-slot .tactical-geometry-header { align-items: center; }
+.gm-map-tools-slot .tactical-geometry-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .3rem; padding: .45rem; }
+.gm-map-tools-slot .tactical-geometry-tools-label { grid-column: 1 / -1; margin: 0; }
+.gm-map-tools-slot .tactical-geometry-tools > small { grid-column: 1 / -1; margin: .1rem 0 0; }
+.gm-map-tools-slot .tactical-geometry-workspace { max-height: 32rem; overflow-y: auto; }
+.gm-map-tools-slot .tactical-cover-editor { margin: 0; padding: .6rem; border-left: 2px solid var(--redline-yellow); }
+.gm-map-tools-slot .tactical-cover-editor-grid { grid-template-columns: 1fr; gap: .5rem; }
+.gm-map-tools-slot .tactical-material-picker { flex-wrap: wrap; }
+.gm-map-tools-slot .tactical-material-option { min-width: 0; }
+.gm-map-tools-slot .tactical-hackable-editor { grid-template-columns: 1fr; }
 
 .player-mesa-gm-combatants,
 .player-mesa-gm-turn-state,
@@ -3340,4 +3979,455 @@ select:focus-visible {
   .tactical-cover-editor-heading { align-items: flex-start; flex-direction: column; }
   .tactical-cover-editor-heading .mesa-ghost { width: 100%; }
   .player-mesa-tactical .tactical-cover-editor-grid { grid-template-columns: 1fr; }
+}
+
+/* --------------------------------------------------------------------------
+ * GM / ritmo de leitura
+ *
+ * Todas as telas da central usam o mesmo compasso: uma moldura externa
+ * generosa, blocos separados por uma pausa clara e padding interno constante.
+ * As regras antigas deixavam o editor e o setup de encontros encostados em
+ * filetes contínuos; aqui cada seção ganha espaço próprio sem abandonar a
+ * linguagem editorial do terminal.
+ */
+:root {
+  --redline-gm-gap: clamp(1rem, 1.8vw, 1.5rem);
+  --redline-gm-section-padding: clamp(1.15rem, 2vw, 1.6rem);
+}
+
+.gm-main {
+  padding: clamp(1.5rem, 3vw, 3.5rem) clamp(1.1rem, 3.5vw, 3.5rem) 5rem;
+}
+
+.gm-page {
+  min-width: 0;
+}
+
+/* Catálogo */
+.enemy-page-header {
+  margin-bottom: var(--redline-gm-gap);
+  padding: clamp(1.25rem, 2.2vw, 1.75rem);
+}
+
+.enemy-list-container {
+  display: grid;
+  gap: var(--redline-gm-gap);
+}
+
+.enemy-list-toolbar {
+  margin-bottom: 0;
+  padding-bottom: .85rem;
+}
+
+.enemy-list {
+  gap: var(--redline-gm-gap);
+}
+
+.enemy-list-empty {
+  min-height: 18rem;
+  padding: clamp(2.5rem, 6vw, 4rem) 1.5rem;
+  border: 1px solid var(--redline-line);
+  background: var(--redline-panel);
+}
+
+/* Criar/editar inimigo: cada seção é uma unidade, não uma continuação da
+   anterior. O mesmo respiro vale para Identidade, Atributos, Perícias,
+   Armamento e Condições. */
+.gm-create-page .gm-page-header {
+  margin-bottom: var(--redline-gm-gap);
+}
+
+.gm-create-sections {
+  gap: var(--redline-gm-gap);
+}
+
+.gm-create-section {
+  margin: 0;
+  padding: var(--redline-gm-section-padding);
+  border: 1px solid var(--redline-line);
+  border-left: 2px solid var(--redline-line-bright);
+  background: linear-gradient(100deg, rgb(126 231 215 / 3%), transparent 48%), var(--redline-panel);
+}
+
+.gm-create-section:last-child {
+  border-bottom: 1px solid var(--redline-line);
+}
+
+.gm-create-section-title {
+  margin-bottom: 1.2rem;
+}
+
+.gm-create-page .gm-form-grid {
+  gap: 1.1rem;
+}
+
+.gm-create-page .gm-form-field {
+  margin-bottom: 0;
+}
+
+.gm-create-page .gm-skills-header {
+  margin-bottom: 1.15rem;
+}
+
+.gm-create-page .gm-stats-summary {
+  margin-top: 1.2rem;
+}
+
+.gm-create-page .gm-skill-row,
+.gm-create-page .gm-weapon-row,
+.gm-create-page .gm-condition-row {
+  gap: 1rem;
+  padding: 1rem;
+}
+
+/* Encontros: setup, combate, resumo e histórico precisam respirar como
+   módulos distintos, inclusive quando os dois primeiros cabem lado a lado. */
+.gm-encounters-page .gm-page-header {
+  margin-bottom: var(--redline-gm-gap);
+}
+
+.encounter-setup {
+  gap: var(--redline-gm-gap);
+  padding-bottom: 0;
+}
+
+.encounter-console {
+  border-right: 1px solid var(--redline-line);
+}
+
+.encounter-console-body {
+  gap: 1.2rem;
+  padding: var(--redline-gm-section-padding);
+}
+
+.encounter-console-foot {
+  padding: 1rem var(--redline-gm-section-padding);
+}
+
+.encounter-roster-head {
+  padding: .85rem 1.1rem;
+}
+
+.encounter-roster-item {
+  padding: .8rem 1.1rem;
+}
+
+.encounter-roster-empty {
+  padding: 1.25rem 1.1rem;
+}
+
+.encounter-roster-empty-msg {
+  padding: 1.25rem 1.1rem;
+}
+
+.encounter-setup-saved {
+  margin-top: 0;
+}
+
+.encounter-combat {
+  gap: var(--redline-gm-gap);
+}
+
+.encounter-combat-header {
+  padding: clamp(1.2rem, 2.2vw, 1.6rem);
+}
+
+.encounter-attack-panel {
+  margin: 0;
+  padding: 1rem 1.25rem;
+}
+
+.encounter-participants {
+  gap: var(--redline-gm-gap);
+}
+
+.encounter-participant-card {
+  gap: .75rem;
+  padding: 1.1rem;
+}
+
+.encounter-summary {
+  padding: 1.15rem 1.25rem;
+}
+
+.encounter-saved {
+  gap: var(--redline-gm-gap);
+}
+
+.encounter-saved-header {
+  padding: 1rem 1.1rem;
+}
+
+.encounter-saved-card {
+  gap: 1.25rem;
+  padding: .9rem 1.1rem;
+}
+
+.encounter-saved-list {
+  gap: .65rem;
+}
+
+.encounter-saved-card,
+.encounter-saved-card:first-child {
+  border-top: 1px solid var(--redline-line);
+}
+
+.encounter-history {
+  gap: var(--redline-gm-gap);
+  margin-top: var(--redline-gm-gap);
+}
+
+.encounter-history-header,
+.encounter-history-card {
+  padding: 1rem 1.1rem;
+}
+
+/* Rolagem de dados e detalhe aberto também fazem parte da central: o conteúdo
+   não começa colado no título e cada grupo mantém uma pausa legível. */
+.enemy-dice {
+  padding: 0;
+}
+
+.enemy-dice-header {
+  margin-bottom: var(--redline-gm-gap);
+  padding-bottom: 1.1rem;
+}
+
+.enemy-dice-content {
+  gap: var(--redline-gm-gap);
+}
+
+.enemy-dice-modifier,
+.enemy-dice-section {
+  padding: var(--redline-gm-section-padding);
+}
+
+.enemy-dice-modifier {
+  margin-bottom: 0;
+}
+
+.enemy-detail {
+  padding: 0;
+}
+
+.enemy-detail-header {
+  margin-bottom: var(--redline-gm-gap);
+  padding-bottom: 1.1rem;
+}
+
+.enemy-detail-content {
+  gap: var(--redline-gm-gap);
+}
+
+.enemy-detail-section {
+  padding: var(--redline-gm-section-padding);
+}
+
+@media (max-width: 700px) {
+  .gm-main {
+    padding: 1.25rem .75rem 4rem;
+  }
+
+  .enemy-page-header {
+    margin-bottom: 1rem;
+  }
+
+  .gm-create-section {
+    padding: 1.1rem;
+  }
+
+  .encounter-setup {
+    gap: 1rem;
+  }
+}
+
+@media (max-width: 620px) {
+  .gm-create-sections,
+  .encounter-combat,
+  .encounter-saved,
+  .enemy-dice-content,
+  .enemy-detail-content {
+    gap: 1rem;
+  }
+
+  .gm-create-section {
+    padding: 1rem;
+  }
+
+  .gm-create-page .gm-form-grid {
+    gap: .85rem;
+  }
+
+  .encounter-console {
+    border-right: 1px solid var(--redline-line);
+  }
+
+  .encounter-console-body {
+    gap: .95rem;
+    padding: 1rem;
+  }
+
+  .encounter-console-foot {
+    padding: .95rem 1rem;
+  }
+
+  .encounter-roster-head,
+  .encounter-roster-item,
+  .encounter-roster-empty,
+  .encounter-roster-empty-msg {
+    padding-inline: 1rem;
+  }
+
+  .encounter-participant-card {
+    padding: 1rem;
+  }
+
+  .enemy-dice,
+  .enemy-detail {
+    padding: 0;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * GM / cabeçalhos alinhados ao catálogo
+ *
+ * Inimigos, Criar inimigo e Combate são entradas do mesmo menu. Os dois
+ * últimos deixam de usar o cabeçalho solto e passam a compartilhar a mesma
+ * moldura, hierarquia e alinhamento da tela de catálogo.
+ */
+.gm-create-page .gm-page-header,
+.gm-encounters-page .gm-page-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1.5rem;
+  align-items: center;
+  margin-bottom: var(--redline-gm-gap);
+  padding: clamp(1.25rem, 2.2vw, 1.75rem);
+  border: 1px solid var(--redline-line);
+  background:
+    linear-gradient(100deg, rgb(126 231 215 / 5%), transparent 52%),
+    var(--redline-panel);
+  box-shadow: var(--redline-shadow);
+}
+
+.gm-create-page .gm-page-header-main,
+.gm-encounters-page .gm-page-header-main {
+  display: grid;
+  gap: .3rem;
+  min-width: 0;
+}
+
+.gm-page-eyebrow {
+  color: var(--redline-teal);
+  font: 700 .58rem var(--font-geist-mono), monospace;
+  letter-spacing: .14em;
+}
+
+.gm-create-page .gm-page-title,
+.gm-encounters-page .gm-page-title {
+  color: var(--redline-paper);
+  font-size: clamp(1.8rem, 4vw, 3rem);
+  letter-spacing: -.07em;
+  line-height: .95;
+}
+
+.gm-create-page .gm-page-subtitle,
+.gm-encounters-page .gm-page-subtitle {
+  margin: .15rem 0 0;
+  color: var(--redline-muted);
+  font-size: .76rem;
+}
+
+.gm-create-page .gm-page-header-actions,
+.gm-encounters-page .gm-page-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: .65rem;
+}
+
+.gm-create-page .gm-page-header-actions .gm-button,
+.gm-encounters-page .gm-page-header-actions .gm-button {
+  min-height: 2.55rem;
+  padding: .65rem .85rem;
+  border-radius: var(--redline-radius-sm);
+  font-size: .68rem;
+  letter-spacing: .03em;
+}
+
+.gm-create-page .gm-page-header-actions .gm-button-primary,
+.gm-encounters-page .gm-page-header-actions .gm-button-primary {
+  border-color: var(--redline-coral);
+  background: var(--redline-coral);
+  color: var(--redline-void);
+}
+
+.gm-create-page .gm-page-header-actions .gm-button-primary:hover:not(:disabled),
+.gm-encounters-page .gm-page-header-actions .gm-button-primary:hover:not(:disabled) {
+  box-shadow: 0 0 26px rgb(255 105 92 / 28%);
+}
+
+.gm-create-page .gm-page-header-actions .gm-button-secondary,
+.gm-encounters-page .gm-page-header-actions .gm-button-secondary {
+  border-color: var(--redline-line-bright);
+  color: var(--redline-soft);
+}
+
+.gm-create-page .gm-page-header-actions .gm-button-secondary:hover:not(:disabled),
+.gm-encounters-page .gm-page-header-actions .gm-button-secondary:hover:not(:disabled) {
+  border-color: var(--redline-teal);
+  color: var(--redline-teal);
+  background: rgb(126 231 215 / 5%);
+}
+
+.gm-encounters-page .gm-page-header-actions .gm-phase-chip {
+  min-height: 2.55rem;
+  padding-inline: .65rem;
+}
+
+@media (max-width: 700px) {
+  .gm-create-page .gm-page-header,
+  .gm-encounters-page .gm-page-header {
+    grid-template-columns: 1fr;
+    gap: .85rem;
+    padding: .9rem;
+  }
+
+  .gm-create-page .gm-page-header-actions,
+  .gm-encounters-page .gm-page-header-actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+}
+
+@media (max-width: 620px) {
+  .gm-create-page .gm-page-title,
+  .gm-encounters-page .gm-page-title {
+    font-size: 1.2rem;
+  }
+
+  .gm-create-page .gm-page-subtitle,
+  .gm-encounters-page .gm-page-subtitle {
+    font-size: .78rem;
+  }
+
+  .gm-create-page .gm-page-header-actions,
+  .gm-encounters-page .gm-page-header-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    justify-content: initial;
+  }
+
+  .gm-create-page .gm-page-header-actions .gm-button,
+  .gm-encounters-page .gm-page-header-actions .gm-button {
+    min-width: 0;
+    min-height: 44px;
+    white-space: normal;
+  }
+
+  .gm-encounters-page .gm-page-header-actions .gm-phase-chip {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
 }

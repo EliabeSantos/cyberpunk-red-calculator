@@ -270,6 +270,10 @@ function fromEncounterParticipant(
         name: participant.weaponName,
         damage: participant.damageExpression,
         skill: participant.weaponSkillId,
+        // Armas do inimigo usam o mesmo catálogo de armas do Player. O id do
+        // participante é a referência canônica quando o encontro não tem um
+        // campo separado de catalogItemId.
+        ...(participant.weaponId ? { catalogItemId: participant.weaponId } : {}),
         ...pickDefined({ attackType: encounterAttackType(participant.weaponAttackType), rateOfFire: participant.weaponRateOfFire, requiresTwoHands: participant.requiresTwoHands }),
         // Base pronta do encontro (F1.7): é o número que
         // `combat/enemyAttacks.ts` soma hoje (`p.attackBase`); a ficha não

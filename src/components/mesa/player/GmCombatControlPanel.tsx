@@ -17,7 +17,9 @@ import {
 import { evaluateMesaAction } from "@/lib/mesa/actionGate";
 import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
 import { getTacticalCoverProfile } from "@/lib/mesa/tacticalCoverCatalog";
+import { rangeBandLabel } from "@/lib/combat/weaponRange";
 import type { CombatWeapon } from "@/lib/combat/contract";
+import type { AvailableAttack } from "@/types/attack";
 import type { MesaState } from "@/lib/mesa/types";
 import type { RunAction } from "./types";
 
@@ -25,13 +27,16 @@ interface Props {
   state: MesaState;
   busy: boolean;
   run: RunAction;
-  metadata: Record<string, CombatWeapon[]>;
+  metadata: Record<string, { weapons: CombatWeapon[]; attacks: AvailableAttack[] }>;
   sessionFinished: boolean;
   controlledCombatantId: string | null;
   selectedTargetId: string;
-  onSelectTarget: (combatantId: string) => void;
   selectedWeaponId: string;
   onSelectWeapon: (weaponId: string) => void;
+  selectedAttackId: string;
+  onSelectAttack: (attackId: string) => void;
+  controlMode: "enemy" | "map";
+  onControlModeChange: (mode: "enemy" | "map") => void;
 }
 
 type AttackMode = "normal" | "aimed";
@@ -45,9 +50,12 @@ export default function GmCombatControlPanel({
   sessionFinished,
   controlledCombatantId,
   selectedTargetId,
-  onSelectTarget,
   selectedWeaponId,
   onSelectWeapon,
+  selectedAttackId,
+  onSelectAttack,
+  controlMode,
+  onControlModeChange,
 }: Props) {
   const [moveDraft, setMoveDraft] = useState("");
   const [attackMode, setAttackMode] = useState<AttackMode>("normal");
@@ -57,8 +65,13 @@ export default function GmCombatControlPanel({
 
   const players = state.combatants.filter((combatant) => combatant.kind === "character" && !combatant.isDead);
   const selected = state.combatants.find((combatant) => combatant.id === controlledCombatantId) ?? null;
-  const weapons = selected ? metadata[selected.id] ?? [] : [];
-  const selectedWeapon = weapons.find((weapon) => weapon.id === selectedWeaponId) ?? weapons[0] ?? null;
+  const control = selected ? metadata[selected.id] ?? { weapons: [], attacks: [] } : { weapons: [], attacks: [] };
+  const weapons = control.weapons;
+  const attacks = control.attacks;
+  const selectedAttack = attacks.find((attack) => attack.id === selectedAttackId) ?? attacks[0] ?? null;
+  const selectedWeapon = selectedAttack?.context.weaponId
+    ? weapons.find((weapon) => weapon.id === selectedAttack.context.weaponId) ?? null
+    : null;
   const target = players.find((combatant) => combatant.id === selectedTargetId) ?? players[0] ?? null;
   const coverObstacleId = tacticalCoverObstacleId(selectedTargetId);
   const selectedCover = coverObstacleId
@@ -83,7 +96,7 @@ export default function GmCombatControlPanel({
     : { ok: false, message: "Selecione um inimigo." };
 
   async function doAttack() {
-    if (!selected || (!target && !coverObstacleId) || !selectedWeapon || busy) return;
+    if (!selected || (!target && !coverObstacleId) || !selectedAttack || busy) return;
     setAttackError(null);
     setFeedback(null);
     await run(
@@ -93,13 +106,14 @@ export default function GmCombatControlPanel({
           actorId: selected.id,
           targetId: coverObstacleId ? "" : target?.id ?? "",
           ...(coverObstacleId ? { targetType: "cover" as const, obstacleId: coverObstacleId } : {}),
-          weaponId: selectedWeapon.id,
-          skillId: selectedWeapon.skill,
-          attackType: selectedWeapon.attackType,
+           ...(selectedAttack.context.weaponId ? { weaponId: selectedAttack.context.weaponId } : {}),
+           skillId: selectedAttack.context.skillId ?? selectedWeapon?.skill,
+           attackType: selectedWeapon?.attackType ?? selectedAttack.context.type,
           attackMode,
           ...(attackMode === "aimed" ? { aimedTarget } : {}),
         });
-        setFeedback(`${selected.name} atacou ${coverObstacleId ? "a Cover" : target?.name ?? "o alvo"}.${result.coverDamage ? ` Cover: ${result.coverDamage.hpBefore}→${result.coverDamage.hpAfter} HP${result.coverDamage.destroyed ? " · DESTRUÍDA" : ""}` : result.tacticalCover ? ` Cover: ${result.tacticalCover.status.toUpperCase()} (${result.tacticalCover.blockedSamples}/${result.tacticalCover.totalSamples})${result.tacticalCover.status !== "clear" ? " · sem modificador mecânico definido" : ""}` : ""}`);
+         const range = result.weaponRange?.status === "valid" ? ` Alcance: ${rangeBandLabel(result.weaponRange.band)} · DV ${result.weaponRange.dv} · ${result.weaponRange.distanceMeters}m.` : "";
+         setFeedback(`${selected.name} atacou ${coverObstacleId ? "a Cover" : target?.name ?? "o alvo"}.${range}${result.coverDamage ? ` Cover: ${result.coverDamage.hpBefore}→${result.coverDamage.hpAfter} HP${result.coverDamage.destroyed ? " · DESTRUÍDA" : ""}` : result.tacticalCover ? ` Cover: ${result.tacticalCover.status.toUpperCase()} (${result.tacticalCover.blockedSamples}/${result.tacticalCover.totalSamples})${result.tacticalCover.status !== "clear" ? " · sem modificador mecânico definido" : ""}` : ""}`);
       },
       { onError: (message, code) => setAttackError(formatAttackGatewayError(message, code)) },
     );
@@ -164,8 +178,15 @@ export default function GmCombatControlPanel({
     <section className="player-mesa-panel player-mesa-gm-control" aria-label="GM control">
       <div className="player-mesa-section-heading">
         <span className="mesa-eyebrow">GM CONTROL</span>
-        <strong>{selected ? selected.name : "Selecione um inimigo"}</strong>
+        <strong>{controlMode === "map" ? "Mapa tático" : selected ? selected.name : "Selecione um inimigo"}</strong>
       </div>
+
+      <div className="gm-control-switch" role="tablist" aria-label="Modo de controle do GM">
+        <button type="button" role="tab" aria-selected={controlMode === "enemy"} className={controlMode === "enemy" ? "is-active" : ""} onClick={() => onControlModeChange("enemy")}>INIMIGOS</button>
+        <button type="button" role="tab" aria-selected={controlMode === "map"} className={controlMode === "map" ? "is-active" : ""} onClick={() => onControlModeChange("map")}>MAPA / HACK</button>
+      </div>
+
+      {controlMode === "map" ? <div className="gm-map-mode-hint"><span className="mesa-eyebrow">MAPA TÁTICO</span><strong>Ferramentas do mapa</strong><p>As opções de edição ficam aqui para liberar espaço no campo central.</p><div id={`gm-map-tools-slot-${state.session.id}`} className="gm-map-tools-slot" /><button type="button" className="mesa-secondary" onClick={() => onControlModeChange("enemy")}>Voltar ao controle de inimigos</button></div> : <>
 
       <div className="player-mesa-gm-turn-actions">
         {!state.combat?.initiativeStarted && state.combat?.status === "active" && (
@@ -226,7 +247,11 @@ export default function GmCombatControlPanel({
                         className="player-mesa-gm-weapon-select"
                         disabled={busy}
                         aria-pressed={isSelected}
-                        onClick={() => onSelectWeapon(weapon.id ?? "")}
+                        onClick={() => {
+                          onSelectWeapon(weapon.id ?? "");
+                          const attack = attacks.find((candidate) => candidate.context.weaponId === weapon.id);
+                          if (attack) onSelectAttack(attack.id);
+                        }}
                       >
                         <strong>{weapon.name}</strong>
                         <span>{hasMagazine ? `${typeof ammo === "number" ? ammo : "—"}/${weapon.magazine}` : "Sem magazine"}</span>
@@ -284,23 +309,27 @@ export default function GmCombatControlPanel({
                   );
                 })}
               </ul>
-            )}
-          </section>
+       )}
+    </section>
 
-          <label className="player-mesa-gm-target">
-            Alvo
-             <select value={selectedTargetId} disabled={busy || (players.length === 0 && !selectedCover)} onChange={(event) => onSelectTarget(event.target.value)}>
-               {selectedCover && <option value={selectedTargetId}>Cover · {selectedCover.coverHP ?? "—"} HP</option>}
-               {players.length === 0 ? <option value="">Nenhum Player disponível</option> : players.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}
-             </select>
-           </label>
-           {selectedCover && <div className="player-mesa-target-readout" aria-label="Alvo Cover">
+            {selectedCover && <div className="player-mesa-target-readout" aria-label="Alvo Cover">
              <strong>ALVO: COVER</strong>
              <span>DV para atacar: {selectedCover.coverDV ?? "não definido"}</span>
              <span>HP: {selectedCover.coverHP ?? "não definido"}{selectedCoverProfile ? ` / ${selectedCoverProfile.hp}` : ""}</span>
            </div>}
 
-          <label className="player-mesa-gm-target">
+           <label className="player-mesa-gm-target">
+             Ataque
+             <select value={selectedAttack?.id ?? ""} disabled={busy || attacks.length === 0} onChange={(event) => {
+               const attack = attacks.find((candidate) => candidate.id === event.target.value);
+               onSelectAttack(event.target.value);
+               if (attack?.context.weaponId) onSelectWeapon(attack.context.weaponId);
+             }}>
+               {attacks.length === 0 ? <option value="">Nenhum ataque disponível</option> : attacks.map((attack) => <option key={attack.id} value={attack.id}>{attack.label}</option>)}
+             </select>
+           </label>
+
+           <label className="player-mesa-gm-target">
             Ataque
             <select value={attackMode} disabled={busy} onChange={(event) => setAttackMode(event.target.value as AttackMode)}>
               <option value="normal">Normal</option>
@@ -319,7 +348,7 @@ export default function GmCombatControlPanel({
           )}
 
           <div className="player-mesa-gm-actions">
-            <button type="button" className="mesa-primary" disabled={busy || sessionFinished || !actionGate.ok || (!target && !coverObstacleId) || !selectedWeapon} title={actionGate.message || undefined} onClick={() => void doAttack()}>
+             <button type="button" className="mesa-primary" disabled={busy || sessionFinished || !actionGate.ok || (!target && !coverObstacleId) || !selectedAttack} title={actionGate.message || undefined} onClick={() => void doAttack()}>
               {busy ? "PROCESSANDO..." : attackMode === "aimed" ? "[ AIMED ATTACK ]" : "[ ATTACK ]"}
             </button>
             <div className="player-mesa-gm-move">
@@ -333,7 +362,8 @@ export default function GmCombatControlPanel({
 
       {attackError && <p className="player-mesa-error" role="alert">{attackError}</p>}
       {feedback && <p className="player-mesa-feedback" role="status">{feedback}</p>}
-      {!selected && <p className="mesa-hint">Nenhum inimigo disponível para controle.</p>}
+       {!selected && <p className="mesa-hint">Nenhum inimigo disponível para controle.</p>}
+       </>}
     </section>
   );
 }

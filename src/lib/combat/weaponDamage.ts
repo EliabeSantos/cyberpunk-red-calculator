@@ -73,6 +73,8 @@
  * `client-only` nem `Math.random()` (passa pela rede de `combat-purity`).
  */
 import { browserRandom, rollDice, rollDiceWith } from "@/lib/dice";
+import { getUnarmedDamageDice } from "@/lib/attacks";
+import { getCyberwareUnarmedDamageModifiers, hasInstalledCyberarm } from "@/lib/cyberwareEffects";
 import type { DiceResult } from "@/lib/dice";
 import type {
   AttackResult,
@@ -134,9 +136,31 @@ export function rollWeaponDamage(
   }
 
   if (!attack.weaponId) {
-    return recusa(
-      `Ataque "${attack.label}" sem weaponId: o dano só é resolvido para armas identificadas.`,
-    );
+    // Brawling/Martial Arts/Weaponless já possuem a definição canônica de
+    // dano na ficha (`getUnarmedDamageDice`). O ataque continua atravessando
+    // este mesmo resolver de dano; apenas não há stableItemId para procurar.
+    if (attack.attackType !== "brawling" && attack.attackType !== "martial_arts" && attack.attackType !== "unarmed") {
+      return recusa(
+        `Ataque "${attack.label}" sem weaponId: o dano só é resolvido para armas identificadas.`,
+      );
+    }
+    const body = actor.stats?.BODY;
+    if (typeof body !== "number") return recusa(`Ataque "${attack.label}" sem BODY server-side.`);
+    const cyberware = (actor.cyberware ?? []).map((item) => ({
+      id: item.catalogItemId ?? item.name,
+      name: item.name,
+      installedAt: "",
+      ...(item.catalogItemId ? { catalogItemId: item.catalogItemId } : {}),
+      ...(item.activeStage !== undefined ? { activeStage: item.activeStage } : {}),
+    }));
+    const bonus = getCyberwareUnarmedDamageModifiers({ cyberware }).reduce((sum, modifier) => sum + modifier.value, 0);
+    const expression = getUnarmedDamageDice(body, bonus, hasInstalledCyberarm({ cyberware }));
+    try {
+      rollDiceWith(expression, () => 1);
+    } catch {
+      return recusa(`Expressão de dano inválida: ${expression}`);
+    }
+    return { ok: true, roll: rollDice(expression, rng) };
   }
 
   const weapon = actor.weapons?.find((candidate) => candidate.id === attack.weaponId);

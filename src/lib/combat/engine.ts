@@ -840,7 +840,16 @@ function executeAttack(state: CombatState, action: AttackAction, rng: RandomSour
   // A recusa continua ANTES de qualquer sorteio: "não pode pagar" é a mesma
   // semântica do F1.8C (`ammo <= 0` = custo 1) generalizada para o custo do
   // modo — sem RNG consumido e sem estado novo.
-  if (resolved.weaponId) {
+  // Armas sem magazine (armas melee catalogadas) não usam munição. A
+  // presença de `weaponId` identifica a arma para dano/auditoria, mas não
+  // transforma uma arma sem pente em arma de fogo.
+  const resolvedWeapon = resolved.weaponId
+    ? actor.weapons?.find((weapon) => weapon.id === resolved.weaponId)
+    : undefined;
+  const consumesAmmo = Boolean(
+    resolved.weaponId && resolvedWeapon && (resolvedWeapon.ammo !== undefined || resolvedWeapon.magazine !== undefined),
+  );
+  if (consumesAmmo) {
     const weapon = actor.weapons?.find((w) => w.id === resolved.weaponId);
     const ammo = weapon?.ammo ?? 0;
     if (ammo < ammoCost) {
@@ -886,9 +895,9 @@ function executeAttack(state: CombatState, action: AttackAction, rng: RandomSour
   let ammoChange: CombatStateChange | null = null;
   let finalState = state;
 
-  if (resolved.weaponId) {
+  if (consumesAmmo) {
     try {
-      const ammoResult = consumeAmmo(state, action.actorId, resolved.weaponId, ammoCost);
+       const ammoResult = consumeAmmo(state, action.actorId, resolved.weaponId!, ammoCost);
       finalState = ammoResult.state;
       ammoChange = ammoResult.change;
     } catch {

@@ -34,8 +34,8 @@ export function rollQuickhack(
     return { error: `Quickhack "${quickhackId}" não encontrado.`, character };
   }
 
-  // Use the Interface rank from the Netrunner role ability (section 02),
-  // not the skill level, as they can get out of sync.
+  // F1.51: use only the Interface Role Ability rank. The legacy Skill field
+  // is intentionally not consulted.
   const interfaceRank = character.roleAbilities.find(
     (ra) => ra.abilityId === "interface",
   )?.rank ?? 0;

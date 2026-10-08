@@ -18,19 +18,30 @@ interface Props {
   me: MesaCombatant | null;
   /** Nome da ficha local vinculada, quando existe. */
   characterName: string | null;
+  isGM?: boolean;
+  isControllingEnemy?: boolean;
 }
 
-export default function PlayerStatusPanel({ me, characterName }: Props) {
+export default function PlayerStatusPanel({
+  me,
+  characterName,
+  isGM = false,
+  isControllingEnemy = false,
+}: Props) {
   return (
     <section className="player-mesa-panel player-mesa-self">
       <div className="player-mesa-section-heading">
-        <span className="mesa-eyebrow">SEU PERSONAGEM</span>
-        <strong>{me?.name ?? "Sem personagem vinculado"}</strong>
+        <span className="mesa-eyebrow">{isControllingEnemy ? "INIMIGO CONTROLADO" : "SEU PERSONAGEM"}</span>
+        <strong>
+          {me?.name ?? (isGM ? "Nenhum inimigo selecionado" : "Sem personagem vinculado")}
+        </strong>
       </div>
 
       {!me ? (
         <p className="mesa-hint">
-          Vincule uma ficha (no bloco <b>Vínculo</b> abaixo) para entrar no combate.
+          {isGM
+            ? "Selecione um inimigo na ordem de iniciativa para controlar seus turnos e ações."
+            : <>Vincule uma ficha (no bloco <b>Vínculo</b> abaixo) para entrar no combate.</>}
         </p>
       ) : (
         <>
@@ -112,15 +123,17 @@ export default function PlayerStatusPanel({ me, characterName }: Props) {
           </div>
 
           <p className="mesa-hint">
-            {characterName ? (
-              <>
-                Ficha vinculada: <b>{characterName}</b>
-                {" · "}
-                <Link href="/">abrir ficha</Link>
-              </>
-            ) : (
-              "Nenhuma ficha local correspondente — os dados acima vêm só da Mesa."
-            )}
+            {isControllingEnemy
+              ? "Dados do inimigo controlado vêm do estado autoritativo da Mesa."
+              : characterName ? (
+                <>
+                  Ficha vinculada: <b>{characterName}</b>
+                  {" · "}
+                  <Link href="/">abrir ficha</Link>
+                </>
+              ) : (
+                "Nenhuma ficha local correspondente — os dados acima vêm só da Mesa."
+              )}
           </p>
         </>
       )}

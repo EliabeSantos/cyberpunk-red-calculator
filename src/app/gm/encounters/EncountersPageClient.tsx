@@ -625,7 +625,8 @@ export default function EncountersPageClient() {
   return (
     <div className="gm-page gm-encounters-page">
       <header className="gm-page-header">
-        <div>
+        <div className="gm-page-header-main">
+          <span className="gm-page-eyebrow">OPERAÇÃO // ENCONTROS</span>
           <h1 className="gm-page-title">Combate / Encontros</h1>
           <p className="gm-page-subtitle">{pageSubtitle}</p>
         </div>

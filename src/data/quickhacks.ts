@@ -12,6 +12,7 @@ export interface Quickhack {
   effect: string;
   duration: string;
   notes?: string;
+  ramCost: number;
 }
 
 export const quickhackDefinitions: Record<string, Quickhack> = {
@@ -25,6 +26,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "Reduz MOVE em 1. Se MOVE chegar a 0, não pode fazer Move Action.",
     duration: "60 s / 20 rodadas",
     notes: "",
+    ramCost: 2,
   },
   sonic_shock: {
     id: "sonic_shock",
@@ -36,6 +38,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "Aplica Damaged Ear sem o dano adicional da Critical Injury.",
     duration: "60 s / 20 rodadas",
     notes: "",
+    ramCost: 2,
   },
   overheat: {
     id: "overheat",
@@ -47,6 +50,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "Alvo pega fogo e sofre 4 HP de dano no final de cada turno. Ignora SP e não causa ablação.",
     duration: "Até apagar",
     notes: "Dano ignora SP",
+    ramCost: 3,
   },
   short_circuit: {
     id: "short_circuit",
@@ -58,6 +62,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "Desativa 3 peças de cyberware escolhidas pelo GM.",
     duration: "60 s / 20 rodadas",
     notes: "",
+    ramCost: 3,
   },
   cyberware_malfunction: {
     id: "cyberware_malfunction",
@@ -69,6 +74,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "Desativa 1 peça de cyberware escolhida pelo Netrunner.",
     duration: "60 s / 20 rodadas",
     notes: "",
+    ramCost: 2,
   },
   lure: {
     id: "lure",
@@ -80,6 +86,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "No início do próximo turno, o Netrunner controla a Move Action do alvo. Não pode fazê-lo entrar em perigo óbvio.",
     duration: "Próximo turno",
     notes: "Requer que o alvo não saiba que foi hackeado",
+    ramCost: 3,
   },
   slow: {
     id: "slow",
@@ -91,6 +98,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "Reduz MOVE em 1d6. Se chegar a 0, não pode fazer Move Action.",
     duration: "60 s / 20 rodadas",
     notes: "",
+    ramCost: 2,
   },
   synapse_burnout: {
     id: "synapse_burnout",
@@ -102,6 +110,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "Causa 3d6 HP de dano. Ignora SP e não causa ablação.",
     duration: "Instantâneo",
     notes: "Dano ignora SP",
+    ramCost: 4,
   },
   puppet: {
     id: "puppet",
@@ -113,6 +122,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "Netrunner controla a Action e Move Action do alvo no próximo turno.",
     duration: "Próximo turno",
     notes: "Os testes continuam usando as estatísticas do alvo",
+    ramCost: 5,
   },
   shard_ejection: {
     id: "shard_ejection",
@@ -124,6 +134,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "Ejeta um chipware do alvo para um espaço adjacente.",
     duration: "Instantâneo",
     notes: "",
+    ramCost: 2,
   },
   system_reset: {
     id: "system_reset",
@@ -135,6 +146,7 @@ export const quickhackDefinitions: Record<string, Quickhack> = {
     effect: "Deixa o alvo Unconscious e Prone. Sofrer dano pode acordá-lo.",
     duration: "60 s / 20 rodadas",
     notes: "",
+    ramCost: 5,
   },
 };
 
@@ -167,12 +179,11 @@ export const quickhackCategoryNames: Record<QuickhackCategory, string> = {
 };
 
 export function getQuickhacksForCharacter(character: { skills: Record<string, { level: number }>; roleAbilities?: { abilityId: string; rank: number }[]; primaryRole?: string | null }): Quickhack[] {
-  // Quickhacks só estão disponíveis para personagens com Interface ou que sejam Netrunner
-  const hasInterface = character.skills?.interface && character.skills.interface.level > 0;
+  // F1.51: Interface Role Ability é a única autoridade. O campo legado da
+  // Skill permanece nas fichas, mas não concede acesso nem altera cálculos.
   const isNetrunner = character.primaryRole === "netrunner" || 
     (character.roleAbilities?.some((ra) => ra.abilityId === "interface" && ra.rank > 0) ?? false);
-  
-  if (!hasInterface && !isNetrunner) {
+  if (!isNetrunner) {
     return [];
   }
   

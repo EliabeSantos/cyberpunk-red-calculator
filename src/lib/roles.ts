@@ -3,7 +3,11 @@ import type { Character } from "@/types/character";
 import type { RoleAbilityId, RoleAbilityState, RoleId } from "@/types/roles";
 
 export function getRoleAbilityIPCost(nextRank: number): number { return nextRank >= 1 && nextRank <= 10 ? nextRank * 60 : 0; }
-export function getNetActionsPerTurn(rank: number): number { return rank >= 10 ? 5 : rank >= 7 ? 4 : rank >= 4 ? 3 : 2; }
+/** F1.51 RAW: Rank 1–3 = 2, 4–6 = 3, 7–9 = 4, 10 = 5. */
+export function getNetActionsPerTurn(rank: number): number {
+  const normalized = Number.isFinite(rank) ? Math.max(0, Math.floor(rank)) : 0;
+  return normalized >= 10 ? 5 : normalized >= 7 ? 4 : normalized >= 4 ? 3 : 2;
+}
 export function getMakerSpecialtyPoints(rank: number): number { return rank * 2; }
 export function getMedicineSpecialtyPoints(rank: number): number { return rank; }
 export function getSurgerySkillFromMedicine(ability: RoleAbilityState): number { return (ability.specialties?.surgery ?? 0) * 2; }
@@ -30,7 +34,8 @@ export function addPrimaryRole(character: Character, roleId: RoleId): Character 
   const definition = roleDefinitions[roleId];
   const newRoleAbilities = [{ roleId, abilityId: definition.abilityId, rank: 4 }];
   
-  // Netrunner gets Interface skill at rank 4 by default
+  // Legacy compatibility: the old skill field remains in serialized sheets,
+  // but Interface Role Ability is the sole Netrunner authority.
   const updatedSkills = roleId === "netrunner"
     ? { ...character.skills, interface: { ...character.skills.interface, level: 4 } }
     : character.skills;
@@ -47,7 +52,7 @@ export function addPrimaryRole(character: Character, roleId: RoleId): Character 
 }
 export function canMulticlass(character: Character): boolean { return !!character.roleAbilities.at(-1) && character.roleAbilities.at(-1)!.rank >= 4; }
 export function addMulticlassRole(character: Character, roleId: RoleId): Character | null { if (!canMulticlass(character) || character.roleAbilities.some((item) => item.roleId === roleId)) return null; const definition = roleDefinitions[roleId]; const newAbility = { roleId, abilityId: definition.abilityId, rank: 1 }; const updatedSkills = roleId === "netrunner" && (character.skills.interface?.level ?? 0) < 1 ? { ...character.skills, interface: { ...character.skills.interface, level: 1 } } : character.skills; return { ...character, roleAbilities: [...character.roleAbilities, newAbility], skills: updatedSkills }; }
-export function spendIPOnRoleAbility(character: Character, roleId: RoleId): Character | null { const ability = character.roleAbilities.find((item) => item.roleId === roleId); if (!ability || ability.rank >= 10) return null; const nextRank = ability.rank + 1; const cost = getRoleAbilityIPCost(nextRank); if (character.ip < cost) return null; const updatedSkills = roleId === "netrunner" ? { ...character.skills, interface: { ...character.skills.interface, level: nextRank } } : character.skills; return { ...character, ip: character.ip - cost, progression: { improvementPoints: character.ip - cost }, roleAbilities: character.roleAbilities.map((item) => item === ability ? { ...item, rank: nextRank } : item), skills: updatedSkills }; }
+export function spendIPOnRoleAbility(character: Character, roleId: RoleId): Character | null { const ability = character.roleAbilities.find((item) => item.roleId === roleId); if (!ability || ability.rank >= 10) return null; const nextRank = ability.rank + 1; const cost = getRoleAbilityIPCost(nextRank); if (character.ip < cost) return null; return { ...character, ip: character.ip - cost, progression: { improvementPoints: character.ip - cost }, roleAbilities: character.roleAbilities.map((item) => item === ability ? { ...item, rank: nextRank } : item) }; }
 export function setRoleSpecialties(character: Character, roleId: RoleId, specialties: Record<string, number>): Character | null {
   const ability = character.roleAbilities.find((item) => item.roleId === roleId);
   if (!ability) return null;

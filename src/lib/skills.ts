@@ -4,6 +4,7 @@ import { getCriticalInjuryModifiers, getWoundPenalty } from "@/lib/calculations"
 import { getCyberwarePhysicalModifiers, getCyberwareSkillModifierFor } from "@/lib/cyberwareEffects";
 import type { Character, Skill, RollHistoryEntry } from "@/types/character";
 import type { SkillCheckActionContext } from "@/lib/combat/contract";
+import type { RandomSource } from "@/lib/combat/contract";
 
 /** Registro de check de perícia no histórico */
 interface SkillCheckHistoryEntry {
@@ -32,7 +33,7 @@ interface SkillCheckHistoryEntry {
 export function rollSkillCheck(
   character: Character,
   skillId: string,
-  options: { actionContext?: SkillCheckActionContext } = {},
+  options: { actionContext?: SkillCheckActionContext; rng?: RandomSource } = {},
 ): {
   character: Character;
   result: SkillCheckResult;
@@ -155,7 +156,7 @@ export function rollSkillCheck(
   let isFumble = false;
   
   function rollExplodingD10(): number {
-    const roll = rollDice("1d10");
+    const roll = rollDice("1d10", options.rng);
     const rollValue = roll.rolls[0];
     allRolls.push({ value: rollValue, type: "normal" });
     diceTotal += rollValue;

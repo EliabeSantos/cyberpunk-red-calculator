@@ -1,4 +1,4 @@
-/** F1.14.3 — movimento do Player no Postgres real, sem coordenadas. */
+/** F1.14.3 — movimento do Player no Postgres real, por metros ou coordenadas. */
 import assert from "node:assert/strict";
 import test, { after } from "node:test";
 import { randomUUID } from "node:crypto";
@@ -77,6 +77,34 @@ postgresTest("setup", async () => {
   }
 });
 
+postgresTest("trajetória bloqueada é rejeitada pelo servidor para Player e GM sem débito", async () => {
+  const { error: mapError } = await db!.from("mesa_sessions").update({ tactical_map: {
+    imageUrl: "", enabled: true, width: 1000, height: 600, pixelsPerMeter: 50,
+    geometry: {
+      walls: [{ id: "gateway-wall", type: "wall", start: { x: 0.5, y: 0.2 }, end: { x: 0.5, y: 0.8 }, thickness: 0.02 }],
+      doors: [],
+    },
+  } }).eq("id", sessionId);
+  assert.ifError(mapError);
+  const { error: positionError } = await db!.from("mesa_combatants").update({ position: { x: 0.1, y: 0.5 } }).in("id", [actorId, enemyId]);
+  assert.ifError(positionError);
+  const beforePlayer = await budget(actorId);
+  const beforeEnemy = await budget(enemyId);
+  const targetPosition = { x: 0.9, y: 0.5 };
+
+  const player = await post(playerToken, { resolutionId: randomUUID(), actorCombatantId: actorId, targetPosition });
+  assert.equal(player.status, 409, JSON.stringify(player.body));
+  assert.equal(player.body.code, "movement_blocked");
+  const gm = await post(gmToken, { resolutionId: randomUUID(), actorCombatantId: enemyId, targetPosition });
+  assert.equal(gm.status, 409, JSON.stringify(gm.body));
+  assert.equal(gm.body.code, "movement_blocked");
+  assert.deepEqual(await budget(actorId), beforePlayer);
+  assert.deepEqual(await budget(enemyId), beforeEnemy);
+
+  const { error: restoreError } = await db!.from("mesa_sessions").update({ tactical_map: {} }).eq("id", sessionId);
+  assert.ifError(restoreError);
+});
+
 postgresTest("1/8/10/13: move 0 Action; replay não move de novo; estado normal da Mesa", async () => {
   const body = intent(4);
   const first = await post(playerToken, body);
@@ -149,7 +177,7 @@ postgresTest("6/7/9: distância inválida/excessiva e estado derivado recusados"
   const excess = await post(playerToken, intent(9));
   assert.equal(excess.body.code, "movement_exhausted");
   for (const extra of [{ position: { x: 1 } }, { movementRemaining: 12 }, { actionsRemaining: 2 },
-    { hp: 99 }, { armor: 0 }, { initiative: 10 }, { activeCombatant: actorId },
+    { hp: 99 }, { armor: 0 }, { initiative: 10 }, { activeCombatant: actorId }, { isValid: true },
     { round: 2 }, { turn: 2 }]) {
     const refused = await post(playerToken, { ...intent(1), ...extra });
     assert.equal(refused.status, 400, JSON.stringify(extra));

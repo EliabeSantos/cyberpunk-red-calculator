@@ -76,10 +76,10 @@ export default function CharacterToolkit() {
     return {
       sessionId: state.session.id,
       actorId: actor.id,
-      targets: state.combatants.map((combatant) => ({
+       targets: state.combatants.filter((combatant) => combatant.kind !== "net_ice").map((combatant) => ({
         id: combatant.id,
         name: combatant.name,
-        kind: combatant.kind,
+         kind: combatant.kind as "character" | "enemy",
         isDead: combatant.isDead,
       })),
       onRefresh: mesa.refresh,

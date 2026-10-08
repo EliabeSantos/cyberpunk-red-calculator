@@ -8,7 +8,8 @@
  *   2. polling de segurança a cada 4s         → cobre Realtime indisponível
  *      (env pública ausente, projeto sem Realtime, rede instável).
  *
- * O snapshot vem SEMPRE do servidor validado; o cliente só desenha.
+ * O snapshot vem SEMPRE do GET server-side validado; o Realtime só invalida
+ * cache e o cliente então busca a projeção própria do viewer.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -62,8 +63,8 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
 
   const applySnapshot = useCallback((snapshot: MesaSnapshot, expectedSessionId: string) => {
     if (!acceptsSnapshot(snapshot, expectedSessionId)) return false;
-    // O broadcast não traz `viewer` (é igual para todos, exceto quem pergunta):
-    // preserva o do último GET para os botões continuarem certos.
+    // Mantido para compatibilidade com snapshots antigos; o Realtime atual só
+    // envia invalidação e nunca chama este caminho com dados de combatants.
     setState((previous) => ({
       ...snapshot,
       viewer: previous?.session.id === snapshot.session.id
@@ -144,13 +145,10 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
       if (disposed) return;
       subscription = subscribeMesaState(
         sessionId,
-        (snapshot) => {
-          if (disposed) return;
-          realtimeActiveRef.current = true;
-          setRealtime(true);
-          stopPolling();
-           applySnapshot(snapshot, sessionId);
-        },
+         () => {
+           // O Realtime atual publica somente invalidação; o GET autenticado
+           // abaixo é a única fonte do snapshot aplicado à tela.
+         },
         (status) => {
           if (disposed) return;
           if (status === "SUBSCRIBED") {
@@ -166,8 +164,15 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
             setRealtime(false);
             startPolling();
           }
-        },
-      );
+         },
+         () => {
+           if (disposed) return;
+           realtimeActiveRef.current = true;
+           setRealtime(true);
+           stopPolling();
+           void refresh();
+         },
+       );
 
       if (!subscription) {
         // Sem Realtime disponível: já cai no polling.

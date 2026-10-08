@@ -1,8 +1,8 @@
 /**
  * Assinatura do estado da mesa no Supabase Realtime (NAVEGADOR).
  *
- * É só transporte: quem VALIDA continua sendo o servidor. O payload recebido é
- * um snapshot já autorizado — o mesmo que o GET devolveria.
+ * É só transporte: o canal compartilhado publica uma invalidação, nunca o
+ * snapshot com combatants. O GET autenticado devolve a projeção do viewer.
  *
  * Se a env pública não existir ou a conexão falhar, `subscribeMesaState` devolve
  * `null` e o chamador usa polling (ver `useMesaState`).
@@ -17,6 +17,8 @@ export type MesaSnapshot = Omit<MesaState, "viewer">;
 export interface MesaSubscription {
   close: () => void;
 }
+
+export type MesaInvalidation = { sessionId?: string };
 
 interface CachedPublicClient {
   url: string;
@@ -47,13 +49,16 @@ function publicClient(url: string, key: string): SupabaseClient {
 }
 
 /**
- * Assina o canal da mesa. `onState` recebe o snapshot completo.
+ * Assina o canal da mesa. O callback de snapshot é mantido na assinatura por
+ * compatibilidade, mas payloads `state` compartilhados são deliberadamente
+ * ignorados: somente o GET autenticado pode entregar a projeção do viewer.
  * Devolve `null` quando o Realtime não está disponível neste ambiente.
  */
 export function subscribeMesaState(
   sessionId: string,
-  onState: (state: MesaSnapshot) => void,
+  _onState: (state: MesaSnapshot) => void,
   onStatus?: (status: string) => void,
+  onInvalidate?: (invalidation: MesaInvalidation) => void,
 ): MesaSubscription | null {
   const env = publicEnv();
   if (!env) return null;
@@ -63,8 +68,11 @@ export function subscribeMesaState(
     const channel = client
       .channel(mesaChannelName(sessionId))
       .on("broadcast", { event: "state" }, (message) => {
-        const payload = (message ?? {}) as { state?: MesaSnapshot };
-        if (payload.state) onState(payload.state);
+        const payload = (message ?? {}) as { state?: MesaSnapshot; invalidate?: boolean; sessionId?: string };
+        // Nunca aceitar snapshot vindo do canal compartilhado. Além de evitar
+        // vazamento de uma projeção de outro Player, isso impede que um cliente
+        // publique um estado forjado para a UI de outro navegador.
+        if (payload.invalidate === true) onInvalidate?.({ sessionId: payload.sessionId });
       })
       .subscribe((status) => {
         onStatus?.(String(status));

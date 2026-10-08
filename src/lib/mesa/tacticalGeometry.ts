@@ -6,6 +6,15 @@ export interface TacticalLosResult {
   blockerType?: "wall" | "door";
 }
 
+export interface TacticalMovementPathResult {
+  valid: boolean;
+  blockedBy?: {
+    id: string;
+    type: "wall" | "door";
+  };
+  reason?: "invalid_geometry";
+}
+
 export interface TacticalCoverResult {
   /** Área do alvo: nenhuma, parcial ou completamente protegida. */
   status: "clear" | "partial_obstruction" | "full_cover";
@@ -34,11 +43,52 @@ export const DEFAULT_TACTICAL_TOKEN_SHAPE: TacticalTokenShape = {
 /** Default used when loading F1.33 geometry that predates obstacle thickness. */
 export const DEFAULT_TACTICAL_OBSTACLE_THICKNESS = 0.008;
 
+/**
+ * Movimento usa uma margem pequena contra falsos bloqueios na borda. Esta
+ * tolerância é exclusiva da trajetória de movimento: a geometria visual,
+ * LOS e Cover continuam usando 100% da espessura persistida.
+ */
+export const MOVEMENT_COLLISION_TOLERANCE = 0.8;
+
 export interface TacticalObstacleArea {
   corners: [TacticalPoint, TacticalPoint, TacticalPoint, TacticalPoint];
 }
 
 const EPSILON = 1e-9;
+
+function isTacticalPoint(value: unknown): value is TacticalPoint {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const point = value as Record<string, unknown>;
+  return typeof point.x === "number" && Number.isFinite(point.x) && point.x >= 0 && point.x <= 1
+    && typeof point.y === "number" && Number.isFinite(point.y) && point.y >= 0 && point.y <= 1;
+}
+
+/**
+ * Verifica a forma persistida antes de usá-la como autoridade geométrica.
+ * Uma geometria inválida não vira um mapa vazio silenciosamente, pois isso
+ * permitiria atravessar um obstáculo que o servidor não conseguiu interpretar.
+ */
+export function isValidTacticalGeometry(value: unknown): value is TacticalGeometry {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const geometry = value as Record<string, unknown>;
+  if (!Array.isArray(geometry.walls) || !Array.isArray(geometry.doors)) return false;
+
+  const ids = new Set<string>();
+  const validObstacle = (entry: unknown, type: "wall" | "door"): boolean => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
+    const obstacle = entry as Record<string, unknown>;
+    if (obstacle.type !== type || typeof obstacle.id !== "string" || obstacle.id.trim() === "" || ids.has(obstacle.id)) return false;
+    if (!isTacticalPoint(obstacle.start) || !isTacticalPoint(obstacle.end)) return false;
+    if (obstacle.thickness !== undefined && (typeof obstacle.thickness !== "number" || !Number.isFinite(obstacle.thickness) || obstacle.thickness <= 0 || obstacle.thickness > 1)) return false;
+    if (obstacle.destroyed !== undefined && typeof obstacle.destroyed !== "boolean") return false;
+    if (type === "door" && obstacle.state !== "open" && obstacle.state !== "closed") return false;
+    ids.add(obstacle.id);
+    return true;
+  };
+
+  return geometry.walls.every((entry) => validObstacle(entry, "wall"))
+    && geometry.doors.every((entry) => validObstacle(entry, "door"));
+}
 
 function cross(a: TacticalPoint, b: TacticalPoint, c: TacticalPoint): number {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
@@ -79,13 +129,15 @@ export function tacticalSegmentsIntersect(
 /** Derives an oriented rectangle from a normalized segment and thickness. */
 export function tacticalObstacleArea(
   obstacle: TacticalWall | TacticalDoor,
+  thicknessScale = 1,
 ): TacticalObstacleArea {
   const dx = obstacle.end.x - obstacle.start.x;
   const dy = obstacle.end.y - obstacle.start.y;
   const length = Math.hypot(dx, dy);
-  const thickness = typeof obstacle.thickness === "number" && Number.isFinite(obstacle.thickness) && obstacle.thickness > 0
+  const physicalThickness = typeof obstacle.thickness === "number" && Number.isFinite(obstacle.thickness) && obstacle.thickness > 0
     ? Math.min(1, obstacle.thickness)
     : DEFAULT_TACTICAL_OBSTACLE_THICKNESS;
+  const thickness = physicalThickness * thicknessScale;
   const halfThickness = thickness / 2;
   const normal = length <= EPSILON
     ? { x: 0, y: halfThickness }
@@ -186,23 +238,54 @@ function firstAreaIntersectionParameter(
 
 type TacticalBlocker = TacticalWall | TacticalDoor;
 
-export function calculateLineOfSight(
+function firstBlockingObstacle(
   observer: TacticalPoint,
   target: TacticalPoint,
   geometry: TacticalGeometry,
-): TacticalLosResult {
+  thicknessScale = 1,
+): TacticalBlocker | undefined {
   const blockers: TacticalBlocker[] = [
     ...geometry.walls.filter((wall) => wall.destroyed !== true),
     ...geometry.doors.filter((door) => door.state === "closed" && door.destroyed !== true),
   ];
   const intersections = blockers
-    .filter((blocker) => tacticalSegmentIntersectsArea(observer, target, tacticalObstacleArea(blocker)))
-    .map((blocker, index) => ({ blocker, index, parameter: firstAreaIntersectionParameter(observer, target, tacticalObstacleArea(blocker)) }))
+    .map((blocker, index) => ({ blocker, index, area: tacticalObstacleArea(blocker, thicknessScale) }))
+    .filter(({ area }) => tacticalSegmentIntersectsArea(observer, target, area))
+    .map(({ blocker, index, area }) => ({ blocker, index, parameter: firstAreaIntersectionParameter(observer, target, area) }))
     .sort((a, b) => a.parameter - b.parameter || a.index - b.index);
-  const first = intersections[0]?.blocker;
+  return intersections[0]?.blocker;
+}
+
+export function calculateLineOfSight(
+  observer: TacticalPoint,
+  target: TacticalPoint,
+  geometry: TacticalGeometry,
+): TacticalLosResult {
+  const first = firstBlockingObstacle(observer, target, geometry);
   return first
     ? { visible: false, blockerId: first.id, blockerType: first.type }
     : { visible: true };
+}
+
+/**
+ * Valida o segmento inteiro do movimento no mesmo espaço normalizado, usando
+ * uma área efetiva ligeiramente menor que a física para evitar falsos
+ * bloqueios na borda. O resultado é puro e determinístico;
+ * a autorização, o orçamento e a persistência continuam sendo do gateway.
+ */
+export function validateMovementPath(
+  start: TacticalPoint,
+  destination: TacticalPoint,
+  geometry: TacticalGeometry,
+): TacticalMovementPathResult {
+  if (!isTacticalPoint(start) || !isTacticalPoint(destination) || !isValidTacticalGeometry(geometry)) {
+    return { valid: false, reason: "invalid_geometry" };
+  }
+
+  const blocker = firstBlockingObstacle(start, destination, geometry, MOVEMENT_COLLISION_TOLERANCE);
+  return blocker
+    ? { valid: false, blockedBy: { id: blocker.id, type: blocker.type } }
+    : { valid: true };
 }
 
 /** Classifies visibility across deterministic samples of the target footprint. */

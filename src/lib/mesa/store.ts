@@ -47,6 +47,7 @@ import type {
   DamageAction,
   DamageResult,
 } from "@/lib/combat/contract";
+import type { AvailableAttack } from "@/types/attack";
 import { mergeBattleRoster, startBattleSnapshot } from "@/lib/mesa/battleHistory";
 import { generateJoinCode, normalizeJoinCode } from "@/lib/mesa/joinCode";
 import type {
@@ -59,8 +60,20 @@ import type {
   MesaSession,
   MesaState,
   MesaSupplies,
+  NetrunnerConnectionState,
+  NetrunnerConnectionType,
+  MesaQuickhackEffect,
+  NetArchitecture,
+  NetArchitectureProjection,
+  NetDiscoveryState,
+  NetProgram,
+  NetBlackIce,
+  NetBasicNode,
+  TacticalAccessPoint,
   TacticalDoor,
   TacticalGeometry,
+  TacticalHackableObject,
+  TacticalHackableObjectType,
   TacticalMap,
   TacticalPosition,
   TacticalWall,
@@ -86,11 +99,21 @@ import type { Character } from "@/types/character";
 import type { EncounterParticipant } from "@/types/encounter";
 import { toCombatParticipant } from "@/lib/combat/adapters";
 import { formatMesaAttackEvent } from "@/lib/mesa/attackAudit";
-import { applyTacticalCoverDamage, coverHPAfterProfileChange, deriveTacticalCoverProfile, isValidTacticalCoverDV, normalizeTacticalPosition, tacticalDistance, tacticalPositionsOverlap } from "@/lib/mesa/tacticalMap";
-import { calculateLineOfSight, calculateTacticalCover } from "@/lib/mesa/tacticalGeometry";
+import { applyTacticalCoverDamage, coverHPAfterProfileChange, DEFAULT_TACTICAL_GRID_SIZE_METERS, deriveTacticalCoverProfile, isMeleeAttackType, isValidTacticalCoverDV, normalizeTacticalPosition, resolveMeleeRange, tacticalDistance, tacticalPositionsOverlap, type TacticalMeleeRangeResolution } from "@/lib/mesa/tacticalMap";
+import { calculateLineOfSight, calculateTacticalCover, isValidTacticalGeometry, validateMovementPath } from "@/lib/mesa/tacticalGeometry";
 import type { TacticalCoverResult } from "@/lib/mesa/tacticalGeometry";
+import { isDetectedBy, isTacticalTargetVisibleToPlayer, projectCombatForPlayer, projectCombatantsForViewer } from "@/lib/mesa/visibility";
+import { resolveDetectionCheck } from "@/lib/mesa/detection";
+import { getWeaponRangeProfile, isRangedWeaponAttack, resolveWeaponRangeBand, type WeaponRangeResolution } from "@/lib/combat/weaponRange";
+import { getNetActionsPerTurn } from "@/lib/roles";
+import { isImplementedNetAction, type ImplementedNetAction } from "@/lib/mesa/netActions";
 import { DEFAULT_TACTICAL_OBSTACLE_THICKNESS } from "@/lib/mesa/tacticalGeometry";
-export { isValidTacticalCoverDV, normalizeTacticalPosition, tacticalDistance, tacticalPositionsOverlap } from "@/lib/mesa/tacticalMap";
+import { canConnectToAccessPoint, connectedNetrunnerState, DISCONNECTED_NETRUNNER_STATE, getCyberdeckSlots, getQuickhackDV, getQuickhackRamCost, getRamMax, ramForReconnect, resolveQuickhackEffect, safeJackOutState, stopAtWirelessAccessPointRange, unsafeJackOutState, WIRELESS_ACCESS_POINT_RANGE_METERS } from "@/lib/mesa/netrunner";
+import { quickhackDefinitions } from "@/data/quickhacks";
+import { createHash } from "node:crypto";
+import { discoverableNodeIds, nextFloorAfterUnlockedPassword, normalizeNetArchitecture, normalizeNetArchitectures, normalizeNetDiscovery, pathfinderNodeIds, projectNetArchitecture } from "@/lib/mesa/netArchitecture";
+import { applyProgramDamage, brainDamageForIce, iceAttack, resolveNetAttack, slideBlackIce } from "@/lib/mesa/netCombat";
+export { isValidTacticalCoverDV, normalizeTacticalPosition, resolveMeleeRange, tacticalDistance, tacticalPositionsOverlap } from "@/lib/mesa/tacticalMap";
 
 /** Erro de domínio com status HTTP correspondente. */
 export class MesaError extends Error {
@@ -247,11 +270,11 @@ async function waitForReloadResolution(sessionId: string, resolutionId: string, 
 
 function databaseResolutionError(error: unknown): MesaError | null {
   if (!(error instanceof Error)) return null;
-  const code = ["action_conflict", "hp_conflict", "death_save_conflict", "resolution_in_progress", "resolution_not_claimed", "resolution_failed"].find((candidate) =>
+  const code = ["action_conflict", "architecture_conflict", "hp_conflict", "death_save_conflict", "resolution_in_progress", "resolution_not_claimed", "resolution_failed"].find((candidate) =>
     error.message.includes(candidate),
   );
   if (!code) return null;
-  const status = code === "hp_conflict" || code === "action_conflict" || code === "death_save_conflict" || code === "resolution_in_progress" || code === "resolution_failed" ? 409 : 500;
+  const status = code === "hp_conflict" || code === "action_conflict" || code === "architecture_conflict" || code === "death_save_conflict" || code === "resolution_in_progress" || code === "resolution_failed" ? 409 : 500;
   return new MesaError(code === "hp_conflict" ? "A vida do alvo mudou entre a resolução e a persistência." : "A resolução concorrente não pôde ser aplicada.", status, code);
 }
 
@@ -584,6 +607,7 @@ interface SessionRow {
   created_at: string;
   updated_at?: string;
   tactical_map?: TacticalMap | null;
+  net_architectures?: NetArchitecture[] | null;
 }
 
 interface ParticipantRow {
@@ -639,12 +663,25 @@ interface CombatantRow {
   sort_order: number;
   position?: TacticalPosition | null;
   avatar_url?: string | null;
+  stealth_state?: "not_stealthed" | "stealthed" | null;
+  detected_by?: string[] | null;
+  netrunner_state?: NetrunnerConnectionState | null;
+  net_effects?: MesaQuickhackEffect[] | null;
+  net_discovery?: NetDiscoveryState | null;
+  net_ice_state?: NetBlackIce | null;
+  brain_damage?: number;
 }
 
 type IntegratedAttackResponse = {
   attackResult: NonNullable<ReturnType<typeof execute>["attackResult"]>;
   /** Geometria server-side usada nesta resolução; não é um modificador. */
   tacticalCover?: TacticalCoverResult;
+  /** Faixa/DV derivados das posições e do perfil da arma no servidor. */
+  weaponRange?: WeaponRangeResolution;
+  /** Resultado do alcance melee derivado das posições persistidas e do grid. */
+  meleeRange?: TacticalMeleeRangeResolution;
+  /** Distância melee derivada das posições persistidas. */
+  meleeDistanceMeters?: number;
   coverDamage?: { obstacleId: string; hpBefore: number; hpAfter: number; damage: number; destroyed: boolean };
   weaponDamage?: DiceResult;
   damageResult?: DamageResult;
@@ -702,6 +739,43 @@ interface ReloadResponse {
   consumed: number;
 }
 
+interface QuickhackOutcome {
+  quickhackId: string;
+  quickhackName: string;
+  targetCombatantId: string;
+  roll: number;
+  interfaceRank: number;
+  total: number;
+  dv: number;
+  success: boolean;
+  ramCost: number;
+  ramRemaining: number;
+  netActionsRemaining: number;
+  effectApplied: boolean;
+  damage: number;
+}
+
+interface NetActionOutcome {
+  action: ImplementedNetAction;
+  netrunnerId: string;
+  architectureId: string;
+  floorBefore: number;
+  floorAfter: number;
+  targetId: string | null;
+  roll: number;
+  interfaceRank: number;
+  total: number;
+  dv: number;
+  success: boolean;
+  netActionsRemaining: number;
+  discoveredNodeIds: string[];
+  passwordState?: "locked" | "unlocked";
+  controlState?: "uncontrolled" | "controlled";
+  demonId?: string;
+  damage?: number;
+  targetRezz?: number;
+}
+
 function toSession(row: SessionRow): MesaSession {
   return {
     id: row.id,
@@ -714,8 +788,19 @@ function toSession(row: SessionRow): MesaSession {
   };
 }
 
+/** Physical map objects are public; their logical Control Node link is GM-only. */
+function projectTacticalMapForViewer(map: TacticalMap, isGM: boolean, discoveredControlNodeIds = new Set<string>()): TacticalMap {
+  if (isGM) return map;
+  return {
+    ...map,
+    hackableObjects: (map.hackableObjects ?? []).map((object) => object.linkedControlNodeId && discoveredControlNodeIds.has(object.linkedControlNodeId)
+      ? object
+      : (({ linkedControlNodeId: _linkedControlNodeId, ...publicObject }) => publicObject)(object)),
+  };
+}
+
 const DEFAULT_TACTICAL_GEOMETRY: TacticalGeometry = { walls: [], doors: [] };
-const DEFAULT_TACTICAL_MAP: TacticalMap = { imageUrl: "", enabled: false, width: 1000, height: 600, pixelsPerMeter: 50, grid: { enabled: false, size: 1, snap: false }, geometry: DEFAULT_TACTICAL_GEOMETRY };
+const DEFAULT_TACTICAL_MAP: TacticalMap = { imageUrl: "", enabled: false, width: 1000, height: 600, pixelsPerMeter: 50, grid: { enabled: false, size: DEFAULT_TACTICAL_GRID_SIZE_METERS, snap: false }, geometry: DEFAULT_TACTICAL_GEOMETRY, accessPoints: [] };
 
 function sanitizeGeometryPoint(raw: unknown): TacticalPosition | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
@@ -813,6 +898,43 @@ function sanitizeTacticalMap(raw: unknown): TacticalMap {
     const number = Number(input);
     return Number.isFinite(number) && number > 0 ? Math.min(max, number) : fallback;
   };
+  const accessPoints = Array.isArray(value.accessPoints)
+    ? value.accessPoints.slice(0, 100).map((entry): TacticalAccessPoint | null => {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+        const item = entry as Record<string, unknown>;
+        const id = typeof item.id === "string" ? item.id.trim().slice(0, 120) : "";
+        const position = normalizeTacticalPosition(item.position, { x: -1, y: -1 });
+        const connectionTypes = Array.isArray(item.connectionTypes)
+          ? [...new Set(item.connectionTypes.filter((type): type is NetrunnerConnectionType => type === "wireless" || type === "cable"))]
+          : [];
+        if (!id || position.x < 0 || position.y < 0 || connectionTypes.length === 0) return null;
+        return {
+          id,
+          position,
+          connectionTypes,
+          architectureId: typeof item.architectureId === "string" && item.architectureId.trim() ? item.architectureId.trim() : null,
+          wirelessRangeMeters: WIRELESS_ACCESS_POINT_RANGE_METERS,
+          active: item.active !== false,
+        };
+      }).filter((entry): entry is TacticalAccessPoint => entry !== null)
+    : [];
+  const uniqueAccessPoints = [...new Map(accessPoints.map((entry) => [entry.id, entry])).values()];
+  const hackableTypes = new Set<TacticalHackableObjectType>(["camera", "terminal", "door_panel", "console", "access_panel", "generic"]);
+  const hackableObjects = Array.isArray(value.hackableObjects)
+    ? value.hackableObjects.slice(0, 500).map((entry): TacticalHackableObject | null => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+      const item = entry as Record<string, unknown>;
+      const id = typeof item.id === "string" ? item.id.trim().slice(0, 120) : "";
+      const type = item.type as TacticalHackableObjectType;
+      const position = normalizeTacticalPosition(item.position, { x: -1, y: -1 });
+      if (!id || !hackableTypes.has(type) || position.x < 0 || position.y < 0) return null;
+      const label = typeof item.label === "string" && item.label.trim() ? item.label.trim().slice(0, 120) : undefined;
+      const linkedControlNodeId = typeof item.linkedControlNodeId === "string" && item.linkedControlNodeId.trim() ? item.linkedControlNodeId.trim().slice(0, 120) : undefined;
+      const radius = Number(item.interactionRadius);
+      return { id, type, position, ...(label ? { label } : {}), ...(linkedControlNodeId ? { linkedControlNodeId } : {}), ...(Number.isFinite(radius) && radius > 0 ? { interactionRadius: Math.min(100, radius) } : {}), active: item.active !== false };
+    }).filter((entry): entry is TacticalHackableObject => entry !== null)
+    : [];
+  const uniqueHackableObjects = [...new Map(hackableObjects.map((entry) => [entry.id, entry])).values()];
   return {
     imageUrl: typeof value.imageUrl === "string" ? value.imageUrl.trim().slice(0, 2_000_000) : "",
     enabled: value.enabled === true,
@@ -821,10 +943,12 @@ function sanitizeTacticalMap(raw: unknown): TacticalMap {
     pixelsPerMeter: positive(value.pixelsPerMeter, 50, 10_000),
     grid: {
       enabled: typeof value.grid === "object" && value.grid !== null && (value.grid as Record<string, unknown>).enabled === true,
-      size: positive(typeof value.grid === "object" && value.grid !== null ? (value.grid as Record<string, unknown>).size : undefined, 1, 100),
+      size: positive(typeof value.grid === "object" && value.grid !== null ? (value.grid as Record<string, unknown>).size : undefined, DEFAULT_TACTICAL_GRID_SIZE_METERS, 100),
       snap: typeof value.grid === "object" && value.grid !== null && (value.grid as Record<string, unknown>).snap === true,
     },
     geometry: sanitizeGeometry(value.geometry),
+    accessPoints: uniqueAccessPoints,
+    hackableObjects: uniqueHackableObjects,
   };
 }
 
@@ -870,7 +994,7 @@ function toCombat(row: CombatRow): MesaCombat {
   };
 }
 
-function effectiveMovementForRow(row: CombatantRow): { max: number; remaining: number } {
+function effectiveMovementForRow(row: CombatantRow, round = Number.POSITIVE_INFINITY): { max: number; remaining: number } {
   const injuryState = row.combat_snapshot?.combat
     ? getCriticalInjuryModifiers({
         combat: {
@@ -879,9 +1003,10 @@ function effectiveMovementForRow(row: CombatantRow): { max: number; remaining: n
         } as unknown as Character["combat"],
       })
     : null;
+  const netMoveModifier = activeQuickhackEffects(row, round).reduce((sum, effect) => sum + (effect.moveModifier ?? 0), 0);
   const max = injuryState?.moveZero
     ? 0
-    : Math.max(0, row.movement_max + (injuryState?.moveModifier ?? 0) * 2);
+    : Math.max(0, row.movement_max + (injuryState?.moveModifier ?? 0) * 2 + netMoveModifier);
   return { max, remaining: Math.min(row.movement_remaining, max) };
 }
 
@@ -889,11 +1014,16 @@ function unconsciousUntilRoundForRow(row: CombatantRow): number | undefined {
   const rounds = (row.critical_injuries ?? [])
     .map((injury) => injury.unconsciousUntilRound ?? 0)
     .filter((round) => round > 0);
-  return rounds.length > 0 ? Math.max(...rounds) : undefined;
+  const quickhackRounds = (row.net_effects ?? [])
+    .filter((effect) => effect.unconscious && effect.expiresRound !== null)
+    .map((effect) => effect.expiresRound ?? 0)
+    .filter((round) => round > 0);
+  const allRounds = [...rounds, ...quickhackRounds];
+  return allRounds.length > 0 ? Math.max(...allRounds) : undefined;
 }
 
-function toCombatant(row: CombatantRow): MesaCombatant {
-  const movement = effectiveMovementForRow(row);
+function toCombatant(row: CombatantRow, round = Number.POSITIVE_INFINITY): MesaCombatant {
+  const movement = effectiveMovementForRow(row, round);
   const unconsciousUntilRound = unconsciousUntilRoundForRow(row);
   return {
     id: row.id,
@@ -923,10 +1053,102 @@ function toCombatant(row: CombatantRow): MesaCombatant {
     conditions: Array.isArray(row.conditions) ? row.conditions : [],
     sortOrder: row.sort_order,
     position: normalizeTacticalPosition(row.position, { x: row.kind === "enemy" ? 0.78 : 0.22, y: 0.2 + (row.sort_order % 5) * 0.15 }),
+    stealthState: row.stealth_state === "stealthed" ? "stealthed" : "not_stealthed",
+    detectedBy: Array.isArray(row.detected_by) ? row.detected_by.filter((id): id is string => typeof id === "string") : [],
+    netrunnerState: normalizeNetrunnerState(row.netrunner_state),
+    quickhackEffects: Array.isArray(row.net_effects) ? row.net_effects : [],
+    netDiscovery: normalizeNetDiscovery(row.net_discovery, ""),
+    ...(row.net_ice_state ? { netIce: row.net_ice_state } : {}),
+    ...(row.brain_damage && row.brain_damage > 0 ? { brainDamage: row.brain_damage } : {}),
     ...(typeof row.avatar_url === "string" && row.avatar_url.length > 0
       ? { avatarUrl: row.avatar_url }
       : {}),
   };
+}
+
+function normalizeNetrunnerState(raw: unknown): NetrunnerConnectionState {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { ...DISCONNECTED_NETRUNNER_STATE };
+  const value = raw as Record<string, unknown>;
+  const connectionType = value.connectionType === "wireless" || value.connectionType === "cable" ? value.connectionType : null;
+  const isJackedIn = value.isJackedIn === true && typeof value.connectedAccessPointId === "string" && connectionType !== null;
+  const interfaceRank = Number.isInteger(value.interfaceRank) ? Math.min(10, Math.max(0, value.interfaceRank as number)) : 0;
+  const derivedRamMax = getRamMax(interfaceRank);
+  const derivedNetActionsMax = getNetActionsPerTurn(interfaceRank);
+  return {
+    isJackedIn,
+    connectedAccessPointId: isJackedIn ? value.connectedAccessPointId as string : null,
+    connectionType: isJackedIn ? connectionType : null,
+    architectureId: isJackedIn && typeof value.architectureId === "string" ? value.architectureId : null,
+    currentFloor: isJackedIn && Number.isInteger(value.currentFloor) && (value.currentFloor as number) >= 1 ? value.currentFloor as number : isJackedIn ? 1 : null,
+    unsafeJackOut: value.unsafeJackOut === true,
+    engagedBlackIceIds: isJackedIn && Array.isArray(value.engagedBlackIceIds) ? value.engagedBlackIceIds.filter((id): id is string => typeof id === "string") : [],
+    interfaceRank,
+    ramCurrent: typeof value.ramCurrent === "number" ? Math.min(derivedRamMax, Math.max(0, value.ramCurrent)) : 0,
+    ramMax: derivedRamMax,
+    netActionsRemaining: isJackedIn && typeof value.netActionsRemaining === "number" ? Math.min(derivedNetActionsMax, Math.max(0, value.netActionsRemaining)) : 0,
+    netActionsMax: derivedNetActionsMax,
+    meatspaceActionUsedForNetrunning: isJackedIn && value.meatspaceActionUsedForNetrunning === true,
+    cyberdeckSlots: getCyberdeckSlots(interfaceRank),
+    maxQuickhackSlots: 4,
+    equippedQuickhackIds: Array.isArray(value.equippedQuickhackIds) ? value.equippedQuickhackIds.filter((id): id is string => typeof id === "string") : [],
+    programs: Array.isArray(value.programs) ? value.programs.filter((program): program is NetProgram => {
+      if (typeof program !== "object" || program === null || Array.isArray(program)) return false;
+      const entry = program as Record<string, unknown>;
+      return typeof entry.id === "string" && typeof entry.name === "string" && Number.isInteger(entry.attackBonus) && Number.isInteger(entry.rezz) && Number.isInteger(entry.maxRezz) && Number.isInteger(entry.damage) && (entry.state === "active" || entry.state === "destroyed");
+    }) : [],
+    brainDamage: typeof value.brainDamage === "number" && Number.isFinite(value.brainDamage) ? Math.max(0, Math.floor(value.brainDamage)) : 0,
+  };
+}
+
+export function netIceCombatantId(architectureId: string, nodeId: string): string {
+  const hex = createHash("sha256").update(`mesa-net-ice:${architectureId}:${nodeId}`).digest("hex").slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${(parseInt(hex.slice(16, 18), 16) & 0x3f | 0x80).toString(16).padStart(2, "0")}${hex.slice(18, 20)}-${hex.slice(20)}`;
+}
+
+/** Sincroniza somente entidades ICE já ativadas com o elenco do combate. */
+async function syncActiveNetIceCombatants(sessionId: string, combatId: string): Promise<void> {
+  const sessionRow = (await query(db().from("mesa_sessions").select("net_architectures").eq("id", sessionId).maybeSingle(), "Falha ao consultar Black ICE")) as { net_architectures?: unknown } | null;
+  const architectures = normalizeNetArchitectures(sessionRow?.net_architectures);
+  const nodes = architectures.flatMap((architecture) => architecture.floors.flatMap((floor) => floor.nodes
+    .map((rawNode) => rawNode as NetBasicNode)
+    .filter((node) => node.type === "black_ice" && node.blackIce && (node.blackIceState === "active" || node.blackIceState === "destroyed"))
+    .map((node) => ({ architecture, node }))));
+  if (!nodes.length) return;
+  const ids = nodes.map(({ architecture, node }) => netIceCombatantId(architecture.id, node.id));
+  const existing = (await query(db().from("mesa_combatants").select("id,initiative").eq("combat_id", combatId).in("id", ids), "Falha ao consultar combatantes ICE")) as Array<{ id: string; initiative: number | null }> | null;
+  const byId = new Map((existing ?? []).map((row) => [row.id, row]));
+  const payload = nodes.map(({ architecture, node }, index) => {
+    const ice: NetBlackIce = { ...node.blackIce!, id: node.id, nodeId: node.id, architectureId: architecture.id, floorIndex: node.floorIndex, state: node.blackIceState ?? "inactive", ...(node.blackIceInitiative === undefined ? {} : { initiative: node.blackIceInitiative }), ...(node.engagedNetrunnerId === undefined ? {} : { engagedNetrunnerId: node.engagedNetrunnerId }) };
+    const id = netIceCombatantId(architecture.id, node.id);
+    return {
+      id, combat_id: combatId, session_id: sessionId, kind: "net_ice" as const, name: ice.name,
+      initiative: byId.get(id)?.initiative ?? null, initiative_detail: { speed: ice.speed, netIce: true },
+      actions_max: 0, actions_remaining: 0, movement_max: 0, movement_remaining: 0,
+      hp_current: 0, hp_max: 0, is_dead: ice.state === "destroyed", conditions: [], sort_order: 100000 + index,
+      net_ice_state: ice, brain_damage: 0,
+    };
+  });
+  await query(db().from("mesa_combatants").upsert(payload, { onConflict: "id" }), "Falha ao sincronizar combatantes ICE");
+}
+
+async function syncNetIceInitiative(combatId: string): Promise<void> {
+  const combat = (await query(db().from("mesa_combats").select("initiative_started").eq("id", combatId).maybeSingle(), "Falha ao consultar iniciativa")) as { initiative_started?: boolean } | null;
+  if (!combat?.initiative_started) return;
+  const rows = (await query(db().from("mesa_combatants").select("*").eq("combat_id", combatId), "Falha ao consultar iniciativa ICE")) as CombatantRow[];
+  for (const row of rows.filter((entry) => entry.kind === "net_ice" && !entry.is_dead && entry.initiative === null && entry.net_ice_state)) {
+    const ice = row.net_ice_state!;
+    const initiative = rollEnemyInitiative(ice.speed, 0);
+    await query(db().from("mesa_combatants").update({ initiative, initiative_detail: { expression: `Speed ${ice.speed} + 1d10`, total: initiative, speed: ice.speed } }).eq("id", row.id).is("initiative", null), "Falha ao registrar iniciativa ICE");
+  }
+  const refreshed = (await query(db().from("mesa_combatants").select("id,initiative,is_dead,sort_order").eq("combat_id", combatId), "Falha ao ordenar iniciativa ICE")) as Array<{ id: string; initiative: number | null; is_dead: boolean; sort_order: number }>;
+  const ordered = sortByInitiative(refreshed.map((row) => ({ id: row.id, initiative: row.initiative, isDead: row.is_dead, sortOrder: row.sort_order })));
+  for (const [index, row] of ordered.entries()) {
+    await query(db().from("mesa_combatants").update({ sort_order: index }).eq("id", row.id), "Falha ao persistir ordem ICE");
+  }
+}
+
+function activeQuickhackEffects(row: CombatantRow, round: number): MesaQuickhackEffect[] {
+  return (Array.isArray(row.net_effects) ? row.net_effects : []).filter((effect) => effect.expiresRound === null || effect.expiresRound >= round);
 }
 
 /**
@@ -1128,11 +1350,584 @@ function requireActiveSession(session: MesaSession): void {
   }
 }
 
+function skillTotalForDetection(row: CombatantRow, skillId: "perception" | "stealth"): number {
+  const snapshot = row.combat_snapshot;
+  const skill = snapshot?.skills?.[skillId];
+  if (!snapshot?.stats || !skill || typeof skill.level !== "number") throw new MesaError("Skill necessária não está disponível no snapshot.", 409, "skill_not_available");
+  // Não reutilizar o STAT eventualmente materializado no snapshot: F1.49 fixa
+  // os STATs RAW (COOL para Stealth, INT para Perception).
+  const stat = skillId === "stealth" ? snapshot.stats.COOL : snapshot.stats.INT;
+  if (typeof stat !== "number") throw new MesaError("STAT necessária não está disponível no snapshot.", 409, "stat_not_available");
+  return stat + skill.level;
+}
+
+/** F1.49: resolução de detecção; nenhum booleano/resultado vem do cliente. */
+export async function resolveCombatantDetection(input: {
+  sessionId: unknown;
+  token: unknown;
+  observerCombatantId: unknown;
+  targetCombatantId: unknown;
+}): Promise<{ changed: boolean; detected: boolean; observerCombatantId: string; targetCombatantId: string }> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireActiveSession(session);
+  const observerId = typeof input.observerCombatantId === "string" ? input.observerCombatantId.trim() : "";
+  const targetId = typeof input.targetCombatantId === "string" ? input.targetCombatantId.trim() : "";
+  if (!observerId || !targetId || observerId === targetId) throw new MesaError("Observer e alvo inválidos.", 400, "invalid_detection");
+  const rows = (await query(db().from("mesa_combatants").select("*").eq("session_id", session.id).in("id", [observerId, targetId]), "Falha ao consultar detecção")) as CombatantRow[] | null;
+  const observer = rows?.find((row) => row.id === observerId);
+  const target = rows?.find((row) => row.id === targetId);
+  if (!observer || !target) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  if (participant.role === "player" && observer.participant_id !== participant.id) throw new MesaError("Você não controla este observer.", 403, "combatant_not_owned");
+  const detectedBy = Array.isArray(target.detected_by) ? target.detected_by.filter((id): id is string => typeof id === "string") : [];
+  if (detectedBy.includes(observer.id)) return { changed: false, detected: true, observerCombatantId: observer.id, targetCombatantId: target.id };
+  const detected = target.stealth_state !== "stealthed"
+    ? true
+    : resolveDetectionCheck({ observerPerception: skillTotalForDetection(observer, "perception"), targetStealth: skillTotalForDetection(target, "stealth"), rng: serverRandom }).detected;
+  if (!detected) return { changed: false, detected: false, observerCombatantId: observer.id, targetCombatantId: target.id };
+  const next = [...detectedBy, observer.id];
+  const written = await query(db().from("mesa_combatants").update({ detected_by: next }).eq("id", target.id).eq("session_id", session.id).select("id"), "Falha ao persistir detecção");
+  if (!written || (written as Array<{ id: string }>).length !== 1) throw new MesaError("O estado de detecção mudou; atualize a Mesa.", 409, "detection_conflict");
+  return { changed: true, detected: true, observerCombatantId: observer.id, targetCombatantId: target.id };
+}
+
+/** Estado de Stealth é mutável apenas pelo dono do combatente ou pelo GM. */
+export async function setCombatantStealth(input: {
+  sessionId: unknown;
+  token: unknown;
+  combatantId: unknown;
+  stealthed: unknown;
+}): Promise<{ changed: boolean; combatantId: string; stealthState: "not_stealthed" | "stealthed" }> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireActiveSession(session);
+  if (typeof input.stealthed !== "boolean") throw new MesaError("Estado de Stealth inválido.", 400, "invalid_stealth_state");
+  const id = typeof input.combatantId === "string" ? input.combatantId.trim() : "";
+  const row = (await query(db().from("mesa_combatants").select("id,session_id,participant_id").eq("id", id).eq("session_id", session.id).maybeSingle(), "Falha ao consultar Stealth")) as Pick<CombatantRow, "id" | "session_id" | "participant_id"> | null;
+  if (!row) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  if (participant.role === "player" && row.participant_id !== participant.id) throw new MesaError("Você não controla este combatente.", 403, "combatant_not_owned");
+  const stealthState = input.stealthed ? "stealthed" : "not_stealthed";
+  const written = await query(db().from("mesa_combatants").update({ stealth_state: stealthState }).eq("id", id).eq("session_id", session.id).select("id"), "Falha ao persistir Stealth");
+  return { changed: Boolean(written && (written as Array<{ id: string }>).length === 1), combatantId: id, stealthState };
+}
+
+function hasCyberdeck(sheet: Character | null): boolean {
+  return Boolean(sheet?.inventory?.some((item) => {
+    const id = (item.catalogItemId ?? item.id ?? "").toLowerCase();
+    const name = item.name.toLowerCase();
+    return item.quantity > 0 && (id === "cyberdeck" || name === "cyberdeck");
+  }));
+}
+
+function interfaceRankForSheet(sheet: Character | null): number {
+  return sheet?.roleAbilities.find((ability) => ability.abilityId === "interface")?.rank ?? 0;
+}
+
+function requireNetrunnerOwnership(participant: MesaParticipant, row: CombatantRow): void {
+  if (participant.role === "player" && row.participant_id !== participant.id) {
+    throw new MesaError("Você não controla este Netrunner.", 403, "combatant_not_owned");
+  }
+  if (row.kind !== "character") throw new MesaError("Somente personagens podem usar Netrunning.", 400, "not_a_netrunner");
+}
+
+function connectionStateForRow(row: CombatantRow): NetrunnerConnectionState {
+  return normalizeNetrunnerState(row.netrunner_state);
+}
+
+/** Fail closed when an Access Point changed after Jack In. */
+function requireLiveNetrunnerConnection(session: MesaSession, row: CombatantRow, state: NetrunnerConnectionState): void {
+  if (!state.isJackedIn) throw new MesaError("Netrunner precisa estar Jacked In.", 409, "not_jacked_in");
+  const accessPoint = (session.tacticalMap?.accessPoints ?? []).find((entry) => entry.id === state.connectedAccessPointId);
+  if (!accessPoint) throw new MesaError("O Access Point da conexão não está mais disponível.", 409, "access_point_not_found");
+  const position = normalizeTacticalPosition(row.position, { x: row.kind === "enemy" ? 0.78 : 0.22, y: 0.5 });
+  const connection = canConnectToAccessPoint({
+    accessPoint,
+    connectionType: state.connectionType,
+    netrunnerPosition: position,
+    map: session.tacticalMap ?? DEFAULT_TACTICAL_MAP,
+  });
+  if (!connection.ok) {
+    const messages = {
+      access_point_inactive: "Access Point inativo.",
+      connection_type_unsupported: "A conexão não é mais suportada pelo Access Point.",
+      out_of_range: "Netrunner está fora do alcance wireless de 6 metros.",
+    } as const;
+    throw new MesaError(messages[connection.reason], 409, connection.reason);
+  }
+}
+
+function findAccessPoint(map: TacticalMap, accessPointId: string): TacticalAccessPoint {
+  const accessPoint = (map.accessPoints ?? []).find((entry) => entry.id === accessPointId);
+  if (!accessPoint) throw new MesaError("Access Point não encontrado.", 404, "access_point_not_found");
+  return accessPoint;
+}
+
+function actionEconomyForRow(row: CombatantRow) {
+  const movement = effectiveMovementForRow(row);
+  return {
+    actionsMax: row.actions_max,
+    actionsRemaining: row.actions_remaining,
+    movementMax: movement.max,
+    movementRemaining: movement.remaining,
+  };
+}
+
+async function resolveConnectionAction(
+  participant: MesaParticipant,
+  combat: CombatRow,
+  row: CombatantRow,
+): Promise<{ actionsRemaining: number }> {
+  const movement = effectiveMovementForRow(row);
+  const validation = resolveAction({
+    combatStatus: combat.status,
+    initiativeStarted: combat.initiative_started,
+    activeCombatantId: combat.active_combatant_id,
+    actorRole: participant.role,
+    actorOwnsCombatant: participant.role === "gm" || row.participant_id === participant.id,
+    combatant: {
+      id: row.id,
+      isDead: row.is_dead,
+      actionsMax: row.actions_max,
+      actionsRemaining: row.actions_remaining,
+      movementMax: movement.max,
+      movementRemaining: movement.remaining,
+      unconsciousUntilRound: unconsciousUntilRoundForRow(row),
+    },
+    actionType: "other",
+    currentRound: combat.round,
+  });
+  if (!validation.ok) throw new MesaError(DENIAL_MESSAGES[validation.reason], 403, validation.reason);
+  const economy = applyAction(actionEconomyForRow(row), "other");
+  return { actionsRemaining: economy.actionsRemaining };
+}
+
+/** F1.51 — Jack In: somente intenção chega do cliente; estado é derivado aqui. */
+export async function jackInCombatant(input: {
+  sessionId: unknown;
+  token: unknown;
+  combatantId: unknown;
+  accessPointId: unknown;
+  connectionType: unknown;
+}): Promise<{ changed: boolean; combatantId: string; state: NetrunnerConnectionState; actionsRemaining: number }> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireActiveSession(session);
+  const id = typeof input.combatantId === "string" ? input.combatantId.trim() : "";
+  const accessPointId = typeof input.accessPointId === "string" ? input.accessPointId.trim() : "";
+  if (!id || !accessPointId) throw new MesaError("Netrunner ou Access Point ausente.", 400, "invalid_jack_in");
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const row = (await query(db().from("mesa_combatants").select("*").eq("id", id).eq("combat_id", combat.id).maybeSingle(), "Falha ao consultar Netrunner")) as CombatantRow | null;
+  if (!row) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  requireNetrunnerOwnership(participant, row);
+  const currentState = connectionStateForRow(row);
+  if (currentState.isJackedIn) throw new MesaError("Netrunner já está conectado.", 409, "already_jacked_in");
+  const sheet = row.character_id ? await loadSheet(row.character_id) : null;
+  if (!hasCyberdeck(sheet)) throw new MesaError("Netrunner não possui um Cyberdeck válido.", 409, "cyberdeck_required");
+  const interfaceRank = interfaceRankForSheet(sheet);
+  if (interfaceRank <= 0) throw new MesaError("Personagem não possui Interface Role Ability.", 409, "interface_required");
+  const accessPoint = findAccessPoint(session.tacticalMap ?? DEFAULT_TACTICAL_MAP, accessPointId);
+  const architectureRows = (await query(
+    db().from("mesa_sessions").select("net_architectures").eq("id", session.id).maybeSingle(),
+    "Falha ao consultar arquitetura NET",
+  )) as { net_architectures?: unknown } | null;
+  const architectures = normalizeNetArchitectures(architectureRows?.net_architectures);
+  const architecture = accessPoint.architectureId === null
+    ? null
+    : architectures.find((entry) => entry.id === accessPoint.architectureId) ?? null;
+  if (accessPoint.architectureId !== null && !architecture) {
+    throw new MesaError("Access Point referencia uma arquitetura NET inexistente.", 409, "architecture_not_found");
+  }
+  const connectionType = input.connectionType;
+  const position = normalizeTacticalPosition(row.position, { x: 0.22, y: 0.5 });
+  const range = canConnectToAccessPoint({ accessPoint, connectionType, netrunnerPosition: position, map: session.tacticalMap ?? DEFAULT_TACTICAL_MAP });
+  if (!range.ok) {
+    const messages = {
+      access_point_inactive: "Access Point inativo.",
+      connection_type_unsupported: "Tipo de conexão não suportado pelo Access Point.",
+      out_of_range: "Netrunner está fora do alcance wireless de 6 metros.",
+    } as const;
+    throw new MesaError(messages[range.reason], 409, range.reason);
+  }
+  if (connectionType !== "wireless" && connectionType !== "cable") throw new MesaError("Tipo de conexão inválido.", 400, "invalid_connection_type");
+  const action = await resolveConnectionAction(participant, combat, row);
+  const equipped = currentState.equippedQuickhackIds.filter((quickhackId) => Boolean(quickhackDefinitions[quickhackId])).slice(0, 4);
+   const nextState = { ...connectedNetrunnerState(accessPoint, connectionType, interfaceRank, ramForReconnect(currentState, interfaceRank), equipped), programs: currentState.programs ?? [], brainDamage: currentState.brainDamage ?? 0 };
+  const currentDiscovery = normalizeNetDiscovery(row.net_discovery, architecture?.id ?? "");
+  const lobbyIds = architecture?.floors.find((floor) => floor.index === 1)?.nodes.filter((node) => node.type === "lobby").map((node) => node.id) ?? [];
+  const nextDiscovery = architecture
+    ? { architectureId: architecture.id, discoveredNodeIds: [...new Set([...currentDiscovery.discoveredNodeIds, ...lobbyIds])] }
+    : currentDiscovery;
+  const written = await query(db().from("mesa_combatants").update({ netrunner_state: nextState, net_discovery: nextDiscovery, actions_remaining: action.actionsRemaining })
+    .eq("id", row.id).eq("combat_id", combat.id).eq("actions_remaining", row.actions_remaining).select("id"), "Falha ao registrar Jack In");
+  if (!written || written.length !== 1) throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
+  await appendEvent(combat.id, { kind: "action", text: `${row.name}: Jack In` });
+  return { changed: true, combatantId: row.id, state: nextState, actionsRemaining: action.actionsRemaining };
+}
+
+/** Safe Jack Out é uma ação do turno; Black ICE ainda não existe nesta fase. */
+export async function safeJackOutCombatant(input: {
+  sessionId: unknown;
+  token: unknown;
+  combatantId: unknown;
+}): Promise<{ changed: boolean; combatantId: string; state: NetrunnerConnectionState; actionsRemaining: number }> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireActiveSession(session);
+  const id = typeof input.combatantId === "string" ? input.combatantId.trim() : "";
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const row = (await query(db().from("mesa_combatants").select("*").eq("id", id).eq("combat_id", combat.id).maybeSingle(), "Falha ao consultar Netrunner")) as CombatantRow | null;
+  if (!row) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  requireNetrunnerOwnership(participant, row);
+  const currentState = connectionStateForRow(row);
+  if (!currentState.isJackedIn) return { changed: false, combatantId: row.id, state: currentState, actionsRemaining: row.actions_remaining };
+  if ((currentState.engagedBlackIceIds ?? []).length > 0) throw new MesaError("Safe Jack Out não é permitido durante combate com Black ICE.", 409, "black_ice_engaged");
+  const action = await resolveConnectionAction(participant, combat, row);
+  const nextState = safeJackOutState(currentState);
+  const written = await query(db().from("mesa_combatants").update({ netrunner_state: nextState, actions_remaining: action.actionsRemaining })
+    .eq("id", row.id).eq("combat_id", combat.id).eq("actions_remaining", row.actions_remaining).select("id"), "Falha ao registrar Safe Jack Out");
+  if (!written || written.length !== 1) throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
+  await appendEvent(combat.id, { kind: "action", text: `${row.name}: Safe Jack Out` });
+  return { changed: true, combatantId: row.id, state: nextState, actionsRemaining: action.actionsRemaining };
+}
+
+/** Equipamento mínimo do Cyberdeck; não consome Action e só aceita catálogo. */
+export async function setNetrunnerQuickhackLoadout(input: {
+  sessionId: unknown;
+  token: unknown;
+  combatantId: unknown;
+  quickhackIds: unknown;
+}): Promise<{ combatantId: string; equippedQuickhackIds: string[]; maxQuickhackSlots: 4 }> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireActiveSession(session);
+  const id = typeof input.combatantId === "string" ? input.combatantId.trim() : "";
+  const ids = Array.isArray(input.quickhackIds) ? input.quickhackIds : [];
+  if (!id || ids.some((value) => typeof value !== "string")) throw new MesaError("Loadout de Quickhacks inválido.", 400, "invalid_quickhack_loadout");
+  const uniqueIds = [...new Set(ids as string[])];
+  if (uniqueIds.length > 4) throw new MesaError("O Cyberdeck aceita no máximo 4 Quickhacks.", 400, "quickhack_slots_exceeded");
+  if (uniqueIds.some((quickhackId) => !quickhackDefinitions[quickhackId])) throw new MesaError("Quickhack fora do catálogo.", 400, "invalid_quickhack");
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const row = (await query(db().from("mesa_combatants").select("*").eq("id", id).eq("combat_id", combat.id).maybeSingle(), "Falha ao consultar Netrunner")) as CombatantRow | null;
+  if (!row) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  requireNetrunnerOwnership(participant, row);
+  const sheet = row.character_id ? await loadSheet(row.character_id) : null;
+  if (!hasCyberdeck(sheet)) throw new MesaError("Netrunner não possui um Cyberdeck válido.", 409, "cyberdeck_required");
+  const currentState = connectionStateForRow(row);
+  const nextState = { ...currentState, equippedQuickhackIds: uniqueIds };
+  const written = await query(db().from("mesa_combatants").update({ netrunner_state: nextState }).eq("id", row.id).eq("combat_id", combat.id).select("id"), "Falha ao equipar Quickhacks");
+  if (!written || written.length !== 1) throw new MesaError("O loadout mudou; atualize a Mesa.", 409, "quickhack_loadout_conflict");
+  return { combatantId: row.id, equippedQuickhackIds: uniqueIds, maxQuickhackSlots: 4 };
+}
+
+function requireNetrunnerTurn(participant: MesaParticipant, combat: CombatRow, row: CombatantRow, consumeMeatspace: boolean): void {
+  if (participant.role !== "player" || row.participant_id !== participant.id) throw new MesaError("Você não controla este Netrunner.", 403, "combatant_not_owned");
+  if (combat.status !== "active" || !combat.initiative_started) throw new MesaError("O combate ainda não está pronto para ações.", 403, "initiative_not_started");
+  if (combat.active_combatant_id !== row.id) throw new MesaError("Não é o turno deste Netrunner.", 403, "not_your_turn");
+  if (row.is_dead) throw new MesaError("Combatente derrotado.", 403, "combatant_defeated");
+  if (consumeMeatspace) {
+    const movement = effectiveMovementForRow(row);
+    const validation = resolveAction({
+      combatStatus: combat.status,
+      initiativeStarted: combat.initiative_started,
+      activeCombatantId: combat.active_combatant_id,
+      actorRole: participant.role,
+      actorOwnsCombatant: true,
+      combatant: { id: row.id, isDead: row.is_dead, actionsMax: row.actions_max, actionsRemaining: row.actions_remaining, movementMax: movement.max, movementRemaining: movement.remaining, unconsciousUntilRound: unconsciousUntilRoundForRow(row) },
+      actionType: "other",
+      currentRound: combat.round,
+    });
+    if (!validation.ok) throw new MesaError(DENIAL_MESSAGES[validation.reason], 403, validation.reason);
+  }
+}
+
+/** F1.54 — Pathfinder, Backdoor e Control compartilham este único gateway. */
+export async function executeNetAction(input: {
+  sessionId: unknown;
+  token: unknown;
+  body: unknown;
+}): Promise<{ result: NetActionOutcome; committed: boolean }> {
+  const body = typeof input.body === "object" && input.body !== null && !Array.isArray(input.body) ? input.body as Record<string, unknown> : {};
+  const action = body.action;
+  if (!isImplementedNetAction(action)) throw new MesaError("NET Action não disponível nesta fase.", 400, "unsupported_net_action");
+  const targetId = body.targetId === undefined ? null : typeof body.targetId === "string" && body.targetId.trim() ? body.targetId.trim() : null;
+  if (body.targetId !== undefined && !targetId) throw new MesaError("Alvo de NET Action inválido.", 400, "invalid_net_target");
+  const resolutionId = `net-action:${body.resolutionId === undefined ? crypto.randomUUID() : requireResolutionId(body.resolutionId)}`;
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireActiveSession(session);
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+
+  const rows = (await query(db().from("mesa_combatants").select("*").eq("session_id", session.id).eq("combat_id", combat.id), "Falha ao consultar Netrunner")) as CombatantRow[] | null;
+  const actor = rows?.find((row) => row.participant_id === participant.id && row.kind === "character") ?? null;
+  if (!actor) throw new MesaError("Netrunner não encontrado.", 404, "combatant_not_found");
+  requireNetrunnerOwnership(participant, actor);
+    const state = connectionStateForRow(actor);
+  requireLiveNetrunnerConnection(session, actor, state);
+  if (!state.architectureId) throw new MesaError("Não há Architecture conectada.", 409, "architecture_not_connected");
+  if (!Number.isInteger(state.currentFloor) || (state.currentFloor ?? 0) < 1) throw new MesaError("Floor atual inválido.", 409, "invalid_current_floor");
+  const currentFloor = state.currentFloor as number;
+  if (state.netActionsRemaining <= 0) throw new MesaError("Não há NET Actions restantes.", 403, "net_actions_exhausted");
+  const sheet = actor.character_id ? await loadSheet(actor.character_id) : null;
+  if (!hasCyberdeck(sheet)) throw new MesaError("Netrunner não possui um Cyberdeck válido.", 409, "cyberdeck_required");
+  const interfaceRank = interfaceRankForSheet(sheet);
+  if (interfaceRank <= 0) throw new MesaError("Personagem não possui Interface Role Ability.", 409, "interface_required");
+
+  const architectureRow = (await query(db().from("mesa_sessions").select("net_architectures").eq("id", session.id).maybeSingle(), "Falha ao consultar Architecture")) as { net_architectures?: unknown } | null;
+  const architectureRaw = architectureRow?.net_architectures ?? [];
+  const architecture = normalizeNetArchitectures(architectureRaw).find((entry) => entry.id === state.architectureId) ?? null;
+  if (!architecture) throw new MesaError("Architecture conectada não existe.", 409, "architecture_not_found");
+  const floor = architecture.floors.find((entry) => entry.index === currentFloor);
+  if (!floor) throw new MesaError("Floor atual não existe na Architecture.", 409, "invalid_current_floor");
+  const target = targetId ? floor.nodes.find((node) => node.id === targetId) ?? null : null;
+  if (action !== "pathfinder" && !target) throw new MesaError("Node alvo não existe no Floor atual.", 404, "net_node_not_found");
+  if (action === "pathfinder" && !architecture.pathfinder) throw new MesaError("Pathfinder não está configurado nesta Architecture.", 409, "pathfinder_not_configured");
+  if (action === "backdoor") {
+    if (!target || target.type !== "password") throw new MesaError("Backdoor exige um Password no Floor atual.", 400, "invalid_password_target");
+    if (!normalizeNetDiscovery(actor.net_discovery, architecture.id).discoveredNodeIds.includes(target.id)) throw new MesaError("Password ainda não foi descoberta.", 403, "password_not_discovered");
+    if (target.state === "unlocked") throw new MesaError("Password já está desbloqueada.", 409, "password_already_unlocked");
+    if (!architecture.floors.some((entry) => entry.index === currentFloor + 1)) throw new MesaError("Não existe Floor seguinte para este Password.", 409, "no_next_floor");
+    if (target.dv === undefined) throw new MesaError("Password não possui DV configurado.", 409, "password_dv_not_configured");
+  }
+  if (action === "control") {
+    if (!target || target.type !== "control_node") throw new MesaError("Control exige um Control Node no Floor atual.", 400, "invalid_control_target");
+    if (!normalizeNetDiscovery(actor.net_discovery, architecture.id).discoveredNodeIds.includes(target.id)) throw new MesaError("Control Node ainda não foi descoberto.", 403, "control_node_not_discovered");
+    if (target.controlState === "controlled") throw new MesaError("Control Node já está controlado.", 409, "control_node_already_controlled");
+    if (target.dv === undefined) throw new MesaError("Control Node não possui DV configurado.", 409, "control_dv_not_configured");
+  }
+  const discovery = normalizeNetDiscovery(actor.net_discovery, architecture.id);
+  if (action === "zap" || action === "slide") {
+    if (!target || target.type !== "black_ice" || !target.blackIce) throw new MesaError("A ação exige Black ICE no Floor atual.", 400, "invalid_ice_target");
+    if (!discovery.discoveredNodeIds.includes(target.id)) throw new MesaError("Black ICE ainda não foi descoberta.", 403, "black_ice_not_discovered");
+    if (target.blackIceState !== "active") throw new MesaError("Black ICE não está ativa.", 409, "black_ice_not_active");
+    if (action === "slide" && !state.engagedBlackIceIds?.includes(target.id)) throw new MesaError("Esta Black ICE não está engajada com o Netrunner.", 409, "ice_not_engaged");
+    if (action === "zap" && !(state.programs ?? []).some((program) => program.state === "active")) throw new MesaError("Não há programa ativo para executar Zap.", 409, "program_required");
+  }
+  requireNetrunnerTurn(participant, combat, actor, !state.meatspaceActionUsedForNetrunning);
+
+  const previous = await storedAttackResolution<NetActionOutcome>(session.id, resolutionId, combat.id);
+  if (previous?.status === "committed" && previous.result) return { result: previous.result, committed: false };
+  if (previous?.status === "processing") return { result: await waitForAttackResolution<NetActionOutcome>(session.id, resolutionId, combat.id), committed: false };
+  const claimRows = (await query(db().rpc("claim_mesa_attack_resolution", { p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId }), "Falha ao reservar NET Action")) as AttackResolutionClaim<NetActionOutcome>[] | null;
+  const claim = claimRows?.[0];
+  if (!claim) throw new MesaError("Não foi possível reservar a NET Action.", 500, "transaction_failed");
+  if (!claim.claimed) return { result: await waitForAttackResolution<NetActionOutcome>(session.id, resolutionId, combat.id), committed: false };
+
+  let committed = false;
+  try {
+    const ice = target?.type === "black_ice" && target.blackIce ? {
+      ...target.blackIce,
+      id: target.id,
+      nodeId: target.id,
+      architectureId: architecture.id,
+      floorIndex: currentFloor,
+      state: target.blackIceState ?? "inactive",
+      ...(target.blackIceInitiative === undefined ? {} : { initiative: target.blackIceInitiative }),
+      ...(target.engagedNetrunnerId === undefined ? {} : { engagedNetrunnerId: target.engagedNetrunnerId }),
+    } : null;
+    const program = (state.programs ?? []).find((entry) => entry.state === "active") ?? null;
+    const netResolution = action === "zap" && ice && program
+      ? resolveNetAttack({ interfaceRank, programAttackBonus: program.attackBonus, defense: ice.def, rng: serverRandom })
+      : action === "slide" && ice
+        ? slideBlackIce({ ice, interfaceRank, programBonus: program?.attackBonus ?? 0, rng: serverRandom }).resolution
+        : null;
+    const roll = netResolution?.roll ?? serverRandom.d10();
+    const dv = action === "pathfinder" ? architecture.pathfinder!.dv : action === "backdoor" ? (target as Extract<typeof target, { type: "password" }>).dv! : action === "control" ? (target as Extract<typeof target, { type: "control_node" }>).dv! : netResolution!.defense;
+    const total = netResolution?.total ?? roll + interfaceRank;
+    const success = netResolution?.hit ?? total >= dv;
+    const consumesMeatspace = !state.meatspaceActionUsedForNetrunning;
+    const actionsAfter = consumesMeatspace ? actor.actions_remaining - 1 : actor.actions_remaining;
+    const nextState: NetrunnerConnectionState = { ...state, interfaceRank, currentFloor: state.currentFloor, netActionsRemaining: state.netActionsRemaining - 1, netActionsMax: getNetActionsPerTurn(interfaceRank), meatspaceActionUsedForNetrunning: true };
+    let nextArchitectures = normalizeNetArchitectures(architectureRaw);
+    let nextFloor: number = currentFloor;
+    let nextDiscovery = normalizeNetDiscovery(actor.net_discovery, architecture.id);
+    let discoveredNodeIds: string[] = [];
+    let passwordState: "locked" | "unlocked" | undefined;
+    let controlState: "uncontrolled" | "controlled" | undefined;
+    const controlDemonId = action === "control" && target?.type === "control_node" ? target.controlledByDemonId : undefined;
+    let damage: number | undefined;
+    let targetRezz: number | undefined;
+    if (success && action === "pathfinder") {
+      const validIds = pathfinderNodeIds(architecture, currentFloor);
+      const before = new Set(nextDiscovery.discoveredNodeIds);
+      discoveredNodeIds = validIds.filter((id) => !before.has(id));
+      nextDiscovery = { ...nextDiscovery, discoveredNodeIds: [...new Set([...nextDiscovery.discoveredNodeIds, ...validIds])], revealedFileIds: nextDiscovery.revealedFileIds ?? [] };
+      const activated = new Set(state.engagedBlackIceIds ?? []);
+      nextArchitectures = nextArchitectures.map((entry) => entry.id !== architecture.id ? entry : { ...entry, floors: entry.floors.map((entryFloor) => entryFloor.index !== currentFloor ? entryFloor : { ...entryFloor, nodes: entryFloor.nodes.map((node) => {
+        if (node.type !== "black_ice" || !node.blackIce || !validIds.includes(node.id) || node.blackIceState === "destroyed") return node;
+        const initiative = node.blackIceInitiative ?? serverRandom.d10() + node.blackIce.speed;
+        activated.add(node.id);
+        return { ...node, blackIceState: "active" as const, blackIceInitiative: initiative, engagedNetrunnerId: actor.id };
+      }) }) });
+      nextState.engagedBlackIceIds = [...activated];
+    }
+    if (success && action === "backdoor") {
+      const next = architecture.floors.find((entry) => entry.index === currentFloor + 1);
+      nextFloor = next!.index;
+      nextState.currentFloor = nextFloor;
+      passwordState = "unlocked";
+      nextArchitectures = nextArchitectures.map((entry) => entry.id !== architecture.id ? entry : { ...entry, floors: entry.floors.map((entryFloor) => entryFloor.index !== currentFloor ? entryFloor : { ...entryFloor, nodes: entryFloor.nodes.map((node) => node.id === target!.id && node.type === "password" ? { ...node, state: "unlocked" } : node) }) });
+    }
+    if (success && action === "control") {
+      controlState = "controlled";
+      nextArchitectures = nextArchitectures.map((entry) => entry.id !== architecture.id ? entry : { ...entry, floors: entry.floors.map((entryFloor) => entryFloor.index !== currentFloor ? entryFloor : { ...entryFloor, nodes: entryFloor.nodes.map((node) => node.id === target!.id && node.type === "control_node" ? { ...node, controlState: "controlled", controlledByNetrunnerId: actor.id } : node) }) });
+    }
+    if (action === "zap" && success && ice && program) {
+      const nextProgram = applyProgramDamage(program, program.damage);
+      damage = program.damage;
+      targetRezz = nextProgram.rezz;
+      nextState.programs = (state.programs ?? []).map((entry) => entry.id === program.id ? nextProgram : entry);
+      nextArchitectures = nextArchitectures.map((entry) => entry.id !== architecture.id ? entry : { ...entry, floors: entry.floors.map((entryFloor) => entryFloor.index !== currentFloor ? entryFloor : { ...entryFloor, nodes: entryFloor.nodes.map((node) => node.id === target!.id && node.type === "black_ice" ? { ...node, blackIceState: nextProgram.rezz <= 0 ? "destroyed" : "active" } : node) }) });
+    }
+    if (action === "slide" && success && ice) {
+      nextState.engagedBlackIceIds = (state.engagedBlackIceIds ?? []).filter((id) => id !== target!.id);
+      nextArchitectures = nextArchitectures.map((entry) => entry.id !== architecture.id ? entry : { ...entry, floors: entry.floors.map((entryFloor) => entryFloor.index !== currentFloor ? entryFloor : { ...entryFloor, nodes: entryFloor.nodes.map((node) => node.id === target!.id && node.type === "black_ice" ? { ...node, engagedNetrunnerId: undefined } : node) }) });
+    }
+    const result: NetActionOutcome = { action, netrunnerId: actor.id, architectureId: architecture.id, floorBefore: currentFloor, floorAfter: nextFloor, targetId, roll, interfaceRank, total, dv, success, netActionsRemaining: nextState.netActionsRemaining, discoveredNodeIds, ...(passwordState ? { passwordState } : {}), ...(controlState ? { controlState } : {}), ...(controlDemonId ? { demonId: controlDemonId } : {}), ...(damage === undefined ? {} : { damage }), ...(targetRezz === undefined ? {} : { targetRezz }) };
+    const eventTarget = target ? `${target.name ?? target.type}` : "Architecture";
+    const eventText = action === "pathfinder"
+      ? `${actor.name}: Pathfinder em ${architecture.name}, Floor ${currentFloor} (${success ? `descobriu ${discoveredNodeIds.length} Node(s)` : "falha"}) ${total}/${dv}`
+      : action === "backdoor"
+        ? `${actor.name}: Backdoor em ${eventTarget} (${success ? `unlocked; Floor ${nextFloor}` : "locked"}) ${total}/${dv}`
+        : action === "control"
+          ? `${actor.name}: Control em ${eventTarget}${controlDemonId ? ` (Demon ${controlDemonId})` : ""} (${success ? "controlled" : "uncontrolled"}) ${total}/${dv}`
+          : `${actor.name}: ${action === "zap" ? "Zap" : "Slide"} em ${eventTarget} (${success ? "HIT" : "MISS"}) ${total}/${dv}${damage === undefined ? "" : ` dano ${damage}; REZZ ${targetRezz}`}`;
+    const committedResult = await query(db().rpc("commit_mesa_net_action_resolution", {
+      p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token,
+      p_actor_id: actor.id, p_actions_before: actor.actions_remaining, p_actions_after: actionsAfter,
+      p_actor_state_before: actor.netrunner_state ?? null, p_actor_state_after: nextState,
+      p_discovery_before: actor.net_discovery ?? {}, p_discovery_after: nextDiscovery,
+      p_architecture_before: architectureRaw, p_architecture_after: nextArchitectures,
+      p_result: result, p_event_text: eventText, p_private_to_participant_id: actor.participant_id,
+    }), "Falha ao confirmar NET Action") as unknown as NetActionOutcome | null;
+    if (!committedResult) throw new MesaError("A NET Action não retornou resultado persistido.", 500, "transaction_failed");
+    committed = true;
+    await syncActiveNetIceCombatants(session.id, combat.id);
+    await syncNetIceInitiative(combat.id);
+    return { result: committedResult, committed: true };
+  } catch (error) {
+    if (!committed) await query(db().rpc("release_mesa_attack_resolution", { p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token }), "Falha ao liberar NET Action").catch(() => undefined);
+    throw databaseResolutionError(error) ?? error;
+  }
+}
+
+function quickhackCyberwareIds(row: CombatantRow): string[] {
+  return (row.combat_snapshot?.cyberware ?? []).map((item) => item.catalogItemId ?? item.name).filter(Boolean);
+}
+
+function validateQuickhackTarget(quickhackId: string, target: CombatantRow): string[] {
+  const cyberwareIds = quickhackCyberwareIds(target);
+  if (["short_circuit", "cyberware_malfunction"].includes(quickhackId) && cyberwareIds.length === 0) {
+    throw new MesaError("O alvo não possui cyberware compatível.", 400, "target_not_compatible");
+  }
+  if (quickhackId === "shard_ejection") {
+    throw new MesaError("O alvo não possui chipware representado no estado da Mesa.", 400, "target_not_compatible");
+  }
+  return cyberwareIds;
+}
+
+/** F1.52 — execução completa de Quickhack, incluindo rolagem e mutação server-side. */
+export async function executeCombatQuickhack(input: {
+  sessionId: unknown;
+  token: unknown;
+  body: unknown;
+}): Promise<{ result: QuickhackOutcome; committed: boolean }> {
+  const body = typeof input.body === "object" && input.body !== null && !Array.isArray(input.body) ? input.body as Record<string, unknown> : {};
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireActiveSession(session);
+  const quickhackId = typeof body.quickhackId === "string" ? body.quickhackId.trim() : "";
+  const targetId = typeof body.targetCombatantId === "string" ? body.targetCombatantId.trim() : "";
+  const resolutionId = `quickhack:${requireResolutionId(body.resolutionId)}`;
+  const quickhack = quickhackDefinitions[quickhackId];
+  if (!quickhack) throw new MesaError("Quickhack fora do catálogo.", 400, "invalid_quickhack");
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const previous = await storedAttackResolution<QuickhackOutcome>(session.id, resolutionId, combat.id);
+  if (previous?.status === "committed" && previous.result) return { result: previous.result, committed: false };
+  if (previous?.status === "processing") return { result: await waitForAttackResolution<QuickhackOutcome>(session.id, resolutionId, combat.id), committed: false };
+  const claimRows = (await query(db().rpc("claim_mesa_attack_resolution", { p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId }), "Falha ao reservar Quickhack")) as AttackResolutionClaim<QuickhackOutcome>[] | null;
+  const claim = claimRows?.[0];
+  if (!claim) throw new MesaError("Não foi possível reservar o Quickhack.", 500, "transaction_failed");
+  if (!claim.claimed) return { result: await waitForAttackResolution<QuickhackOutcome>(session.id, resolutionId, combat.id), committed: false };
+  let committed = false;
+  try {
+    const rows = (await query(db().from("mesa_combatants").select("*").eq("combat_id", combat.id).eq("session_id", session.id), "Falha ao consultar Quickhack")) as CombatantRow[] | null;
+    const actor = rows?.find((row) => row.participant_id === participant.id && row.kind === "character");
+    const target = rows?.find((row) => row.id === targetId);
+    if (!actor) throw new MesaError("Netrunner não encontrado.", 404, "combatant_not_found");
+    if (!target || target.session_id !== session.id || target.combat_id !== combat.id) throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
+    if (target.id === actor.id || target.kind !== "enemy" || target.is_dead) throw new MesaError("Alvo inválido para Quickhack.", 400, "invalid_quickhack_target");
+    const actorState = connectionStateForRow(actor);
+    requireLiveNetrunnerConnection(session, actor, actorState);
+    if (!actorState.equippedQuickhackIds.includes(quickhackId)) throw new MesaError("Quickhack não está equipado no Cyberdeck.", 409, "quickhack_not_equipped");
+    if (actorState.netActionsRemaining <= 0) throw new MesaError("Não há NET Actions restantes.", 403, "net_actions_exhausted");
+    const ramCost = getQuickhackRamCost(quickhackId);
+    if (actorState.ramCurrent < ramCost) throw new MesaError("RAM insuficiente.", 403, "insufficient_ram");
+    requireNetrunnerTurn(participant, combat, actor, !actorState.meatspaceActionUsedForNetrunning);
+    if (!isDetectedBy(actor.id, { stealthState: target.stealth_state ?? "not_stealthed", detectedBy: target.detected_by ?? [] })) {
+      throw new MesaError("Alvo está oculto ou não foi detectado.", 403, "target_not_visible");
+    }
+    const targetEffects = activeQuickhackEffects(target, combat.round);
+    if (targetEffects.some((effect) => effect.quickhackId === quickhackId && effect.appliedRound === combat.round)) throw new MesaError("Este Quickhack já foi aplicado a este alvo nesta rodada.", 409, "quickhack_reapplication_limited");
+    const cyberwareIds = validateQuickhackTarget(quickhackId, target);
+    const roll = serverRandom.d10();
+    const total = actorState.interfaceRank + roll;
+    const success = total >= getQuickhackDV(quickhackId);
+    const nextState: NetrunnerConnectionState = { ...actorState, ramCurrent: actorState.ramCurrent - ramCost, netActionsRemaining: actorState.netActionsRemaining - 1, meatspaceActionUsedForNetrunning: true };
+    let targetEffectsNext = targetEffects;
+    let targetConditions = [...(target.conditions ?? [])];
+    let targetPatch: EngineDamagePatch = {};
+    let damage = 0;
+    if (success) {
+      const resolved = resolveQuickhackEffect({ quickhackId, sourceCombatantId: actor.id, currentRound: combat.round, rng: serverRandom });
+      const effect: MesaQuickhackEffect = { ...resolved.effect, id: crypto.randomUUID(), ...(quickhackId === "short_circuit" ? { disabledCyberwareIds: cyberwareIds.slice(0, 3) } : {}), ...(quickhackId === "cyberware_malfunction" ? { disabledCyberwareIds: cyberwareIds.slice(0, 1) } : {}) };
+      targetEffectsNext = [...targetEffects.filter((effect) => effect.quickhackId !== quickhackId), effect];
+      targetConditions = [...new Set([...targetConditions, ...(effect.conditionIds ?? [])])];
+      if (quickhackId === "synapse_burnout" && resolved.damage) {
+        const participants = (rows ?? []).map((row) => combatParticipantFromRow(row)).filter((entry): entry is CombatParticipant => entry !== null);
+        const damageState: CombatState = { id: combat.id, status: combat.status, round: combat.round, initiativeStarted: combat.initiative_started, activeParticipantId: combat.active_combatant_id, participants };
+        const damageResult = execute(damageState, { type: "damage", actorId: null, targetId: target.id, amount: resolved.damage.amount, ignoreArmor: true }, serverRandom);
+        if (!damageResult.ok) throw new MesaError(damageResult.errors?.[0]?.message ?? "Dano de Quickhack recusado.", 400, damageResult.errors?.[0]?.code ?? "engine_refused");
+        targetPatch = engineDamagePatch(damageResult, target.id);
+        damage = resolved.damage.amount;
+      }
+    }
+    const result: QuickhackOutcome = { quickhackId, quickhackName: quickhack.name, targetCombatantId: target.id, roll, interfaceRank: actorState.interfaceRank, total, dv: getQuickhackDV(quickhackId), success, ramCost, ramRemaining: nextState.ramCurrent, netActionsRemaining: nextState.netActionsRemaining, effectApplied: success, damage };
+    const actionsAfter = actorState.meatspaceActionUsedForNetrunning ? actor.actions_remaining : actor.actions_remaining - 1;
+    const committedResult = await query(db().rpc("commit_mesa_quickhack_resolution", {
+      p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token,
+      p_actor_id: actor.id, p_target_id: target.id, p_actions_before: actor.actions_remaining, p_actions_after: actionsAfter,
+      p_actor_state_before: actor.netrunner_state ?? null, p_actor_state_after: nextState,
+      p_target_hp_before: target.hp_current, p_target_dead_before: target.is_dead, p_target_patch: targetPatch,
+      p_target_effects: targetEffectsNext, p_target_conditions: targetConditions, p_result: result,
+      p_event_text: `${actor.name}: ${quickhack.name} → ${target.name} (${success ? "sucesso" : "falha"}) ${total}/${getQuickhackDV(quickhackId)}`,
+    }), "Falha ao confirmar Quickhack") as unknown as QuickhackOutcome | null;
+    if (!committedResult) throw new MesaError("A resolução do Quickhack não retornou resultado persistido.", 500, "transaction_failed");
+    committed = true;
+    return { result: committedResult, committed: true };
+  } catch (error) {
+    if (!committed) await query(db().rpc("release_mesa_attack_resolution", { p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token }), "Falha ao liberar Quickhack").catch(() => undefined);
+    throw databaseResolutionError(error) ?? error;
+  }
+}
+
+/** Unsafe Jack Out interno: não é uma autoridade que o cliente possa solicitar. */
+async function persistUnsafeJackOut(row: CombatantRow, combat: CombatRow): Promise<NetrunnerConnectionState> {
+  const nextState = unsafeJackOutState(connectionStateForRow(row));
+  await query(db().from("mesa_combatants").update({ netrunner_state: nextState }).eq("id", row.id).eq("combat_id", combat.id).select("id"), "Falha ao registrar Unsafe Jack Out");
+  return nextState;
+}
+
 // ---------------------------------------------------------------------------
 // Estado
 // ---------------------------------------------------------------------------
 
-/** Estado completo da mesa, do ponto de vista de quem pede. */
+function persistedPosition(raw: unknown): TacticalPosition | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const point = raw as Record<string, unknown>;
+  const x = Number(point.x);
+  const y = Number(point.y);
+  return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
+}
+
+/** Estado da mesa projetado para o papel autenticado que pede o snapshot. */
 export async function getMesaState(sessionId: string, viewerParticipantId: string | null): Promise<MesaState> {
   const [sessionRow, participantsRow, combatRow, combatantsRow] = await Promise.all([
     query(db().from("mesa_sessions").select("*").eq("id", sessionId).maybeSingle(), "Falha ao consultar a mesa"),
@@ -1155,33 +1950,88 @@ export async function getMesaState(sessionId: string, viewerParticipantId: strin
     .sort()
     .at(-1);
 
+  const session = toSession(sessionRow as SessionRow);
+  const architectures = normalizeNetArchitectures((sessionRow as SessionRow).net_architectures);
+  const currentRound = (combatRow as CombatRow | null)?.round ?? Number.POSITIVE_INFINITY;
+  const allCombatants = (combatantsRow ?? []).map((row) => toCombatant(row as CombatantRow, currentRound));
+  const viewer = viewerRow
+    ? {
+        participantId: viewerRow.id,
+        role: viewerRow.role,
+        displayName: viewerRow.display_name,
+      }
+    : { participantId: null, role: null, displayName: null };
+  const persistedPositions = new Map(
+    (combatantsRow ?? []).map((row) => [row.id, persistedPosition(row.position)] as const),
+  );
+  const visibleCombatants = projectCombatantsForViewer(
+    allCombatants,
+    viewer.role,
+    viewer.participantId,
+    session.tacticalMap ?? DEFAULT_TACTICAL_MAP,
+    persistedPositions,
+  );
+  const combat = combatRow ? toCombat(combatRow as CombatRow) : null;
+
+  const ownCombatant = viewer.participantId ? allCombatants.find((entry) => entry.kind === "character" && entry.participantId === viewer.participantId) : null;
+  const architectureId = ownCombatant?.netrunnerState?.architectureId ?? null;
+  const architecture = architectureId ? architectures.find((entry) => entry.id === architectureId) ?? null : null;
+  const netArchitecture: NetArchitectureProjection | null = architecture && ownCombatant?.netrunnerState?.isJackedIn
+    ? projectNetArchitecture(architecture, ownCombatant.netrunnerState.currentFloor ?? 1, ownCombatant.netDiscovery ?? normalizeNetDiscovery(null, architecture.id), viewer.role === "gm")
+    : viewer.role === "gm" && architectures[0]
+      ? projectNetArchitecture(architectures[0], architectures[0].floors[0]?.index ?? 1, normalizeNetDiscovery(null, architectures[0].id), true)
+      : null;
+  const discoveredControlNodeIds = new Set((netArchitecture?.nodes ?? []).filter((node) => node.type === "control_node").map((node) => node.id));
+  session.tacticalMap = projectTacticalMapForViewer(session.tacticalMap ?? DEFAULT_TACTICAL_MAP, viewer.role === "gm", discoveredControlNodeIds);
+
   return {
     ...(stateVersion ? { stateVersion } : {}),
-    session: toSession(sessionRow as SessionRow),
+    session,
     participants: (participantsRow ?? []).map((row) => toParticipant(row as ParticipantRow)),
-    combat: combatRow ? toCombat(combatRow as CombatRow) : null,
-    combatants: (combatantsRow ?? []).map((row) => toCombatant(row as CombatantRow)),
-    viewer: viewerRow
-      ? {
-          participantId: viewerRow.id,
-          role: viewerRow.role,
-          displayName: viewerRow.display_name,
-        }
-      : { participantId: null, role: null, displayName: null },
+    combat: viewer.role === "gm" ? combat : projectCombatForPlayer(combat, allCombatants, visibleCombatants, viewer.participantId),
+    combatants: visibleCombatants,
+    netArchitecture,
+    ...(viewer.role === "gm" ? { netArchitectures: architectures } : {}),
+    viewer,
   };
 }
 
-/** Estado sem o bloco `viewer` — é o que vai para o Realtime (é igual para todos). */
-export type BroadcastState = Omit<MesaState, "viewer">;
-
-export async function getBroadcastState(sessionId: string): Promise<BroadcastState> {
-  const state = await getMesaState(sessionId, null);
-  return {
-    session: state.session,
-    participants: state.participants,
-    combat: state.combat,
-    combatants: state.combatants,
-  };
+/** Executa exatamente uma vez o turno de uma ICE que ocupa active_combatant_id. */
+async function executeBlackIceTurn(combat: CombatRow, iceRow: CombatantRow): Promise<void> {
+  const ice = iceRow.net_ice_state;
+  if (!ice || ice.state !== "active" || iceRow.is_dead || !ice.engagedNetrunnerId) {
+    await appendEvent(combat.id, { kind: "turn", text: `${iceRow.name}: turno ignorado (ICE inativa)` });
+    return;
+  }
+  const target = (await query(db().from("mesa_combatants").select("*").eq("id", ice.engagedNetrunnerId).eq("combat_id", combat.id).maybeSingle(), "Falha ao consultar alvo da ICE")) as CombatantRow | null;
+  if (!target || target.kind !== "character" || target.is_dead) {
+    await appendEvent(combat.id, { kind: "action", text: `${iceRow.name}: nenhum Netrunner válido para atacar` });
+    return;
+  }
+  const targetState = connectionStateForRow(target);
+  if (!targetState.isJackedIn || targetState.architectureId !== ice.architectureId || targetState.currentFloor !== ice.floorIndex) {
+    await appendEvent(combat.id, { kind: "action", text: `${iceRow.name}: alvo fora da NET` });
+    return;
+  }
+  const resolution = iceAttack({ ice, targetDefense: 10, rng: serverRandom });
+  if (ice.type === "anti_program") {
+    const program = (targetState.programs ?? []).find((entry) => entry.state === "active");
+    if (!program) {
+      await appendEvent(combat.id, { kind: "action", text: `${iceRow.name}: nenhum programa ativo (${resolution.total}/10)` });
+      return;
+    }
+    const damage = ice.damage ?? 0;
+    const nextProgram = applyProgramDamage(program, damage);
+    const nextState = { ...targetState, programs: (targetState.programs ?? []).map((entry) => entry.id === program.id ? nextProgram : entry) };
+    await query(db().from("mesa_combatants").update({ netrunner_state: nextState }).eq("id", target.id).eq("combat_id", combat.id), "Falha ao aplicar REZZ da ICE");
+    await appendEvent(combat.id, { kind: "action", text: `${iceRow.name}: Anti-Program → ${program.name} (${resolution.hit ? `HIT, ${damage} REZZ, restante ${nextProgram.rezz}` : "MISS"}) ${resolution.total}/10`, ...(target.participant_id ? { privateToParticipantId: target.participant_id } : {}) });
+    return;
+  }
+  const damage = resolution.hit ? brainDamageForIce(ice) : 0;
+  const nextBrainDamage = (target.brain_damage ?? 0) + damage;
+  const nextState = { ...targetState, brainDamage: nextBrainDamage };
+  await query(db().from("mesa_combatants").update({ brain_damage: nextBrainDamage, netrunner_state: nextState }).eq("id", target.id).eq("combat_id", combat.id), "Falha ao aplicar Brain Damage da ICE");
+  await appendEvent(combat.id, { kind: "action", text: `${iceRow.name}: Anti-Personnel → ${target.name} (${resolution.hit ? `HIT, ${damage} Brain Damage` : "MISS"}) ${resolution.total}/10`, ...(target.participant_id ? { privateToParticipantId: target.participant_id } : {}) });
 }
 
 /**
@@ -1192,6 +2042,7 @@ export async function getBroadcastState(sessionId: string): Promise<BroadcastSta
 export async function getMesaControlMetadata(sessionId: string, participantId: string): Promise<{
   combatantId: string;
   weapons: NonNullable<CombatParticipant["weapons"]>;
+  attacks: AvailableAttack[];
 }[]> {
   const participant = (await query(
     db().from("mesa_participants").select("role").eq("id", participantId).eq("session_id", sessionId).maybeSingle(),
@@ -1204,7 +2055,33 @@ export async function getMesaControlMetadata(sessionId: string, participantId: s
     "Falha ao consultar metadados de controle",
   )) as Array<{ id: string; kind: "enemy"; combat_snapshot: CombatParticipant | null }> | null;
 
-  return (rows ?? []).map((row) => ({ combatantId: row.id, weapons: row.combat_snapshot?.weapons ?? [] }));
+  return (rows ?? []).map((row) => {
+    const snapshot = row.combat_snapshot;
+    const weapons = snapshot?.weapons ?? [];
+    const attacks: AvailableAttack[] = weapons
+      .filter((weapon) => Boolean(weapon.id && weapon.skill && weapon.attackType))
+      .map((weapon) => ({
+        id: `weapon:${weapon.id}`,
+        label: weapon.name,
+        detail: `${weapon.skill} + 1d10`,
+        source: "weapon" as const,
+        context: { type: "weapon" as const, weaponId: weapon.id },
+      }));
+    // Só expõe ataques sem arma quando o snapshot realmente contém BODY para
+    // calcular o dano canônico; inimigos legados com Brawling como arma usam o
+    // item acima, sem uma segunda definição paralela.
+    if (snapshot?.stats?.BODY !== undefined) {
+      const brawling = snapshot.skills?.brawling;
+      if (brawling && brawling.level > 0 && !weapons.some((weapon) => weapon.skill === "brawling")) {
+        attacks.push({ id: "skill:brawling", label: "Brawling", detail: "DEX + Brawling + 1d10", source: "skill", rof: 2, context: { type: "brawling", skillId: "brawling" } });
+      }
+      const martialArts = snapshot.skills?.martial_arts;
+      if (martialArts && martialArts.level > 0) {
+        attacks.push({ id: "skill:martial_arts", label: "Martial Arts", detail: "DEX + Martial Arts + 1d10", source: "skill", rof: 2, context: { type: "martial_arts", skillId: "martial_arts" } });
+      }
+    }
+    return { combatantId: row.id, weapons, attacks };
+  });
 }
 
 export async function updateTacticalMap(input: { sessionId: unknown; token: unknown; map: unknown }): Promise<void> {
@@ -1213,10 +2090,23 @@ export async function updateTacticalMap(input: { sessionId: unknown; token: unkn
   validateTacticalCoverMetadata(input.map);
   const requestedMap = sanitizeTacticalMap(input.map);
   const currentRow = (await query(
-    db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(),
+    db().from("mesa_sessions").select("tactical_map,net_architectures").eq("id", session.id).maybeSingle(),
     "Falha ao consultar o mapa tático atual",
-  )) as { tactical_map?: unknown } | null;
+  )) as { tactical_map?: unknown; net_architectures?: unknown } | null;
   const currentMap = sanitizeTacticalMap(currentRow?.tactical_map);
+  const currentArchitectures = normalizeNetArchitectures(currentRow?.net_architectures);
+  const architectureIds = new Set(currentArchitectures.map((architecture) => architecture.id));
+  const controlNodeIds = new Set(currentArchitectures.flatMap((architecture) => architecture.floors.flatMap((floor) => floor.nodes.filter((node) => node.type === "control_node").map((node) => node.id))));
+  for (const accessPoint of requestedMap.accessPoints ?? []) {
+    if (accessPoint.architectureId !== null && !architectureIds.has(accessPoint.architectureId)) {
+      throw new MesaError("Access Point referencia uma arquitetura NET inexistente.", 400, "architecture_not_found");
+    }
+  }
+  for (const object of requestedMap.hackableObjects ?? []) {
+    if (object.linkedControlNodeId && !controlNodeIds.has(object.linkedControlNodeId)) {
+      throw new MesaError("Objeto hackeável referencia um Control Node inexistente.", 400, "control_node_not_found");
+    }
+  }
   const currentGeometry = currentMap.geometry ?? { walls: [], doors: [] };
   const requestedGeometry = requestedMap.geometry ?? { walls: [], doors: [] };
   const currentById = new Map([...currentGeometry.walls, ...currentGeometry.doors].map((entry) => [entry.id, entry]));
@@ -1241,6 +2131,54 @@ export async function updateTacticalMap(input: { sessionId: unknown; token: unkn
     db().from("mesa_sessions").update({ tactical_map: map, updated_at: new Date().toISOString() }).eq("id", session.id),
     "Falha ao salvar o mapa tático",
   );
+}
+
+/** F1.53 — configuração administrativa; não executa nenhuma NET Action. */
+export async function updateNetArchitectures(input: {
+  sessionId: unknown;
+  token: unknown;
+  architectures: unknown;
+}): Promise<NetArchitecture[]> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireActiveSession(session);
+  requireGM({ session, participant });
+  if (!Array.isArray(input.architectures)) throw new MesaError("Arquiteturas NET inválidas.", 400, "invalid_net_architectures");
+  const architectures: NetArchitecture[] = [];
+  const ids = new Set<string>();
+  for (const raw of input.architectures) {
+    if (containsManagedNetActionState(raw)) throw new MesaError("Estados de Password/Control são determinados pelo servidor.", 400, "client_authority_forbidden");
+    const architecture = normalizeNetArchitecture(raw);
+    if (!architecture) throw new MesaError("Arquitetura NET inválida: Floors/Nodes devem ser lineares e únicos.", 400, "invalid_net_architecture");
+    if (ids.has(architecture.id)) throw new MesaError("Arquitetura NET duplicada.", 400, "duplicate_net_architecture");
+    ids.add(architecture.id);
+    architectures.push(architecture);
+  }
+  const mapRow = (await query(
+    db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(),
+    "Falha ao consultar Access Points",
+  )) as { tactical_map?: unknown } | null;
+  const map = sanitizeTacticalMap(mapRow?.tactical_map);
+  const architectureIds = new Set(architectures.map((architecture) => architecture.id));
+  if ((map.accessPoints ?? []).some((accessPoint) => accessPoint.architectureId !== null && !architectureIds.has(accessPoint.architectureId))) {
+    throw new MesaError("Remova ou reconfigure Access Points que apontam para arquiteturas removidas.", 409, "architecture_in_use");
+  }
+  await query(
+    db().from("mesa_sessions").update({ net_architectures: architectures, updated_at: new Date().toISOString() }).eq("id", session.id),
+    "Falha ao salvar arquiteturas NET",
+  );
+  return architectures;
+}
+
+function containsManagedNetActionState(raw: unknown): boolean {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false;
+  const value = raw as Record<string, unknown>;
+  if (value.state === "unlocked" || value.controlState === "controlled" || value.controlledByNetrunnerId !== undefined || value.blackIceState !== undefined || value.blackIceInitiative !== undefined || value.engagedNetrunnerId !== undefined) return true;
+  if (Array.isArray(value.floors)) return value.floors.some((floor) => {
+    if (typeof floor !== "object" || floor === null || Array.isArray(floor)) return false;
+    const nodes = (floor as Record<string, unknown>).nodes;
+    return Array.isArray(nodes) && nodes.some((node) => containsManagedNetActionState(node));
+  });
+  return false;
 }
 
 /** Posicionamento de preparação: só o GM, sem economia/turno. */
@@ -3348,6 +4286,8 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
   if (combat.initiative_started) throw new MesaError("A iniciativa já foi rolada.", 409, "initiative_already_rolled");
 
+  await syncActiveNetIceCombatants(session.id, combat.id);
+
   const rows = (await query(
     db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
     "Falha ao consultar combatentes",
@@ -3355,7 +4295,7 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
 
   const rolled: Array<{
     id: string;
-    kind: "character" | "enemy";
+    kind: MesaCombatant["kind"];
     name: string;
     initiative: number;
     initiativeDetail: MesaCombatant["initiativeDetail"];
@@ -3386,6 +4326,13 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
     let refBonus = 0;
     let bonus = 0;
 
+    if (row.kind === "net_ice" && row.net_ice_state) {
+      const ice = row.net_ice_state;
+      total = ice.initiative ?? rollEnemyInitiative(ice.speed, 0);
+      expression = `Speed ${ice.speed} + 1d10`;
+      rolled.push({ id: row.id, kind: row.kind, name: row.name, initiative: total, initiativeDetail: { expression, total, speed: ice.speed }, isDead: row.is_dead, sortOrder: row.sort_order });
+      continue;
+    }
     if (row.kind === "character" && row.character_id) {
       const sheet = await loadSheet(row.character_id);
       if (sheet) {
@@ -3813,6 +4760,7 @@ async function advanceActiveTurn(sessionId: string, combat: CombatRow): Promise<
   const now = new Date().toISOString();
 
   if (advance.kind === "finished") {
+    await recoverAllNetrunnerRam(combat.id);
     await query(
       db()
         .from("mesa_combats")
@@ -3828,10 +4776,21 @@ async function advanceActiveTurn(sessionId: string, combat: CombatRow): Promise<
 
   const rowsById = new Map(rows.map((row) => [row.id, row]));
 
+  for (const row of rows) {
+    const effects = Array.isArray(row.net_effects) ? row.net_effects : [];
+    const expired = effects.filter((effect) => effect.expiresRound !== null && effect.expiresRound < advance.round);
+    if (!expired.length) continue;
+    const nextEffects = effects.filter((effect) => !expired.includes(effect));
+    const expiredConditions = new Set(expired.flatMap((effect) => effect.conditionIds ?? []));
+    const nextConditions = (row.conditions ?? []).filter((condition) => !expiredConditions.has(condition));
+    await query(db().from("mesa_combatants").update({ net_effects: nextEffects, conditions: nextConditions }).eq("id", row.id), "Falha ao expirar efeito de Quickhack");
+  }
+
   // Zera o orçamento de quem perdeu o turno e reabre o de quem assumiu.
   if (combat.active_combatant_id) {
     const previous = rowsById.get(combat.active_combatant_id);
     if (previous) {
+      await applyQuickhackEndTurnEffects(combat, previous, rows);
       await query(
         db().from("mesa_combatants").update({ actions_remaining: 0, movement_remaining: 0 }).eq("id", previous.id),
         "Falha ao encerrar o turno",
@@ -3839,12 +4798,23 @@ async function advanceActiveTurn(sessionId: string, combat: CombatRow): Promise<
     }
   }
   const nextBudget = rowsById.get(advance.activeCombatantId);
+  if (nextBudget) {
+    const state = connectionStateForRow(nextBudget);
+    if (state.isJackedIn) {
+      await query(db().from("mesa_combatants").update({ netrunner_state: {
+        ...state,
+        ramCurrent: Math.min(state.ramMax, state.ramCurrent + 1),
+        netActionsRemaining: state.netActionsMax,
+        meatspaceActionUsedForNetrunning: false,
+      } }).eq("id", nextBudget.id), "Falha ao iniciar estado de Netrunner");
+    }
+  }
   await query(
     db()
       .from("mesa_combatants")
       .update({
-        actions_remaining: ACTIONS_PER_TURN,
-        movement_remaining: nextBudget?.movement_max ?? MOVEMENT_PER_TURN,
+        actions_remaining: nextBudget?.kind === "net_ice" ? 0 : ACTIONS_PER_TURN,
+        movement_remaining: nextBudget?.kind === "net_ice" ? 0 : (nextBudget?.movement_max ?? MOVEMENT_PER_TURN),
       })
       .eq("id", advance.activeCombatantId),
     "Falha ao iniciar o turno",
@@ -3869,6 +4839,28 @@ async function advanceActiveTurn(sessionId: string, combat: CombatRow): Promise<
       ? { kind: "round", text: `Rodada ${advance.round} — turno de ${next?.name ?? "?"}` }
       : { kind: "turn", text: `Turno de ${next?.name ?? "?"}` };
   await appendEvent(combat.id, event);
+}
+
+async function applyQuickhackEndTurnEffects(combat: CombatRow, row: CombatantRow, rows: CombatantRow[]): Promise<void> {
+  const effects = activeQuickhackEffects(row, combat.round);
+  const periodic = effects.find((effect) => effect.damageAtEndOfTurn && effect.lastDamageRound !== combat.round);
+  if (!periodic || !row.combat_snapshot) return;
+  const participants = rows.map((entry) => combatParticipantFromRow(entry)).filter((entry): entry is CombatParticipant => entry !== null);
+  const state: CombatState = { id: combat.id, status: combat.status, round: combat.round, initiativeStarted: combat.initiative_started, activeParticipantId: combat.active_combatant_id, participants };
+  const result = execute(state, { type: "damage", actorId: null, targetId: row.id, amount: periodic.damageAtEndOfTurn ?? 0, ignoreArmor: true }, serverRandom);
+  if (!result.ok) return;
+  const patch = engineDamagePatch(result, row.id);
+  const nextEffects = effects.map((effect) => effect.id === periodic.id ? { ...effect, lastDamageRound: combat.round } : effect);
+  const written = await query(db().from("mesa_combatants").update({ ...patch, net_effects: nextEffects }).eq("id", row.id).eq("combat_id", combat.id).eq("hp_current", row.hp_current).select("id"), "Falha ao aplicar dano recorrente de Quickhack");
+  if (written && written.length === 1) await appendEvent(combat.id, { kind: "action", text: `${row.name}: Overheat causa ${periodic.damageAtEndOfTurn} HP` });
+}
+
+async function recoverAllNetrunnerRam(combatId: string): Promise<void> {
+  const rows = (await query(db().from("mesa_combatants").select("id,netrunner_state").eq("combat_id", combatId), "Falha ao recuperar RAM")) as Array<{ id: string; netrunner_state?: NetrunnerConnectionState | null }> | null;
+  for (const row of rows ?? []) {
+    const state = normalizeNetrunnerState(row.netrunner_state);
+    if (state.ramMax > 0) await query(db().from("mesa_combatants").update({ netrunner_state: { ...state, ramCurrent: state.ramMax } }).eq("id", row.id), "Falha ao persistir recuperação de RAM");
+  }
 }
 
 /** Executa uma ação (ataque/item/outro/movimento) validando tudo no servidor. */
@@ -3962,6 +4954,25 @@ export async function performAction(input: {
   await appendEvent(combat.id, { kind: "action", text: `${row.name}: ${label}` });
 }
 
+async function unsafeJackOutNetConsequences(row: CombatantRow, state: NetrunnerConnectionState, sessionId: string): Promise<{ state: NetrunnerConnectionState; events: string[] }> {
+  if (!state.architectureId || !(state.engagedBlackIceIds ?? []).length) return { state, events: [] };
+  const architectureRow = (await query(db().from("mesa_sessions").select("net_architectures").eq("id", sessionId).maybeSingle(), "Falha ao consultar ICE")) as { net_architectures?: unknown } | null;
+  const architecture = normalizeNetArchitectures(architectureRow?.net_architectures).find((entry) => entry.id === state.architectureId);
+  if (!architecture) return { state, events: [] };
+  let brainDamage = state.brainDamage ?? 0;
+  const events: string[] = [];
+  for (const id of state.engagedBlackIceIds ?? []) {
+    const node = architecture.floors.flatMap((floor) => floor.nodes).find((entry) => entry.id === id);
+    if (!node || node.type !== "black_ice" || !node.blackIce || node.blackIceState !== "active") continue;
+    const ice: NetBlackIce = { ...node.blackIce, id: node.id, nodeId: node.id, architectureId: architecture.id, floorIndex: node.floorIndex, state: "active", ...(node.blackIceInitiative === undefined ? {} : { initiative: node.blackIceInitiative }) };
+    const resolution = iceAttack({ ice, targetDefense: 10, rng: serverRandom });
+    const damage = resolution.hit && ice.type === "anti_personnel" ? brainDamageForIce(ice) : 0;
+    brainDamage += damage;
+    events.push(`${row.name}: Unsafe Jack Out — ${ice.name} ${resolution.hit ? `HIT${damage ? ` (${damage} Brain Damage)` : ""}` : "MISS"} ${resolution.total}/10`);
+  }
+  return { state: { ...state, brainDamage, programs: state.programs ? state.programs.map((program) => ({ ...program })) : [] }, events };
+}
+
 /**
  * F1.14.3 — movimento do Player. Não há posição espacial na Mesa: o estado
  * persistido é o orçamento `movement_remaining` (metros de MOVE × 2 por turno).
@@ -3988,8 +4999,12 @@ export async function movePlayerCombatant(input: {
   if (!actorCombatantId) throw new MesaError("Combatente ausente.", 400, "combatant_not_found");
   // O motor legado truncava metros fracionários. O gateway recebe somente
   // metros inteiros para não aceitar uma intenção diferente da registrada.
-  const requestedPosition = body.targetPosition === undefined ? null : normalizeTacticalPosition(body.targetPosition, { x: -1, y: -1 });
+  const hasTargetPosition = Object.prototype.hasOwnProperty.call(body, "targetPosition");
+  const requestedPosition = !hasTargetPosition ? null : normalizeTacticalPosition(body.targetPosition, { x: -1, y: -1 });
   const hasPosition = requestedPosition !== null && requestedPosition.x >= 0 && requestedPosition.y >= 0;
+  if (hasTargetPosition && !hasPosition) {
+    throw new MesaError("Posição de destino inválida.", 400, "invalid_target_position");
+  }
   if (!hasPosition && (typeof body.distance !== "number" || !Number.isSafeInteger(body.distance) || body.distance <= 0)) {
     throw new MesaError("Informe uma distância inteira e positiva em metros.", 400, "invalid_distance");
   }
@@ -4053,20 +5068,59 @@ export async function movePlayerCombatant(input: {
     // protege também o orçamento contra dois movimentos simultâneos.
     const currentCombat = await getActiveCombat(session.id);
     const movement = effectiveMovementForRow(row);
-    let sessionMap: { tactical_map?: TacticalMap | null } | null = null;
+    let sessionMap: { tactical_map?: unknown } | null = null;
+    let sessionMapReadFailed = false;
     try {
       sessionMap = (await query(db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(), "Falha ao consultar escala do mapa")) as { tactical_map?: TacticalMap | null } | null;
     } catch {
       // Compatibilidade durante o rollout: movimentos antigos continuam usando
       // o contrato de metros até a migration do mapa chegar ao ambiente.
+      sessionMapReadFailed = true;
       sessionMap = null;
+    }
+    if (hasPosition && sessionMapReadFailed) {
+      throw new MesaError("A geometria tática não está disponível para validar o movimento.", 409, "tactical_geometry_unavailable");
+    }
+    if (hasPosition && sessionMap?.tactical_map && typeof sessionMap.tactical_map === "object" && !Array.isArray(sessionMap.tactical_map)) {
+      const rawMap = sessionMap.tactical_map as Record<string, unknown>;
+      if (Object.prototype.hasOwnProperty.call(rawMap, "geometry") && !isValidTacticalGeometry(rawMap.geometry)) {
+        throw new MesaError("A geometria tática persistida é inválida.", 409, "invalid_tactical_geometry");
+      }
     }
     const map = sanitizeTacticalMap(sessionMap?.tactical_map);
     const currentPosition = normalizeTacticalPosition(row.position, { x: row.kind === "enemy" ? 0.78 : 0.22, y: 0.5 });
-    const targetPosition = hasPosition ? requestedPosition as TacticalPosition : currentPosition;
-    const distance = hasPosition ? tacticalDistance(currentPosition, targetPosition, map) : requestedDistance as number;
+    let targetPosition = hasPosition ? requestedPosition as TacticalPosition : currentPosition;
+    let distance = hasPosition ? tacticalDistance(currentPosition, targetPosition, map) : requestedDistance as number;
+    let nextNetrunnerState: NetrunnerConnectionState | undefined;
+    let unsafeEvents: string[] = [];
+    const currentNetrunnerState = connectionStateForRow(row);
+    if (!hasPosition && currentNetrunnerState.isJackedIn && currentNetrunnerState.connectionType === "wireless") {
+      throw new MesaError("Netrunner conectado exige posição de destino para validar o alcance do Access Point.", 400, "target_position_required");
+    }
+      if (hasPosition && currentNetrunnerState.isJackedIn && currentNetrunnerState.connectionType === "wireless") {
+        const accessPoint = (map.accessPoints ?? []).find((entry) => entry.id === currentNetrunnerState.connectedAccessPointId);
+      if (!accessPoint) throw new MesaError("O Access Point da conexão não está mais disponível.", 409, "access_point_not_found");
+      if (accessPoint) {
+        const wirelessMovement = stopAtWirelessAccessPointRange({ currentPosition, targetPosition, accessPoint, map });
+        if (wirelessMovement.crossed) {
+          targetPosition = wirelessMovement.position;
+          distance = wirelessMovement.distance;
+          nextNetrunnerState = unsafeJackOutState(currentNetrunnerState);
+        }
+      }
+    }
     if (hasPosition && distance <= 0) throw new MesaError("Escolha uma posição diferente.", 400, "invalid_distance");
-    if (hasPosition) await ensurePositionAvailable(session.id, combat.id, row.id, targetPosition, map);
+    if (hasPosition) {
+      const path = validateMovementPath(currentPosition, targetPosition, map.geometry ?? DEFAULT_TACTICAL_GEOMETRY);
+      if (!path.valid) {
+        if (path.reason === "invalid_geometry") {
+          throw new MesaError("A geometria tática persistida é inválida.", 409, "invalid_tactical_geometry");
+        }
+        const obstacleLabel = path.blockedBy?.type === "door" ? "porta fechada" : "parede";
+        throw new MesaError(`Movimento bloqueado: ${obstacleLabel} no caminho.`, 409, "movement_blocked");
+      }
+      await ensurePositionAvailable(session.id, combat.id, row.id, targetPosition, map);
+    }
     const unconsciousUntilRound = unconsciousUntilRoundForRow(row);
     const validation = resolveAction({
       combatStatus: currentCombat?.status ?? null,
@@ -4085,12 +5139,18 @@ export async function movePlayerCombatant(input: {
     });
     if (!validation.ok) throw new MesaError(DENIAL_MESSAGES[validation.reason], 403, validation.reason);
 
+    if (nextNetrunnerState) {
+      const consequences = await unsafeJackOutNetConsequences(row, currentNetrunnerState, session.id);
+      unsafeEvents = consequences.events;
+      nextNetrunnerState = unsafeJackOutState(consequences.state);
+    }
+
     const economy = applyAction({
       actionsMax: row.actions_max, actionsRemaining: row.actions_remaining,
       movementMax: movement.max, movementRemaining: movement.remaining,
     }, "move", distance);
     const written = (await query(db().from("mesa_combatants")
-      .update({ movement_remaining: economy.movementRemaining, ...(hasPosition ? { position: targetPosition } : {}) })
+      .update({ movement_remaining: economy.movementRemaining, ...(hasPosition ? { position: targetPosition } : {}), ...(nextNetrunnerState ? { netrunner_state: nextNetrunnerState } : {}) })
       .eq("id", row.id).eq("combat_id", combat.id)
       .eq("movement_remaining", row.movement_remaining)
       .eq("actions_remaining", row.actions_remaining)
@@ -4111,8 +5171,9 @@ export async function movePlayerCombatant(input: {
     if (stamped?.length !== 1) throw new MesaError("A resolução não foi confirmada.", 500, "transaction_failed");
     // O evento é apresentação. Depois do commit ele não pode transformar um
     // movimento já aplicado em erro para o jogador nem impedir a publicação.
-    try {
-      await appendEvent(combat.id, { kind: "action", text: `${row.name}: Movimento (${distance}m)` });
+      try {
+        await appendEvent(combat.id, { kind: "action", text: `${row.name}: Movimento (${distance}m)${nextNetrunnerState ? " — Unsafe Jack Out" : ""}` });
+        for (const event of unsafeEvents) await appendEvent(combat.id, { kind: "action", text: event });
     } catch { /* O orçamento/resultado já foram gravados; o estado será publicado. */ }
     return { result, committed: true };
   } catch (error) {
@@ -4368,11 +5429,6 @@ export async function attackIntegrated(input: {
   // linha seja alterada durante a leitura.
   if (target.combat.isDead) throw new MesaError("Alvo derrotado.", 400, "target_defeated");
 
-  // A única defesa suportada nesta etapa é Evasion real do snapshot.
-  if (!hasServerEvasionTarget(target)) {
-    throw new MesaError("Alvo não possui DEX e Evasion server-side suficientes.", 409, "evasion_unavailable");
-  }
-
   const rawMode = input.attackMode;
   if (rawMode !== "normal" && rawMode !== "aimed") {
     throw new MesaError("Somente ataques normal/aimed estão disponíveis nesta etapa.", 400, "invalid_attack_mode");
@@ -4390,11 +5446,29 @@ export async function attackIntegrated(input: {
 
   const skillId = weapon?.skill ?? (typeof input.skillId === "string" ? input.skillId : undefined);
   if (!skillId || !actor.skills?.[skillId]) throw new MesaError("Skill não pertence ao ator.", 400, "skill_not_found");
+  if (!weapon && actor.skills[skillId].level <= 0) {
+    throw new MesaError("A perícia de ataque não está disponível para este ator.", 400, "skill_not_available");
+  }
   if (input.skillId !== undefined && input.skillId !== skillId) {
     throw new MesaError("Skill inconsistente com a arma do snapshot.", 400, "invalid_skill");
   }
 
-  const attackType = weapon?.attackType ?? input.attackType;
+  // Ataques sem weaponId só podem usar as perícias desarmadas já existentes.
+  // O tipo é derivado do snapshot/perícia; o cliente não escolhe ranged/melee.
+  const requestedAttackType = typeof input.attackType === "string" ? input.attackType : undefined;
+  let attackType = weapon?.attackType ?? requestedAttackType;
+  if (!weapon) {
+    const isBrawling = skillId === "brawling";
+    const isMartialArts = skillId === "martial_arts" || skillId.startsWith("martial_arts_");
+    if (!isBrawling && !isMartialArts) {
+      throw new MesaError("Ataque sem arma exige Brawling ou Martial Arts.", 400, "invalid_unarmed_attack");
+    }
+    const canonicalType = isMartialArts ? "martial_arts" : requestedAttackType === "unarmed" ? "unarmed" : "brawling";
+    if (requestedAttackType !== undefined && requestedAttackType !== canonicalType && !(isBrawling && requestedAttackType === "brawling")) {
+      throw new MesaError("Tipo de ataque não autorizado para a perícia do ator.", 400, "invalid_attack_type");
+    }
+    attackType = canonicalType;
+  }
   if (typeof attackType !== "string") throw new MesaError("Tipo de ataque ausente.", 400, "invalid_attack_type");
   if (weapon?.attackType && input.attackType !== undefined && input.attackType !== weapon.attackType) {
     throw new MesaError("Tipo de ataque inconsistente com a arma do snapshot.", 400, "invalid_attack_type");
@@ -4414,7 +5488,7 @@ export async function attackIntegrated(input: {
     activeParticipantId: combat.active_combatant_id,
     participants: participants.map(({ participant: snapshot }) => snapshot as CombatParticipant),
   };
-  const action: AttackAction = {
+  let action: AttackAction = {
     type: "attack",
     actorId: actor.id,
     targetId: target.id,
@@ -4467,6 +5541,23 @@ export async function attackIntegrated(input: {
     "Falha ao consultar a geometria tática",
   )) as { tactical_map?: unknown } | null;
   const currentTacticalMap = sanitizeTacticalMap(currentMapRow?.tactical_map);
+  if (participant.role === "player" && !isTacticalTargetVisibleToPlayer(actorPosition, targetPosition, currentTacticalMap)) {
+    throw new MesaError("Alvo não está visível para este Player.", 404, "target_not_visible");
+  }
+  if (participant.role === "player" && !isDetectedBy(actorRow.participant_id ?? participant.id, {
+    stealthState: targetRow.stealth_state === "stealthed" ? "stealthed" : "not_stealthed",
+    detectedBy: Array.isArray(targetRow.detected_by) ? targetRow.detected_by : [],
+  })) {
+    throw new MesaError("Alvo não foi detectado por este Player.", 404, "target_not_detected");
+  }
+  const tacticalDistanceMeters = tacticalDistance(actorPosition, targetPosition, currentTacticalMap);
+  let meleeRange: TacticalMeleeRangeResolution | undefined;
+  if (isMeleeAttackType(attackType, skillId)) {
+    meleeRange = resolveMeleeRange(actorPosition, targetPosition, currentTacticalMap);
+    if (!meleeRange.inRange) {
+      throw new MesaError("Alvo fora do alcance corpo a corpo.", 409, "melee_out_of_range");
+    }
+  }
   const tacticalCover = calculateTacticalCover(
     actorPosition,
     targetPosition,
@@ -4475,6 +5566,41 @@ export async function attackIntegrated(input: {
   if (tacticalCover.lineOfSight === "blocked") {
     throw new MesaError("Linha de visão bloqueada por geometria tática.", 409, "line_of_sight_blocked");
   }
+
+  // Alcance é resolvido no gateway a partir do snapshot da arma e das
+  // posições persistidas. O cliente não envia distância, faixa ou DV.
+  let weaponRange: Extract<WeaponRangeResolution, { status: "valid" }> | undefined;
+  if (isRangedWeaponAttack(attackType, skillId)) {
+    const profile = getWeaponRangeProfile(weapon ?? { id: requestedWeaponId, catalogItemId: requestedWeaponId });
+    // Snapshots legados/customizados podem não ter referência de catálogo. A
+    // ausência é auditável (não inventamos uma tabela), mas não muda a regra
+    // antiga de Evasion; apenas armas com perfil válido recebem enforcement de
+    // distância/DV nesta camada.
+    if (profile) {
+       const resolvedRange = resolveWeaponRangeBand(tacticalDistanceMeters, profile);
+      if (resolvedRange.status === "undefined") {
+        throw new MesaError("O perfil de alcance da arma é inválido.", 409, "weapon_range_invalid");
+      }
+      if (resolvedRange.status === "out_of_range") {
+        throw new MesaError(`Alvo fora do alcance máximo da arma (${resolvedRange.maxMeters}m).`, 409, "weapon_out_of_range");
+      }
+      weaponRange = resolvedRange;
+    }
+  }
+
+  // Alvos com Evasion materializada continuam usando defesa ativa. Quando a
+  // defesa por Evasion não existe, o DV da faixa é a defesa oficial derivada
+  // pela arma; ataques melee preservam a exigência de Evasion existente.
+  const targetUsesEvasion = hasServerEvasionTarget(target);
+  if (!targetUsesEvasion && !weaponRange) {
+    throw new MesaError("Alvo não possui DEX e Evasion server-side suficientes.", 409, "evasion_unavailable");
+  }
+  action = {
+    ...action,
+    defense: weaponRange && !targetUsesEvasion
+      ? { type: "dv", value: weaponRange.dv, source: "range_table", reason: "weapon_range" }
+      : { type: "evasion" },
+  };
 
   const result = execute(state, action, serverRandom);
   if (!result.ok || !result.attackResult) {
@@ -4528,7 +5654,8 @@ export async function attackIntegrated(input: {
           targetId: target.id,
           amount: damageRoll.roll.total,
           hitLocation: location.location,
-          damageRolls: damageRoll.roll.rolls,
+           damageRolls: damageRoll.roll.rolls,
+           ...(result.attackResult.attackType === "martial_arts" ? { armorRule: "martial_arts_half" as const } : {}),
         };
         const damage = execute(result.state, damageAction, serverRandom);
         if (!damage.ok || !damage.damageResult) {
@@ -4542,7 +5669,13 @@ export async function attackIntegrated(input: {
     }
   }
 
-  response = { ...response, tacticalCover, actionAfter: economy.actionsRemaining };
+  response = {
+    ...response,
+    tacticalCover,
+    ...(weaponRange ? { weaponRange } : {}),
+    ...(meleeRange ? { meleeRange, meleeDistanceMeters: tacticalDistanceMeters } : {}),
+    actionAfter: economy.actionsRemaining,
+  };
 
   // O texto do evento é a trilha de auditoria também para instalações que só
   // conhecem a coluna `text` (eventos antigos, exportações e a tela do GM).
@@ -4553,6 +5686,7 @@ export async function attackIntegrated(input: {
     targetName: targetRow.name,
     attackResult: response.attackResult,
     tacticalCover: response.tacticalCover,
+    weaponRange: response.weaponRange,
     weaponDamage: response.weaponDamage,
     damageResult: response.damageResult,
   });
@@ -4866,6 +6000,7 @@ export async function endTurn(input: { sessionId: unknown; token: unknown }): Pr
 
   if (!active) throw new MesaError("Combatente ativo não encontrado.", 409, "turn_conflict");
 
+  if (active.kind === "net_ice") await executeBlackIceTurn(combat, active);
   await advanceActiveTurn(session.id, combat);
 }
 
@@ -4877,6 +6012,7 @@ export async function endCombat(input: { sessionId: unknown; token: unknown }): 
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
 
+  await recoverAllNetrunnerRam(combat.id);
   await query(
     db()
       .from("mesa_combats")

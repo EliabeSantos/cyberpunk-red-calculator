@@ -9,12 +9,200 @@ import type { CriticalInjury } from "@/data/criticalInjuries";
 export type SessionStatus = "lobby" | "active" | "finished";
 export type ParticipantRole = "gm" | "player";
 export type CombatStatus = "active" | "finished";
-export type CombatantKind = "character" | "enemy";
+export type CombatantKind = "character" | "enemy" | "net_ice";
 
 export interface TacticalPosition {
   x: number;
   y: number;
 }
+
+/** F1.51 — tipos de conexão disponíveis para um Access Point. */
+export type NetrunnerConnectionType = "wireless" | "cable";
+
+/** Access Point persistido junto do Tactical Map; Architecture fica para fase posterior. */
+export interface TacticalAccessPoint {
+  id: string;
+  position: TacticalPosition;
+  connectionTypes: NetrunnerConnectionType[];
+  architectureId: string | null;
+  wirelessRangeMeters: 6;
+  active: boolean;
+}
+
+/** F1.53 — estrutura declarativa da NET, sem regras de exploração/combat. */
+export type NetNodeType = "lobby" | "password" | "file" | "control_node" | "black_ice" | "demon";
+
+export type BlackIceType = "anti_program" | "anti_personnel";
+export type NetProgramState = "active" | "destroyed";
+
+export interface NetProgram {
+  id: string;
+  name: string;
+  attackBonus: number;
+  rezz: number;
+  maxRezz: number;
+  damage: number;
+  state: NetProgramState;
+}
+
+export interface NetBlackIce {
+  id: string;
+  nodeId: string;
+  architectureId: string;
+  floorIndex: number;
+  name: string;
+  type: BlackIceType;
+  speed: number;
+  per: number;
+  def: number;
+  rezz: number;
+  maxRezz: number;
+  attack: number;
+  damage?: number;
+  state: "inactive" | "active" | "destroyed";
+  initiative?: number;
+  engagedNetrunnerId?: string;
+  brainDamage?: number;
+}
+
+export interface NetDemon {
+  id: string;
+  nodeId: string;
+  architectureId: string;
+  name: string;
+  state: "active" | "inactive";
+  controlledNodeIds: string[];
+}
+
+export interface NetPasswordNode {
+  id: string;
+  type: "password";
+  floorIndex: number;
+  name?: string;
+  description?: string;
+  dv?: number;
+  state: "locked" | "unlocked";
+}
+
+export interface NetFileNode {
+  id: string;
+  type: "file";
+  floorIndex: number;
+  name?: string;
+  description?: string;
+  content?: string;
+  reference?: string;
+}
+
+export interface NetControlNode {
+  id: string;
+  type: "control_node";
+  floorIndex: number;
+  name?: string;
+  description?: string;
+  deviceReference?: string;
+  dv?: number;
+  controlState?: "uncontrolled" | "controlled";
+  controlledByNetrunnerId?: string;
+  controlledByDemonId?: string;
+}
+
+export interface NetBasicNode {
+  id: string;
+  type: "lobby" | "black_ice" | "demon";
+  floorIndex: number;
+  name?: string;
+  description?: string;
+  blackIce?: Omit<NetBlackIce, "id" | "nodeId" | "architectureId" | "floorIndex" | "state"> & { id?: string };
+  blackIceState?: NetBlackIce["state"];
+  blackIceInitiative?: number;
+  engagedNetrunnerId?: string;
+  demon?: Omit<NetDemon, "id" | "nodeId" | "architectureId" | "controlledNodeIds"> & { id?: string; controlledNodeIds?: string[] };
+  demonState?: NetDemon["state"];
+}
+
+export type NetNode = NetPasswordNode | NetFileNode | NetControlNode | NetBasicNode;
+
+export interface NetFloor {
+  id: string;
+  index: number;
+  nodes: NetNode[];
+}
+
+export interface NetArchitecture {
+  id: string;
+  name: string;
+  description?: string;
+  floors: NetFloor[];
+  pathfinder?: {
+    dv: number;
+    discoveryDepth: number;
+  };
+}
+
+/** Descoberta individual persistida na linha do Netrunner, nunca global na arquitetura. */
+export interface NetDiscoveryState {
+  architectureId: string;
+  discoveredNodeIds: string[];
+  /** Optional for legacy F1.53 rows; F1.54 keeps Pathfinder discovery unread. */
+  revealedFileIds?: string[];
+}
+
+/** Projeção já filtrada pelo servidor para o Player ou completa para o GM. */
+export interface NetArchitectureProjection {
+  architectureId: string;
+  name: string;
+  description?: string;
+  currentFloor: number;
+  nodes: NetNode[];
+  administrative?: boolean;
+  floors?: NetFloor[];
+}
+
+/** Estado mutável de conexão do Netrunner, separado da futura NET Architecture. */
+export interface NetrunnerConnectionState {
+  isJackedIn: boolean;
+  connectedAccessPointId: string | null;
+  connectionType: NetrunnerConnectionType | null;
+  architectureId: string | null;
+  /** Floor 1 is the conceptual entry point; full Floors come in a later phase. */
+  currentFloor: number | null;
+  unsafeJackOut: boolean;
+  /** Reservado para a fase de Black ICE; vazio enquanto ela não existe. */
+  engagedBlackIceIds?: string[];
+  interfaceRank: number;
+  ramCurrent: number;
+  ramMax: number;
+  netActionsRemaining: number;
+  netActionsMax: number;
+  meatspaceActionUsedForNetrunning: boolean;
+  cyberdeckSlots: number;
+  maxQuickhackSlots: 4;
+  equippedQuickhackIds: string[];
+  programs?: NetProgram[];
+  brainDamage?: number;
+}
+
+export interface MesaQuickhackEffect {
+  id: string;
+  quickhackId: string;
+  sourceCombatantId: string;
+  appliedRound: number;
+  expiresRound: number | null;
+  moveModifier?: number;
+  conditionIds?: string[];
+  disabledCyberwareIds?: string[];
+  controlsMove?: boolean;
+  controlsAction?: boolean;
+  unconscious?: boolean;
+  prone?: boolean;
+  damageAtEndOfTurn?: number;
+  lastDamageRound?: number;
+}
+
+export type VisibilityState = "visible" | "hidden";
+export type StealthState = "not_stealthed" | "stealthed";
+export type DetectionState = "hidden" | "detected";
 
 export type TacticalPoint = TacticalPosition;
 
@@ -67,6 +255,19 @@ export interface TacticalGeometry {
   doors: TacticalDoor[];
 }
 
+export type TacticalHackableObjectType = "camera" | "terminal" | "door_panel" | "console" | "access_panel" | "generic";
+
+/** Representação física pública; a autoridade continua no Control Node/NET. */
+export interface TacticalHackableObject {
+  id: string;
+  type: TacticalHackableObjectType;
+  position: TacticalPoint;
+  label?: string;
+  linkedControlNodeId?: string;
+  interactionRadius?: number;
+  active: boolean;
+}
+
 export interface TacticalMap {
   imageUrl: string;
   enabled: boolean;
@@ -76,6 +277,8 @@ export interface TacticalMap {
   pixelsPerMeter: number;
   grid?: TacticalGridConfig;
   geometry?: TacticalGeometry;
+  accessPoints?: TacticalAccessPoint[];
+  hackableObjects?: TacticalHackableObject[];
 }
 
 export interface TacticalGridConfig {
@@ -151,7 +354,7 @@ export interface MesaCombatant {
    * Como a iniciativa foi calculada. `bonus` é o bônus de implantes do inimigo
    * (`1d10 + refBonus + bonus`) — presente só quando ≠ 0.
    */
-  initiativeDetail: { expression?: string; refBonus?: number; total?: number; bonus?: number } | null;
+  initiativeDetail: { expression?: string; refBonus?: number; total?: number; bonus?: number; speed?: number } | null;
   actionsMax: number;
   actionsRemaining: number;
   movementMax: number;
@@ -167,6 +370,16 @@ export interface MesaCombatant {
   conditions: string[];
   sortOrder: number;
   position?: TacticalPosition;
+  /** Estado autoritativo; nunca é aceito do snapshot do cliente. */
+  stealthState?: StealthState;
+  /** IDs dos observadores que já detectaram este combatente. */
+  detectedBy?: string[];
+  /** Estado de conexão server-side; a projeção Player omite o de terceiros. */
+  netrunnerState?: NetrunnerConnectionState;
+  quickhackEffects?: MesaQuickhackEffect[];
+  netDiscovery?: NetDiscoveryState;
+  netIce?: NetBlackIce;
+  brainDamage?: number;
   /** Foto pública do personagem; nunca inclui dados privados da ficha. */
   avatarUrl?: string;
 }
@@ -175,6 +388,8 @@ export interface MesaEvent {
   at: string;
   /** Chave de resolução carimbada pelo servidor quando o evento é retryable. */
   resolutionId?: string;
+  /** Eventos de NET Action privados ao Netrunner; GM sempre os recebe. */
+  privateToParticipantId?: string;
   /**
    * `roll` = dado rolado na ficha de um participante (entra também na lista de
    * rolagens visível no painel, sem precisar abrir o registro completo).
@@ -255,7 +470,7 @@ export interface MesaBattle {
   combatants: MesaBattleCombatant[];
 }
 
-/** Estado completo devolvido ao cliente (é o que o Realtime publica). */
+/** Estado completo devolvido ao cliente pelo GET autenticado. */
 export interface MesaState {
   /** Maior `updated_at` conhecido da sessão/combate, usado só para convergência. */
   stateVersion?: string;
@@ -263,6 +478,8 @@ export interface MesaState {
   participants: MesaParticipant[];
   combat: MesaCombat | null;
   combatants: MesaCombatant[];
+  netArchitecture?: NetArchitectureProjection | null;
+  netArchitectures?: NetArchitecture[];
   /** Quem está perguntando — identificado pelo playerToken enviado na requisição. */
   viewer: {
     participantId: string | null;
