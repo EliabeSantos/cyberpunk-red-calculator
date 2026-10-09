@@ -37,16 +37,20 @@ export function projectCombatantsForPlayer(
   );
   const observerPosition = observer ? persistedPositions.get(observer.id) ?? null : null;
 
-  return combatants.filter((combatant) => {
-    if (combatant.id === observer?.id) return true;
-    if (combatant.kind !== "enemy" && combatant.stealthState !== "stealthed") return true;
-    if (resolveTacticalVisibility(observerPosition, persistedPositions.get(combatant.id) ?? null, map) !== "visible") return false;
-    return combatant.stealthState !== "stealthed" || (combatant.detectedBy ?? []).includes(observer?.id ?? "");
-  }).map((combatant) => {
-    if (combatant.id === observer?.id) return combatant;
-    const { netrunnerState: _privateNetrunnerState, netDiscovery: _privateNetDiscovery, ...publicCombatant } = combatant;
-    return publicCombatant;
-  });
+  const projected: MesaCombatant[] = [];
+  for (const combatant of combatants) {
+    if (combatant.id !== observer?.id) {
+      if (combatant.kind === "enemy" || combatant.stealthState === "stealthed") {
+        if (resolveTacticalVisibility(observerPosition, persistedPositions.get(combatant.id) ?? null, map) !== "visible") continue;
+        if (combatant.stealthState === "stealthed" && !(combatant.detectedBy ?? []).includes(observer?.id ?? "")) continue;
+      }
+      const { netrunnerState: _privateNetrunnerState, netDiscovery: _privateNetDiscovery, ...publicCombatant } = combatant;
+      projected.push(publicCombatant);
+      continue;
+    }
+    projected.push(combatant);
+  }
+  return projected;
 }
 
 /** Projeção única para o snapshot: GM integral, Player filtrado. */

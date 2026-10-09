@@ -13,7 +13,7 @@
  */
 
 import Link from "next/link";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 import PlayerMesaScreen from "@/components/mesa/player/PlayerMesaScreen";
 import {
@@ -35,21 +35,15 @@ function errorText(error: string | null, code: string | null): string {
 }
 
 export default function PlayerMesaView({ sessionId }: Props) {
-  const [membershipHydrated, setMembershipHydrated] = useState(false);
   const memberships = useSyncExternalStore(
     subscribeToMembership,
     getMembershipSnapshot,
     getServerMembershipSnapshot,
   );
   const membership = Object.values(memberships.entries).find((entry) => entry.sessionId === sessionId) ?? null;
-  const { state, loading, error, errorCode, realtime, refresh } = useMesaState(membership ? sessionId : null);
-
-  useEffect(() => {
-    setMembershipHydrated(true);
-  }, []);
+  const { state, loading, error, errorCode, realtime, refresh, getRefreshVersion } = useMesaState(membership ? sessionId : null);
 
   if (!membership) {
-    if (!membershipHydrated) return <MesaLoadingSkeleton />;
     return (
       <PlayerStateShell
         title="Mesa"
@@ -68,7 +62,7 @@ export default function PlayerMesaView({ sessionId }: Props) {
     return <PlayerStateShell title="Mesa" message="Não foi possível carregar a Mesa." retry={() => void refresh()} />;
   }
 
-  return <PlayerMesaScreen state={state} realtime={realtime} onRefresh={refresh} />;
+  return <PlayerMesaScreen state={state} realtime={realtime} onRefresh={refresh} getRefreshVersion={getRefreshVersion} />;
 }
 
 /** Estrutura da tela real, sem conteúdo falso: o layout aparece antes do estado. */

@@ -72,6 +72,7 @@ import type {
   TacticalAccessPoint,
   TacticalDoor,
   TacticalGeometry,
+  TacticalHackableDeviceState,
   TacticalHackableObject,
   TacticalHackableObjectType,
   TacticalMap,
@@ -85,6 +86,8 @@ import type {
 import { TACTICAL_COVER_MATERIALS, TACTICAL_LEGACY_COVER_MATERIALS } from "@/lib/mesa/types";
 import { getTacticalCoverProfile, TACTICAL_COVER_THICKNESSES } from "@/lib/mesa/tacticalCoverCatalog";
 import { DatabaseQueryError, getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { createId } from "@/lib/id";
+import { markMesaLocalStage, markMesaServerStage, measureMesaDb, measureMesaLocal } from "@/lib/mesa/telemetryServer";
 import { ACTION_LABELS, DENIAL_MESSAGES } from "@/lib/mesa/messages";
 import {
   formatRollEvent,
@@ -112,7 +115,28 @@ import { canConnectToAccessPoint, connectedNetrunnerState, DISCONNECTED_NETRUNNE
 import { quickhackDefinitions } from "@/data/quickhacks";
 import { createHash } from "node:crypto";
 import { discoverableNodeIds, nextFloorAfterUnlockedPassword, normalizeNetArchitecture, normalizeNetArchitectures, normalizeNetDiscovery, pathfinderNodeIds, projectNetArchitecture } from "@/lib/mesa/netArchitecture";
+import {
+  CAMERA_DEVICE_STATES,
+  DEFAULT_CAMERA_DEVICE_STATE,
+  HACKABLE_OBJECT_LABELS,
+  hackableCameraStateIsExplicit,
+  hackableObjectCameraState,
+  hackableObjectDenialMessage,
+  hackableObjectDoorState,
+  isHackableDeviceAction,
+  isHackableDeviceState,
+  isHackableObjectType,
+  normalizeHackableObjectType,
+  patchHackableCameraState,
+  patchTacticalDoorState,
+  resolveHackableObjectDeviceEffect,
+  type DeviceEffectFailure,
+  type HackableDeviceAction,
+  type HackableDeviceState,
+} from "@/lib/mesa/hackableObjects";
 import { applyProgramDamage, brainDamageForIce, iceAttack, resolveNetAttack, slideBlackIce } from "@/lib/mesa/netCombat";
+import { createMesaHostingInfrastructure, withLocalPostgresTransaction, type LocalPostgresTransactionContext, type MesaHostingInfrastructure } from "@/lib/mesa/hostingInfrastructure";
+import type { MesaRepository } from "@/lib/mesa/infrastructure";
 export { isValidTacticalCoverDV, normalizeTacticalPosition, resolveMeleeRange, tacticalDistance, tacticalPositionsOverlap } from "@/lib/mesa/tacticalMap";
 
 /** Erro de domínio com status HTTP correspondente. */
@@ -136,7 +160,23 @@ const JOIN_CODE_ATTEMPTS = 6;
 // ---------------------------------------------------------------------------
 
 function db() {
+  // Nunca transforme uma lacuna de migração em fallback para Supabase. Os
+  // consumidores locais que ainda não foram extraídos para um repository
+  // recebem erro explícito e não podem tocar o banco remoto por acidente.
+  if (process.env.MESA_HOSTING_MODE?.trim().toLowerCase() === "local") {
+    throw new MesaError(
+      "Esta operação ainda não está disponível no backend local.",
+      503,
+      "local_store_path_not_migrated",
+    );
+  }
   return getSupabaseAdmin();
+}
+
+/** Infraestrutura selecionada explicitamente; não guarda identidade da request. */
+async function mesaRepository() {
+  const infrastructure = await createMesaHostingInfrastructure();
+  return infrastructure.repository;
 }
 
 function sanitizeDisplayName(raw: unknown): string {
@@ -162,11 +202,26 @@ function requireToken(raw: unknown): string {
   return raw.trim();
 }
 
+function stableMesaDbOperation(context: string): string {
+  if (context.includes("reservar")) return "rpc.claim_mesa_attack_resolution";
+  if (context.includes("confirmar a resolução do ataque")) return "rpc.commit_mesa_attack_resolution";
+  if (context.includes("confirmar movimento")) return "table.mesa_combatants.movement_cas_update";
+  if (context.includes("confirmar a resolução da iniciativa")) return "table.mesa_attack_resolutions.initiative_commit";
+  if (context.includes("liberar")) return "rpc.release_mesa_attack_resolution";
+  if (context.includes("consultar combatente")) return "table.mesa_combatants.select_by_id";
+  if (context.includes("consultar os combatentes")) return "table.mesa_combatants.select_by_combat";
+  if (context.includes("consultar a resolução")) return "table.mesa_attack_resolutions.select_by_resolution";
+  if (context.includes("consultar a mesa")) return "table.mesa_sessions.select_by_id";
+  if (context.includes("consultar o combate")) return "table.mesa_combats.select_by_session";
+  if (context.includes("consultar o participante")) return "table.mesa_participants.select_by_session_token";
+  return context.replace(/^Falha ao /, "");
+}
+
 async function query<T>(
   promise: PromiseLike<{ data: T | null; error: { message: string } | null }>,
   context: string,
 ): Promise<T | null> {
-  const { data, error } = await promise;
+  const { data, error } = await measureMesaDb(promise, stableMesaDbOperation(context));
   if (error) throw new DatabaseQueryError(`${context}: ${error.message}`);
   return data;
 }
@@ -183,22 +238,15 @@ async function storedAttackResolution<T = IntegratedAttackResponse>(
   resolutionId: string,
   combatId?: string,
 ): Promise<AttackResolutionRow<T> | null> {
-  let request = db()
-    .from("mesa_attack_resolutions")
-    .select("combat_id,status,claim_token,result")
-    .eq("session_id", sessionId)
-    .eq("resolution_id", resolutionId);
-  if (combatId) request = request.eq("combat_id", combatId);
-  return (await query(
-    request.order("created_at", { ascending: false }).limit(1).maybeSingle(),
-    "Falha ao consultar a resolução do ataque",
-  )) as AttackResolutionRow<T> | null;
+  const store = (await createMesaHostingInfrastructure()).resolutionStore;
+  return await store.findAttack<T>({ sessionId, combatId: combatId ?? "", resolutionId }) as AttackResolutionRow<T> | null;
 }
 
 async function waitForAttackResolution<T = IntegratedAttackResponse>(
   sessionId: string,
   resolutionId: string,
   combatId?: string,
+  options: { recoverStale?: boolean } = {},
 ): Promise<T> {
   // Uma requisição concorrente pode encontrar o claim antes do commit. Ela não
   // executa o Engine: aguarda o commit atômico da requisição dona do claim.
@@ -210,16 +258,8 @@ async function waitForAttackResolution<T = IntegratedAttackResponse>(
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  if (combatId) {
-    const recovered = (await query(
-      db().rpc("recover_mesa_attack_resolution", {
-        p_session_id: sessionId,
-        p_combat_id: combatId,
-        p_resolution_id: resolutionId,
-      }),
-      "Falha ao verificar a resolução interrompida",
-    )) as Array<{ status: "missing" | "processing" | "committed" | "failed"; result: T | null }> | null;
-    const state = recovered?.[0];
+  if (combatId && options.recoverStale !== false) {
+    const state = await (await createMesaHostingInfrastructure()).resolutionStore.recoverAttack<T>({ sessionId, combatId, resolutionId });
     if (state?.status === "committed" && state.result) return state.result;
     if (state?.status === "failed") {
       throw new MesaError("A resolução deste ataque foi marcada como abandonada; não será reexecutada.", 409, "resolution_failed");
@@ -229,16 +269,11 @@ async function waitForAttackResolution<T = IntegratedAttackResponse>(
 }
 
 async function storedReloadResolution(sessionId: string, resolutionId: string, combatId?: string): Promise<ReloadResolutionRow | null> {
-  let request = db()
-    .from("mesa_reload_resolutions")
-    .select("combat_id,status,claim_token,result")
-    .eq("session_id", sessionId)
-    .eq("resolution_id", resolutionId);
-  if (combatId) request = request.eq("combat_id", combatId);
-  return (await query(
-    request.order("created_at", { ascending: false }).limit(1).maybeSingle(),
-    "Falha ao consultar a resolução do reload",
-  )) as ReloadResolutionRow | null;
+  return await (await createMesaHostingInfrastructure()).resolutionStore.findReload<ReloadResponse>({
+    sessionId,
+    combatId: combatId ?? "",
+    resolutionId,
+  }) as ReloadResolutionRow | null;
 }
 
 async function waitForReloadResolution(sessionId: string, resolutionId: string, combatId?: string): Promise<ReloadResponse> {
@@ -251,15 +286,7 @@ async function waitForReloadResolution(sessionId: string, resolutionId: string, 
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   if (combatId) {
-    const recovered = (await query(
-      db().rpc("recover_mesa_reload_resolution", {
-        p_session_id: sessionId,
-        p_combat_id: combatId,
-        p_resolution_id: resolutionId,
-      }),
-      "Falha ao verificar a resolução interrompida",
-    )) as Array<{ status: "missing" | "processing" | "committed" | "failed"; result: ReloadResponse | null }> | null;
-    const state = recovered?.[0];
+    const state = await (await createMesaHostingInfrastructure()).resolutionStore.recoverReload<ReloadResponse>({ sessionId, combatId, resolutionId });
     if (state?.status === "committed" && state.result) return state.result;
     if (state?.status === "failed") {
       throw new MesaError("A resolução deste reload foi marcada como abandonada; não será reexecutada.", 409, "resolution_failed");
@@ -270,11 +297,11 @@ async function waitForReloadResolution(sessionId: string, resolutionId: string, 
 
 function databaseResolutionError(error: unknown): MesaError | null {
   if (!(error instanceof Error)) return null;
-  const code = ["action_conflict", "architecture_conflict", "hp_conflict", "death_save_conflict", "resolution_in_progress", "resolution_not_claimed", "resolution_failed"].find((candidate) =>
+  const code = ["action_conflict", "movement_conflict", "architecture_conflict", "hp_conflict", "death_save_conflict", "resolution_in_progress", "resolution_not_claimed", "resolution_failed", "transaction_failed"].find((candidate) =>
     error.message.includes(candidate),
   );
   if (!code) return null;
-  const status = code === "hp_conflict" || code === "action_conflict" || code === "architecture_conflict" || code === "death_save_conflict" || code === "resolution_in_progress" || code === "resolution_failed" ? 409 : 500;
+  const status = code === "hp_conflict" || code === "movement_conflict" || code === "action_conflict" || code === "architecture_conflict" || code === "death_save_conflict" || code === "resolution_in_progress" || code === "resolution_failed" ? 409 : 500;
   return new MesaError(code === "hp_conflict" ? "A vida do alvo mudou entre a resolução e a persistência." : "A resolução concorrente não pôde ser aplicada.", status, code);
 }
 
@@ -356,10 +383,11 @@ async function insertCombatantRows(rows: Array<Record<string, unknown>>, context
   const testsSupplies = rows.some((row) => "supplies" in row);
   const testsTacticalPosition = rows.some((row) => "position" in row || "avatar_url" in row);
 
+  const repository = await mesaRepository();
   let attempt = rows;
   for (;;) {
     try {
-      await query(db().from("mesa_combatants").insert(attempt), context);
+      await measureMesaDb(repository.insertCombatants(attempt, context), stableMesaDbOperation(context));
       if (testsSourceKey && "source_key" in attempt[0]) sourceKeySupport = "yes";
       if (testsSupplies && "supplies" in attempt[0]) suppliesSupport = "yes";
       if (testsTacticalPosition && "position" in attempt[0]) tacticalPositionSupport = "yes";
@@ -438,21 +466,15 @@ function toBattle(row: BattleRow): MesaBattle {
 
 /** Combatentes da mesa, na ordem da iniciativa (lê todos, inclusive os que saíram). */
 async function listCombatants(sessionId: string): Promise<CombatantRow[]> {
-  const rows = (await query(
-    db().from("mesa_combatants").select("*").eq("session_id", sessionId).order("sort_order"),
-    "Falha ao consultar combatentes",
-  )) as CombatantRow[] | null;
-  return rows ?? [];
+  const repository = await mesaRepository();
+  return await repository.listCombatantsBySession(sessionId) as unknown as CombatantRow[];
 }
 
 /** A partida já lançada por ESTE encontro, se houver. Sem migração: `null`. */
 async function findBattleByEncounter(encounterId: string): Promise<BattleRow | null> {
   if (battleSupport === "no") return null;
   try {
-    const row = (await query(
-      db().from("mesa_battles").select("*").eq("encounter_id", encounterId).maybeSingle(),
-      "Falha ao consultar a partida",
-    )) as BattleRow | null;
+    const row = await (await mesaRepository()).findBattleByEncounter(encounterId) as unknown as BattleRow | null;
     battleSupport = "yes";
     return row;
   } catch (error) {
@@ -479,20 +501,12 @@ async function reserveBattle(input: {
 }): Promise<string | null> {
   if (battleSupport === "no") return null;
   try {
-    const created = (await query(
-      db()
-        .from("mesa_battles")
-        .insert({
-          session_id: input.sessionId,
-          join_code: input.joinCode,
-          encounter_id: input.encounterId,
-          encounter_name: input.encounterName.slice(0, 60),
-          status: "active",
-        })
-        .select("id")
-        .single(),
-      "Falha ao registrar a partida",
-    )) as { id: string } | null;
+    const created = await (await mesaRepository()).createBattle({
+      sessionId: input.sessionId,
+      joinCode: input.joinCode,
+      encounterId: input.encounterId,
+      encounterName: input.encounterName.slice(0, 60),
+    });
     battleSupport = "yes";
     return created?.id ?? null;
   } catch (error) {
@@ -518,13 +532,10 @@ async function reserveBattle(input: {
  * Falhar aqui NÃO derruba o combate que já começou: o registro continua lá
  * (só sem o snapshot de entrada) e o fechamento ainda grava a vida final.
  */
-async function updateBattleRoster(battleId: string, combatants: MesaBattleCombatant[]): Promise<void> {
+async function updateBattleRoster(battleId: string, sessionId: string, combatants: MesaBattleCombatant[]): Promise<void> {
   if (battleSupport === "no") return;
   try {
-    await query(
-      db().from("mesa_battles").update({ combatants }).eq("id", battleId),
-      "Falha ao registrar os combatentes da partida",
-    );
+    await (await mesaRepository()).updateBattle(battleId, sessionId, { combatants });
   } catch (error) {
     if (missingBattleTable(error)) battleSupport = "no";
     // qualquer outra falha aqui é só perda de histórico: o combate segue.
@@ -532,9 +543,9 @@ async function updateBattleRoster(battleId: string, combatants: MesaBattleCombat
 }
 
 /** Apaga uma reserva órfã (o lançamento falhou no meio). */
-async function discardBattle(battleId: string): Promise<void> {
+async function discardBattle(battleId: string, sessionId: string): Promise<void> {
   try {
-    await query(db().from("mesa_battles").delete().eq("id", battleId), "Falha ao descartar a partida");
+    await (await mesaRepository()).deleteBattle(battleId, sessionId);
   } catch {
     // O erro real do lançamento é quem importa; uma reserva que sobrar só
     // mantém o encontro bloqueado (o lado seguro do bloqueio).
@@ -553,17 +564,7 @@ async function completeActiveBattle(sessionId: string): Promise<void> {
 
   let battle: BattleRow | null;
   try {
-    battle = (await query(
-      db()
-        .from("mesa_battles")
-        .select("*")
-        .eq("session_id", sessionId)
-        .eq("status", "active")
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      "Falha ao consultar a partida",
-    )) as BattleRow | null;
+    battle = await (await mesaRepository()).findActiveBattle(sessionId) as unknown as BattleRow | null;
     battleSupport = "yes";
   } catch (error) {
     if (missingBattleTable(error)) {
@@ -574,16 +575,11 @@ async function completeActiveBattle(sessionId: string): Promise<void> {
   }
   if (!battle) return;
 
+  const repository = await mesaRepository();
   const combatants = await listCombatants(sessionId);
-  const combat = (await query(
-    db().from("mesa_combats").select("*").eq("session_id", sessionId).maybeSingle(),
-    "Falha ao consultar o combate",
-  )) as CombatRow | null;
+  const combat = await repository.findCombatBySession(sessionId) as CombatRow | null;
 
-  await query(
-    db()
-      .from("mesa_battles")
-      .update({
+  await repository.completeBattle(battle.id, sessionId, {
         status: "completed",
         ended_at: new Date().toISOString(),
         final_round: combat?.round ?? battle.final_round ?? 1,
@@ -592,10 +588,35 @@ async function completeActiveBattle(sessionId: string): Promise<void> {
           combatants.map((row) => toCombatant(row)),
         ),
         event_log: Array.isArray(combat?.event_log) ? combat.event_log : [],
-      })
-      .eq("id", battle.id),
-    "Falha ao concluir a partida",
-  );
+  });
+}
+
+/**
+ * Variante de conclusão para uma transação local futura. A atualização
+ * condicional em `status = 'active'` mantém a conclusão idempotente: uma
+ * repetição ou concorrência que já concluiu a partida vira no-op.
+ */
+async function completeActiveBattleWithRepository(
+  repository: MesaRepository,
+  sessionId: string,
+): Promise<void> {
+  const battle = await repository.findActiveBattle(sessionId);
+  if (!battle) return;
+
+   const combatants = await repository.listCombatantsBySession(sessionId) as unknown as CombatantRow[];
+  const combat = await repository.findCombatBySession(sessionId) as unknown as CombatRow | null;
+  await repository.completeBattle(battle.id, sessionId, {
+    status: "completed",
+    ended_at: new Date().toISOString(),
+    final_round: combat?.round ?? battle.final_round ?? 1,
+    combatants: mergeBattleRoster(
+      Array.isArray(battle.combatants) ? battle.combatants as MesaBattleCombatant[] : [],
+      combatants.map((row) => toCombatant(row)),
+    ),
+    event_log: Array.isArray(combat?.event_log) ? combat.event_log : [],
+  });
+  // Zero linhas é uma conclusão concorrente/idempotente, não uma falha que
+  // deva reabrir ou duplicar o histórico.
 }
 
 interface SessionRow {
@@ -753,6 +774,7 @@ interface QuickhackOutcome {
   netActionsRemaining: number;
   effectApplied: boolean;
   damage: number;
+  ejectedChipware?: string;
 }
 
 interface NetActionOutcome {
@@ -788,14 +810,18 @@ function toSession(row: SessionRow): MesaSession {
   };
 }
 
-/** Physical map objects are public; their logical Control Node link is GM-only. */
+/**
+ * Physical map objects are public; their logical Control Node link is GM-only.
+ * A relação Object ↔ Control Node só aparece para o Player quando o Node já
+ * foi descoberto por ele — a arquitetura NET privada nunca vaza na projeção.
+ */
 function projectTacticalMapForViewer(map: TacticalMap, isGM: boolean, discoveredControlNodeIds = new Set<string>()): TacticalMap {
   if (isGM) return map;
   return {
     ...map,
-    hackableObjects: (map.hackableObjects ?? []).map((object) => object.linkedControlNodeId && discoveredControlNodeIds.has(object.linkedControlNodeId)
+    hackableObjects: (map.hackableObjects ?? []).map((object) => object.controlNodeId && discoveredControlNodeIds.has(object.controlNodeId)
       ? object
-      : (({ linkedControlNodeId: _linkedControlNodeId, ...publicObject }) => publicObject)(object)),
+      : (({ controlNodeId: _controlNodeId, ...publicObject }) => publicObject)(object)),
   };
 }
 
@@ -891,6 +917,34 @@ function validateTacticalCoverMetadata(raw: unknown): void {
   }
 }
 
+/**
+ * Valida a configuração do Editor GM dos Hackable Objects no request bruto.
+ *
+ * O tipo é validado pelo `sanitizeTacticalMap` (que rejeita tipos fora do
+ * catálogo descartando a entrada); aqui ficam as referências que precisam de
+ * erro explícito: a porta física da geometria é obrigatoriamente única e
+ * precisa existir no mesmo mapa que está sendo salvo.
+ */
+function validateTacticalHackableObjects(raw: unknown, doors: TacticalDoor[]): void {
+  if (!Array.isArray(raw)) return;
+  const doorIds = new Set(doors.map((door) => door.id));
+  const usedDoorIds = new Set<string>();
+  for (const entry of raw.slice(0, 500)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const item = entry as Record<string, unknown>;
+    const linked = item.geometryDoorId;
+    if (linked === undefined || linked === null || linked === "") continue;
+    // Somente objetos `door` possuem porta física; os demais tipos têm o campo
+    // removido pelo sanitize, sem criar propriedade arbitrária persistida.
+    if (normalizeHackableObjectType(item.type) !== "door") continue;
+    if (typeof linked !== "string" || !linked.trim()) throw new MesaError("Referência de porta hackeável inválida.", 400, "invalid_door_reference");
+    const doorId = linked.trim();
+    if (!doorIds.has(doorId)) throw new MesaError("Objeto hackeável referencia uma porta inexistente na geometria.", 400, "door_geometry_not_found");
+    if (usedDoorIds.has(doorId)) throw new MesaError("Duas portas hackeáveis apontam para a mesma porta física.", 400, "duplicate_door_reference");
+    usedDoorIds.add(doorId);
+  }
+}
+
 function sanitizeTacticalMap(raw: unknown): TacticalMap {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { ...DEFAULT_TACTICAL_MAP };
   const value = raw as Record<string, unknown>;
@@ -919,19 +973,51 @@ function sanitizeTacticalMap(raw: unknown): TacticalMap {
       }).filter((entry): entry is TacticalAccessPoint => entry !== null)
     : [];
   const uniqueAccessPoints = [...new Map(accessPoints.map((entry) => [entry.id, entry])).values()];
-  const hackableTypes = new Set<TacticalHackableObjectType>(["camera", "terminal", "door_panel", "console", "access_panel", "generic"]);
+  const rawGeometry = typeof value.geometry === "object" && value.geometry !== null && !Array.isArray(value.geometry)
+    ? value.geometry as Record<string, unknown>
+    : null;
+  const existingDoorIds = new Set(
+    (Array.isArray(rawGeometry?.doors) ? rawGeometry!.doors : [])
+      .map((entry) => typeof entry === "object" && entry !== null && !Array.isArray(entry) ? (entry as Record<string, unknown>).id : null)
+      .filter((id): id is string => typeof id === "string" && id.trim().length > 0 && id.trim().length <= 120)
+      .map((id) => id.trim()),
+  );
+  const usedDoorIds = new Set<string>();
   const hackableObjects = Array.isArray(value.hackableObjects)
     ? value.hackableObjects.slice(0, 500).map((entry): TacticalHackableObject | null => {
       if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
       const item = entry as Record<string, unknown>;
       const id = typeof item.id === "string" ? item.id.trim().slice(0, 120) : "";
-      const type = item.type as TacticalHackableObjectType;
+      // `door_panel` é o alias legado do tipo `door`; o catálogo F1.62 é a fonte.
+      const type = normalizeHackableObjectType(item.type);
       const position = normalizeTacticalPosition(item.position, { x: -1, y: -1 });
-      if (!id || !hackableTypes.has(type) || position.x < 0 || position.y < 0) return null;
-      const label = typeof item.label === "string" && item.label.trim() ? item.label.trim().slice(0, 120) : undefined;
-      const linkedControlNodeId = typeof item.linkedControlNodeId === "string" && item.linkedControlNodeId.trim() ? item.linkedControlNodeId.trim().slice(0, 120) : undefined;
+      if (!id || !type || position.x < 0 || position.y < 0) return null;
+      const text = (raw: unknown) => typeof raw === "string" && raw.trim() ? raw.trim().slice(0, 120) : undefined;
+      const name = text(item.name) ?? text(item.label);
+      const controlNodeId = text(item.controlNodeId) ?? text(item.linkedControlNodeId);
+      // A porta física é única: `geometryDoorId` só existe para `door`, aponta
+      // para uma porta real da geometria e nunca é reutilizado por outro objeto.
+      const linkedDoor = type === "door" ? text(item.geometryDoorId) : undefined;
+      const geometryDoorId = linkedDoor && existingDoorIds.has(linkedDoor) && !usedDoorIds.has(linkedDoor) ? linkedDoor : undefined;
+      if (geometryDoorId) usedDoorIds.add(geometryDoorId);
+      // F1.63: `deviceState` só existe para `camera` e é materializado de forma
+      // explícita (default `online`) — assim o compare-and-set do gateway tem
+      // sempre uma chave presente para comparar, inclusive em mapas antigos.
+      const deviceState = type === "camera"
+        ? ((CAMERA_DEVICE_STATES as readonly string[]).includes(item.deviceState as string) ? item.deviceState as TacticalHackableDeviceState : DEFAULT_CAMERA_DEVICE_STATE)
+        : undefined;
       const radius = Number(item.interactionRadius);
-      return { id, type, position, ...(label ? { label } : {}), ...(linkedControlNodeId ? { linkedControlNodeId } : {}), ...(Number.isFinite(radius) && radius > 0 ? { interactionRadius: Math.min(100, radius) } : {}), active: item.active !== false };
+      return {
+        id,
+        type,
+        position,
+        ...(name ? { name } : {}),
+        ...(controlNodeId ? { controlNodeId } : {}),
+        ...(geometryDoorId ? { geometryDoorId } : {}),
+        ...(deviceState ? { deviceState } : {}),
+        ...(Number.isFinite(radius) && radius > 0 ? { interactionRadius: Math.min(100, radius) } : {}),
+        active: item.active !== false,
+      };
     }).filter((entry): entry is TacticalHackableObject => entry !== null)
     : [];
   const uniqueHackableObjects = [...new Map(hackableObjects.map((entry) => [entry.id, entry])).values()];
@@ -959,11 +1045,8 @@ async function ensurePositionAvailable(
   target: TacticalPosition,
   map: TacticalMap,
 ): Promise<void> {
-  const rows = (await query(
-    db().from("mesa_combatants").select("id,position").eq("session_id", sessionId).eq("combat_id", combatId),
-    "Falha ao verificar espaço no mapa",
-  )) as Array<{ id: string; position?: TacticalPosition | null }> | null;
-  const occupied = (rows ?? []).some((row) => row.id !== combatantId && tacticalPositionsOverlap(
+  const rows = await (await mesaRepository()).listCombatantsByCombat(combatId, sessionId) as Array<{ id: string; position?: TacticalPosition | null }>;
+  const occupied = rows.some((row) => row.id !== combatantId && tacticalPositionsOverlap(
     normalizeTacticalPosition(row.position), target, map,
   ));
   if (occupied) throw new MesaError("Esse espaço já está ocupado.", 409, "position_occupied");
@@ -1097,6 +1180,7 @@ function normalizeNetrunnerState(raw: unknown): NetrunnerConnectionState {
       return typeof entry.id === "string" && typeof entry.name === "string" && Number.isInteger(entry.attackBonus) && Number.isInteger(entry.rezz) && Number.isInteger(entry.maxRezz) && Number.isInteger(entry.damage) && (entry.state === "active" || entry.state === "destroyed");
     }) : [],
     brainDamage: typeof value.brainDamage === "number" && Number.isFinite(value.brainDamage) ? Math.max(0, Math.floor(value.brainDamage)) : 0,
+    cyberdeckStatus: value.cyberdeckStatus === "destroyed" ? "destroyed" : "functional",
   };
 }
 
@@ -1107,16 +1191,16 @@ export function netIceCombatantId(architectureId: string, nodeId: string): strin
 
 /** Sincroniza somente entidades ICE já ativadas com o elenco do combate. */
 async function syncActiveNetIceCombatants(sessionId: string, combatId: string): Promise<void> {
-  const sessionRow = (await query(db().from("mesa_sessions").select("net_architectures").eq("id", sessionId).maybeSingle(), "Falha ao consultar Black ICE")) as { net_architectures?: unknown } | null;
-  const architectures = normalizeNetArchitectures(sessionRow?.net_architectures);
+  const repository = await mesaRepository();
+  const architectures = normalizeNetArchitectures(await repository.findSessionNetArchitectures(sessionId));
   const nodes = architectures.flatMap((architecture) => architecture.floors.flatMap((floor) => floor.nodes
     .map((rawNode) => rawNode as NetBasicNode)
     .filter((node) => node.type === "black_ice" && node.blackIce && (node.blackIceState === "active" || node.blackIceState === "destroyed"))
     .map((node) => ({ architecture, node }))));
   if (!nodes.length) return;
   const ids = nodes.map(({ architecture, node }) => netIceCombatantId(architecture.id, node.id));
-  const existing = (await query(db().from("mesa_combatants").select("id,initiative").eq("combat_id", combatId).in("id", ids), "Falha ao consultar combatantes ICE")) as Array<{ id: string; initiative: number | null }> | null;
-  const byId = new Map((existing ?? []).map((row) => [row.id, row]));
+  const existing = await repository.listCombatantsByCombat(combatId, sessionId);
+  const byId = new Map(existing.filter((row) => ids.includes(row.id)).map((row) => [row.id, row]));
   const payload = nodes.map(({ architecture, node }, index) => {
     const ice: NetBlackIce = { ...node.blackIce!, id: node.id, nodeId: node.id, architectureId: architecture.id, floorIndex: node.floorIndex, state: node.blackIceState ?? "inactive", ...(node.blackIceInitiative === undefined ? {} : { initiative: node.blackIceInitiative }), ...(node.engagedNetrunnerId === undefined ? {} : { engagedNetrunnerId: node.engagedNetrunnerId }) };
     const id = netIceCombatantId(architecture.id, node.id);
@@ -1128,27 +1212,158 @@ async function syncActiveNetIceCombatants(sessionId: string, combatId: string): 
       net_ice_state: ice, brain_damage: 0,
     };
   });
-  await query(db().from("mesa_combatants").upsert(payload, { onConflict: "id" }), "Falha ao sincronizar combatantes ICE");
+  await measureMesaDb(repository.upsertCombatants(payload, "Falha ao sincronizar combatantes ICE"), "sincronizar combatantes ICE");
 }
 
 async function syncNetIceInitiative(combatId: string): Promise<void> {
-  const combat = (await query(db().from("mesa_combats").select("initiative_started").eq("id", combatId).maybeSingle(), "Falha ao consultar iniciativa")) as { initiative_started?: boolean } | null;
+  const repository = await mesaRepository();
+  const combat = await repository.findCombatById(combatId) as (Pick<CombatRow, "initiative_started"> & { session_id: string }) | null;
   if (!combat?.initiative_started) return;
-  const rows = (await query(db().from("mesa_combatants").select("*").eq("combat_id", combatId), "Falha ao consultar iniciativa ICE")) as CombatantRow[];
+  const rows = await repository.listCombatantsByCombat(combatId, combat.session_id) as unknown as CombatantRow[];
   for (const row of rows.filter((entry) => entry.kind === "net_ice" && !entry.is_dead && entry.initiative === null && entry.net_ice_state)) {
     const ice = row.net_ice_state!;
     const initiative = rollEnemyInitiative(ice.speed, 0);
-    await query(db().from("mesa_combatants").update({ initiative, initiative_detail: { expression: `Speed ${ice.speed} + 1d10`, total: initiative, speed: ice.speed } }).eq("id", row.id).is("initiative", null), "Falha ao registrar iniciativa ICE");
+    await repository.updateCombatant({ id: row.id, sessionId: combat.session_id, combatId, patch: { initiative, initiative_detail: { expression: `Speed ${ice.speed} + 1d10`, total: initiative, speed: ice.speed } }, expected: { initiative: null } });
   }
-  const refreshed = (await query(db().from("mesa_combatants").select("id,initiative,is_dead,sort_order").eq("combat_id", combatId), "Falha ao ordenar iniciativa ICE")) as Array<{ id: string; initiative: number | null; is_dead: boolean; sort_order: number }>;
+  const refreshed = await repository.listCombatantsByCombat(combatId, combat.session_id) as unknown as Array<{ id: string; initiative: number | null; is_dead: boolean; sort_order: number }>;
   const ordered = sortByInitiative(refreshed.map((row) => ({ id: row.id, initiative: row.initiative, isDead: row.is_dead, sortOrder: row.sort_order })));
   for (const [index, row] of ordered.entries()) {
-    await query(db().from("mesa_combatants").update({ sort_order: index }).eq("id", row.id), "Falha ao persistir ordem ICE");
+    await repository.updateCombatant({ id: row.id, sessionId: combat.session_id, combatId, patch: { sort_order: index } });
+  }
+}
+
+/** Desconecta o vínculo lógico da ICE sem apagar a Architecture. */
+async function clearNetIceEngagement(sessionId: string, architectureId: string | null, netrunnerId: string): Promise<void> {
+  if (!architectureId) return;
+  const repository = await mesaRepository();
+  const architectures = normalizeNetArchitectures(await repository.findSessionNetArchitectures(sessionId));
+  let changed = false;
+  const next = architectures.map((architecture) => architecture.id !== architectureId ? architecture : {
+    ...architecture,
+    floors: architecture.floors.map((floor) => ({
+      ...floor,
+      nodes: floor.nodes.map((node) => {
+        if (node.type !== "black_ice" || node.engagedNetrunnerId !== netrunnerId) return node;
+        changed = true;
+        return { ...node, engagedNetrunnerId: undefined };
+      }),
+    })),
+  });
+  if (!changed) return;
+  const written = await repository.updateSessionNetArchitectures(sessionId, next);
+  if (written.length !== 1) throw new MesaError("Falha ao limpar vínculo da ICE.", 409, "session_conflict");
+}
+
+/** Variante transacional preparada; não usada ainda por advanceActiveTurn. */
+async function clearNetIceEngagementWithRepository(
+  repository: MesaRepository,
+  sessionId: string,
+  architectureId: string | null,
+  netrunnerId: string,
+): Promise<void> {
+  if (!architectureId) return;
+  const raw = await repository.findSessionNetArchitectures(sessionId);
+  const architectures = normalizeNetArchitectures(raw);
+  let changed = false;
+  const next = architectures.map((architecture) => architecture.id !== architectureId ? architecture : {
+    ...architecture,
+    floors: architecture.floors.map((floor) => ({
+      ...floor,
+      nodes: floor.nodes.map((node) => {
+        if (node.type !== "black_ice" || node.engagedNetrunnerId !== netrunnerId) return node;
+        changed = true;
+        return { ...node, engagedNetrunnerId: undefined };
+      }),
+    })),
+  });
+  if (!changed) return;
+  const written = await repository.updateSessionNetArchitectures(sessionId, next);
+  if (written.length !== 1) throw new DatabaseQueryError("Falha ao limpar vínculo da ICE: sessão não encontrada");
+}
+
+/** Sincroniza ICE usando exclusivamente o repository recebido pelo contexto. */
+async function syncActiveNetIceCombatantsWithRepository(
+  repository: MesaRepository,
+  sessionId: string,
+  combatId: string,
+): Promise<void> {
+  const architectures = normalizeNetArchitectures(await repository.findSessionNetArchitectures(sessionId));
+  const nodes = architectures.flatMap((architecture) => architecture.floors.flatMap((floor) => floor.nodes
+    .map((rawNode) => rawNode as NetBasicNode)
+    .filter((node) => node.type === "black_ice" && node.blackIce && (node.blackIceState === "active" || node.blackIceState === "destroyed"))
+    .map((node) => ({ architecture, node }))));
+  if (!nodes.length) return;
+   const existing = await repository.listCombatantsByCombat(combatId, sessionId) as unknown as CombatantRow[];
+  const byId = new Map(existing.map((row) => [row.id, row]));
+  const payload = nodes.map(({ architecture, node }, index) => {
+    const ice: NetBlackIce = {
+      ...node.blackIce!,
+      id: node.id,
+      nodeId: node.id,
+      architectureId: architecture.id,
+      floorIndex: node.floorIndex,
+      state: node.blackIceState ?? "inactive",
+      ...(node.blackIceInitiative === undefined ? {} : { initiative: node.blackIceInitiative }),
+      ...(node.engagedNetrunnerId === undefined ? {} : { engagedNetrunnerId: node.engagedNetrunnerId }),
+    };
+    const id = netIceCombatantId(architecture.id, node.id);
+    return {
+      id,
+      combat_id: combatId,
+      session_id: sessionId,
+      kind: "net_ice",
+      name: ice.name,
+      initiative: byId.get(id)?.initiative ?? null,
+      initiative_detail: { speed: ice.speed, netIce: true },
+      actions_max: 0,
+      actions_remaining: 0,
+      movement_max: 0,
+      movement_remaining: 0,
+      hp_current: 0,
+      hp_max: 0,
+      is_dead: ice.state === "destroyed",
+      conditions: [],
+      sort_order: 100000 + index,
+      net_ice_state: ice,
+      brain_damage: 0,
+    };
+  });
+  await repository.upsertCombatants(payload, "Falha ao sincronizar combatantes ICE");
+}
+
+/** Iniciativa/ordenação de ICE preparada para o mesmo contexto transacional. */
+async function syncNetIceInitiativeWithRepository(
+  repository: MesaRepository,
+  sessionId: string,
+  combatId: string,
+): Promise<void> {
+  const combat = await repository.findCombatById(combatId, sessionId) as unknown as CombatRow | null;
+  if (!combat?.initiative_started) return;
+   const rows = await repository.listCombatantsByCombat(combatId, sessionId) as unknown as CombatantRow[];
+  for (const row of rows.filter((entry) => entry.kind === "net_ice" && !entry.is_dead && entry.initiative === null && entry.net_ice_state)) {
+    const ice = row.net_ice_state!;
+    const initiative = rollEnemyInitiative(ice.speed, 0);
+    await repository.updateCombatant({
+      id: row.id,
+      sessionId,
+      combatId,
+      patch: { initiative, initiative_detail: { expression: `Speed ${ice.speed} + 1d10`, total: initiative, speed: ice.speed } },
+      expected: { initiative: null },
+    });
+  }
+   const refreshed = await repository.listCombatantsByCombat(combatId, sessionId) as unknown as CombatantRow[];
+  const ordered = sortByInitiative(refreshed.map((row) => ({ id: row.id, initiative: row.initiative, isDead: row.is_dead, sortOrder: row.sort_order })));
+  for (const [index, row] of ordered.entries()) {
+    await repository.updateCombatant({ id: row.id, sessionId, combatId, patch: { sort_order: index } });
   }
 }
 
 function activeQuickhackEffects(row: CombatantRow, round: number): MesaQuickhackEffect[] {
   return (Array.isArray(row.net_effects) ? row.net_effects : []).filter((effect) => effect.expiresRound === null || effect.expiresRound >= round);
+}
+
+function puppetControlsAction(row: CombatantRow, round: number): boolean {
+  return activeQuickhackEffects(row, round).some((effect) => effect.quickhackId === "puppet" && effect.controlsAction === true);
 }
 
 /**
@@ -1214,6 +1429,7 @@ function suppliesForCharacter(
       itemId: stableItemId(item.name),
       item: item.name,
       quantity: Math.max(0, Math.floor(item.quantity)),
+      ...(item.category === "chipware" ? { category: "chipware" as const } : {}),
     }))
     .filter((item) => item.quantity > 0 && item.itemId.length > 0);
   return { inventory: normalizeSupplyInventory(inventory) };
@@ -1230,36 +1446,59 @@ export interface Actor {
 
 /** Localiza a sessão pelo id e autentica o participante pelo playerToken. */
 export async function authenticate(sessionId: unknown, tokenRaw: unknown): Promise<Actor> {
+  const startedAt = performance.now();
+  try {
   if (typeof sessionId !== "string" || sessionId.length === 0) {
     throw new MesaError("Mesa não encontrada.", 404, "session_not_found");
   }
   const token = requireToken(tokenRaw);
 
-  const sessionRow = await query(
-    db().from("mesa_sessions").select("*").eq("id", sessionId).maybeSingle(),
-    "Falha ao consultar a mesa",
-  );
-  if (!sessionRow) throw new MesaError("Mesa não encontrada.", 404, "session_not_found");
+   // A autenticação continua no store para preservar a autoridade e a
+   // precedência dos erros; somente as duas leituras de persistência passam
+   // agora pelo repository selecionado explicitamente pela factory.
+   const repository = await mesaRepository();
 
-  const participantRow = await query(
-    db()
-      .from("mesa_participants")
-      .select("*")
-      .eq("session_id", sessionId)
-      .eq("player_token", token)
-      .maybeSingle(),
-    "Falha ao consultar o participante",
-  );
+  // As duas leituras são somente autenticação e não dependem uma da outra.
+  // Promise.allSettled preserva a precedência observável: uma sessão ausente
+  // continua sendo `session_not_found`, sem transformar a consulta paralela do
+  // participante em um erro de infraestrutura; se a sessão existe, a falha do
+  // participante continua sendo propagada normalmente.
+  const [sessionResult, participantResult] = await Promise.allSettled([
+    measureMesaDb(repository.findSessionById(sessionId), "table.mesa_sessions.select_by_id"),
+    measureMesaDb(repository.findParticipantByToken(sessionId, token), "table.mesa_participants.select_by_session_token"),
+  ]);
+  if (sessionResult.status === "rejected") throw sessionResult.reason;
+  const sessionRow = sessionResult.value;
+  if (!sessionRow) throw new MesaError("Mesa não encontrada.", 404, "session_not_found");
+  if (participantResult.status === "rejected") throw participantResult.reason;
+  const participantRow = participantResult.value;
   if (!participantRow) {
     throw new MesaError("Você não participa desta mesa.", 403, "not_participant");
   }
 
-  return { session: toSession(sessionRow as SessionRow), participant: toParticipant(participantRow as ParticipantRow) };
+    const actor = { session: toSession(sessionRow as SessionRow), participant: toParticipant(participantRow as ParticipantRow) };
+    markMesaServerStage("AUTH", performance.now() - startedAt, true);
+    return actor;
+  } catch (error) {
+    markMesaServerStage("AUTH", performance.now() - startedAt, false);
+    throw error;
+  }
 }
 
-/** Exige papel de Mestre — validado no banco, não escondendo botões. */
+/**
+ * Exige que o ator seja o Mestre desta Mesa específica.
+ *
+ * O papel persistido no participante é necessário, mas não suficiente: a
+ * autorização também precisa corresponder ao vínculo `mesa_sessions.gm_id`.
+ * Assim, nenhum participante com role forjado ou pertencente a outra Mesa
+ * ganha privilégios administrativos.
+ */
 export function requireGM(actor: Actor): void {
-  if (actor.participant.role !== "gm") {
+  if (
+    actor.participant.role !== "gm" ||
+    actor.participant.sessionId !== actor.session.id ||
+    actor.session.gmId !== actor.participant.id
+  ) {
     throw new MesaError("Apenas o Mestre pode executar esta ação.", 403, "gm_only");
   }
 }
@@ -1277,6 +1516,50 @@ export function requirePlayer(actor: Actor): void {
       "player_only",
     );
   }
+}
+
+/**
+ * Seleciona a linha de personagem de um participante SEM depender da ordem em
+ * que o Postgres devolve as linhas.
+ *
+ * A identidade do ator vem da participação autenticada; a linha é apenas o
+ * registro desse personagem no combate. Com mais de uma linha `character` para
+ * a mesma participação (caso coberto por teste em
+ * `tests/mesa-participant-character-selection.test.ts`), a escolha é:
+ *
+ * 1. o combatente cujo turno está ativo, quando pertence ao participante —
+ *    assim o actor selecionado é o mesmo que a autoridade de turno vai julgar;
+ * 2. a linha ligada ao personagem vinculado na Mesa (`participant.characterId`);
+ * 3. a ordem canônica da Mesa (`sort_order`, com `id` como desempate estável).
+ *
+ * Nunca devolve linha de outro participante, de outro `kind` ou sem vínculo.
+ */
+export function selectParticipantCharacter<
+  T extends {
+    id: string;
+    kind: string;
+    participant_id: string | null;
+    character_id?: string | null;
+    sort_order?: number | null;
+  },
+>(
+  rows: readonly T[],
+  participant: { id: string; characterId?: string | null },
+  activeCombatantId?: string | null,
+): T | null {
+  const owned = rows.filter((row) => row.participant_id === participant.id && row.kind === "character");
+  if (owned.length === 0) return null;
+  if (activeCombatantId) {
+    const active = owned.find((row) => row.id === activeCombatantId);
+    if (active) return active;
+  }
+  if (participant.characterId) {
+    const linked = owned.find((row) => row.character_id === participant.characterId);
+    if (linked) return linked;
+  }
+  return [...owned].sort(
+    (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id.localeCompare(b.id),
+  )[0];
 }
 
 /**
@@ -1373,9 +1656,13 @@ export async function resolveCombatantDetection(input: {
   const observerId = typeof input.observerCombatantId === "string" ? input.observerCombatantId.trim() : "";
   const targetId = typeof input.targetCombatantId === "string" ? input.targetCombatantId.trim() : "";
   if (!observerId || !targetId || observerId === targetId) throw new MesaError("Observer e alvo inválidos.", 400, "invalid_detection");
-  const rows = (await query(db().from("mesa_combatants").select("*").eq("session_id", session.id).in("id", [observerId, targetId]), "Falha ao consultar detecção")) as CombatantRow[] | null;
-  const observer = rows?.find((row) => row.id === observerId);
-  const target = rows?.find((row) => row.id === targetId);
+  const repository = await mesaRepository();
+  const rows = await Promise.all([
+    repository.findCombatantById(observerId, { sessionId: session.id }),
+    repository.findCombatantById(targetId, { sessionId: session.id }),
+  ]) as Array<CombatantRow | null>;
+  const observer = rows[0];
+  const target = rows[1];
   if (!observer || !target) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
   if (participant.role === "player" && observer.participant_id !== participant.id) throw new MesaError("Você não controla este observer.", 403, "combatant_not_owned");
   const detectedBy = Array.isArray(target.detected_by) ? target.detected_by.filter((id): id is string => typeof id === "string") : [];
@@ -1385,8 +1672,13 @@ export async function resolveCombatantDetection(input: {
     : resolveDetectionCheck({ observerPerception: skillTotalForDetection(observer, "perception"), targetStealth: skillTotalForDetection(target, "stealth"), rng: serverRandom }).detected;
   if (!detected) return { changed: false, detected: false, observerCombatantId: observer.id, targetCombatantId: target.id };
   const next = [...detectedBy, observer.id];
-  const written = await query(db().from("mesa_combatants").update({ detected_by: next }).eq("id", target.id).eq("session_id", session.id).select("id"), "Falha ao persistir detecção");
-  if (!written || (written as Array<{ id: string }>).length !== 1) throw new MesaError("O estado de detecção mudou; atualize a Mesa.", 409, "detection_conflict");
+  const written = await repository.updateCombatant({
+    id: target.id,
+    sessionId: session.id,
+    patch: { detected_by: next },
+    expected: { detected_by: target.detected_by ?? null },
+  });
+  if (written.length !== 1) throw new MesaError("O estado de detecção mudou; atualize a Mesa.", 409, "detection_conflict");
   return { changed: true, detected: true, observerCombatantId: observer.id, targetCombatantId: target.id };
 }
 
@@ -1401,12 +1693,18 @@ export async function setCombatantStealth(input: {
   requireActiveSession(session);
   if (typeof input.stealthed !== "boolean") throw new MesaError("Estado de Stealth inválido.", 400, "invalid_stealth_state");
   const id = typeof input.combatantId === "string" ? input.combatantId.trim() : "";
-  const row = (await query(db().from("mesa_combatants").select("id,session_id,participant_id").eq("id", id).eq("session_id", session.id).maybeSingle(), "Falha ao consultar Stealth")) as Pick<CombatantRow, "id" | "session_id" | "participant_id"> | null;
+  const repository = await mesaRepository();
+  const row = await repository.findCombatantById(id, { sessionId: session.id }) as Pick<CombatantRow, "id" | "session_id" | "participant_id" | "stealth_state"> | null;
   if (!row) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
   if (participant.role === "player" && row.participant_id !== participant.id) throw new MesaError("Você não controla este combatente.", 403, "combatant_not_owned");
   const stealthState = input.stealthed ? "stealthed" : "not_stealthed";
-  const written = await query(db().from("mesa_combatants").update({ stealth_state: stealthState }).eq("id", id).eq("session_id", session.id).select("id"), "Falha ao persistir Stealth");
-  return { changed: Boolean(written && (written as Array<{ id: string }>).length === 1), combatantId: id, stealthState };
+  const written = await repository.updateCombatant({
+    id,
+    sessionId: session.id,
+    patch: { stealth_state: stealthState },
+    expected: { stealth_state: row.stealth_state ?? null },
+  });
+  return { changed: written.length === 1, combatantId: id, stealthState };
 }
 
 function hasCyberdeck(sheet: Character | null): boolean {
@@ -1432,11 +1730,25 @@ function connectionStateForRow(row: CombatantRow): NetrunnerConnectionState {
   return normalizeNetrunnerState(row.netrunner_state);
 }
 
-/** Fail closed when an Access Point changed after Jack In. */
-function requireLiveNetrunnerConnection(session: MesaSession, row: CombatantRow, state: NetrunnerConnectionState): void {
+/** Fail closed when an Access Point changed after Jack In, clearing stale NET state. */
+async function requireLiveNetrunnerConnection(session: MesaSession, row: CombatantRow, state: NetrunnerConnectionState): Promise<void> {
+  if (state.cyberdeckStatus === "destroyed") throw new MesaError("O Cyberdeck está destruído e precisa ser reparado.", 409, "cyberdeck_destroyed");
   if (!state.isJackedIn) throw new MesaError("Netrunner precisa estar Jacked In.", 409, "not_jacked_in");
+  const repository = await mesaRepository();
+  const disconnectStale = async (combat: CombatRow, message: string, code: string): Promise<never> => {
+    const consequences = await unsafeJackOutNetConsequences(row, state, session.id);
+    const next = unsafeJackOutState(consequences.state);
+    await clearNetIceEngagement(session.id, state.architectureId, row.id);
+    const written = await repository.updateCombatant({ id: row.id, sessionId: session.id, combatId: combat.id, patch: { netrunner_state: next }, expected: { netrunner_state: row.netrunner_state ?? null } });
+    if (written.length !== 1) throw new MesaError("Falha ao limpar conexão NET inválida.", 409, "action_conflict");
+    for (const event of consequences.events) await appendEvent(combat.id, { kind: "action", text: event });
+    await appendEvent(combat.id, { kind: "action", text: `${row.name}: desconexão NET — ${message}` });
+    throw new MesaError(message, 409, code);
+  };
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
   const accessPoint = (session.tacticalMap?.accessPoints ?? []).find((entry) => entry.id === state.connectedAccessPointId);
-  if (!accessPoint) throw new MesaError("O Access Point da conexão não está mais disponível.", 409, "access_point_not_found");
+  if (!accessPoint) return disconnectStale(combat, "O Access Point da conexão não está mais disponível.", "access_point_not_found");
   const position = normalizeTacticalPosition(row.position, { x: row.kind === "enemy" ? 0.78 : 0.22, y: 0.5 });
   const connection = canConnectToAccessPoint({
     accessPoint,
@@ -1450,7 +1762,7 @@ function requireLiveNetrunnerConnection(session: MesaSession, row: CombatantRow,
       connection_type_unsupported: "A conexão não é mais suportada pelo Access Point.",
       out_of_range: "Netrunner está fora do alcance wireless de 6 metros.",
     } as const;
-    throw new MesaError(messages[connection.reason], 409, connection.reason);
+    return disconnectStale(combat, messages[connection.reason], connection.reason);
   }
 }
 
@@ -1514,21 +1826,19 @@ export async function jackInCombatant(input: {
   if (!id || !accessPointId) throw new MesaError("Netrunner ou Access Point ausente.", 400, "invalid_jack_in");
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
-  const row = (await query(db().from("mesa_combatants").select("*").eq("id", id).eq("combat_id", combat.id).maybeSingle(), "Falha ao consultar Netrunner")) as CombatantRow | null;
+  const repository = await mesaRepository();
+  const row = await repository.findCombatantById(id, { combatId: combat.id, sessionId: session.id }) as CombatantRow | null;
   if (!row) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
-  requireNetrunnerOwnership(participant, row);
-  const currentState = connectionStateForRow(row);
-  if (currentState.isJackedIn) throw new MesaError("Netrunner já está conectado.", 409, "already_jacked_in");
+   requireNetrunnerOwnership(participant, row);
+   const currentState = connectionStateForRow(row);
+   if (currentState.isJackedIn) throw new MesaError("Netrunner já está conectado.", 409, "already_jacked_in");
+   if (currentState.cyberdeckStatus === "destroyed") throw new MesaError("O Cyberdeck está destruído e precisa ser reparado.", 409, "cyberdeck_destroyed");
   const sheet = row.character_id ? await loadSheet(row.character_id) : null;
   if (!hasCyberdeck(sheet)) throw new MesaError("Netrunner não possui um Cyberdeck válido.", 409, "cyberdeck_required");
   const interfaceRank = interfaceRankForSheet(sheet);
   if (interfaceRank <= 0) throw new MesaError("Personagem não possui Interface Role Ability.", 409, "interface_required");
   const accessPoint = findAccessPoint(session.tacticalMap ?? DEFAULT_TACTICAL_MAP, accessPointId);
-  const architectureRows = (await query(
-    db().from("mesa_sessions").select("net_architectures").eq("id", session.id).maybeSingle(),
-    "Falha ao consultar arquitetura NET",
-  )) as { net_architectures?: unknown } | null;
-  const architectures = normalizeNetArchitectures(architectureRows?.net_architectures);
+  const architectures = normalizeNetArchitectures(await repository.findSessionNetArchitectures(session.id));
   const architecture = accessPoint.architectureId === null
     ? null
     : architectures.find((entry) => entry.id === accessPoint.architectureId) ?? null;
@@ -1549,20 +1859,25 @@ export async function jackInCombatant(input: {
   if (connectionType !== "wireless" && connectionType !== "cable") throw new MesaError("Tipo de conexão inválido.", 400, "invalid_connection_type");
   const action = await resolveConnectionAction(participant, combat, row);
   const equipped = currentState.equippedQuickhackIds.filter((quickhackId) => Boolean(quickhackDefinitions[quickhackId])).slice(0, 4);
-   const nextState = { ...connectedNetrunnerState(accessPoint, connectionType, interfaceRank, ramForReconnect(currentState, interfaceRank), equipped), programs: currentState.programs ?? [], brainDamage: currentState.brainDamage ?? 0 };
+   const nextState = { ...connectedNetrunnerState(accessPoint, connectionType, interfaceRank, ramForReconnect(currentState, interfaceRank), equipped), programs: currentState.programs ?? [], brainDamage: currentState.brainDamage ?? 0, cyberdeckStatus: "functional" as const };
   const currentDiscovery = normalizeNetDiscovery(row.net_discovery, architecture?.id ?? "");
   const lobbyIds = architecture?.floors.find((floor) => floor.index === 1)?.nodes.filter((node) => node.type === "lobby").map((node) => node.id) ?? [];
   const nextDiscovery = architecture
     ? { architectureId: architecture.id, discoveredNodeIds: [...new Set([...currentDiscovery.discoveredNodeIds, ...lobbyIds])] }
     : currentDiscovery;
-  const written = await query(db().from("mesa_combatants").update({ netrunner_state: nextState, net_discovery: nextDiscovery, actions_remaining: action.actionsRemaining })
-    .eq("id", row.id).eq("combat_id", combat.id).eq("actions_remaining", row.actions_remaining).select("id"), "Falha ao registrar Jack In");
-  if (!written || written.length !== 1) throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
+  const written = await repository.updateCombatant({
+    id: row.id,
+    sessionId: session.id,
+    combatId: combat.id,
+    patch: { netrunner_state: nextState, net_discovery: nextDiscovery, actions_remaining: action.actionsRemaining },
+    expected: { actions_remaining: row.actions_remaining },
+  });
+  if (written.length !== 1) throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
   await appendEvent(combat.id, { kind: "action", text: `${row.name}: Jack In` });
   return { changed: true, combatantId: row.id, state: nextState, actionsRemaining: action.actionsRemaining };
 }
 
-/** Safe Jack Out é uma ação do turno; Black ICE ainda não existe nesta fase. */
+/** Safe Jack Out é uma ação do turno e exige ausência de ICE engajada. */
 export async function safeJackOutCombatant(input: {
   sessionId: unknown;
   token: unknown;
@@ -1573,7 +1888,8 @@ export async function safeJackOutCombatant(input: {
   const id = typeof input.combatantId === "string" ? input.combatantId.trim() : "";
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
-  const row = (await query(db().from("mesa_combatants").select("*").eq("id", id).eq("combat_id", combat.id).maybeSingle(), "Falha ao consultar Netrunner")) as CombatantRow | null;
+  const repository = await mesaRepository();
+  const row = await repository.findCombatantById(id, { combatId: combat.id, sessionId: session.id }) as CombatantRow | null;
   if (!row) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
   requireNetrunnerOwnership(participant, row);
   const currentState = connectionStateForRow(row);
@@ -1581,9 +1897,14 @@ export async function safeJackOutCombatant(input: {
   if ((currentState.engagedBlackIceIds ?? []).length > 0) throw new MesaError("Safe Jack Out não é permitido durante combate com Black ICE.", 409, "black_ice_engaged");
   const action = await resolveConnectionAction(participant, combat, row);
   const nextState = safeJackOutState(currentState);
-  const written = await query(db().from("mesa_combatants").update({ netrunner_state: nextState, actions_remaining: action.actionsRemaining })
-    .eq("id", row.id).eq("combat_id", combat.id).eq("actions_remaining", row.actions_remaining).select("id"), "Falha ao registrar Safe Jack Out");
-  if (!written || written.length !== 1) throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
+  const written = await repository.updateCombatant({
+    id: row.id,
+    sessionId: session.id,
+    combatId: combat.id,
+    patch: { netrunner_state: nextState, actions_remaining: action.actionsRemaining },
+    expected: { actions_remaining: row.actions_remaining },
+  });
+  if (written.length !== 1) throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
   await appendEvent(combat.id, { kind: "action", text: `${row.name}: Safe Jack Out` });
   return { changed: true, combatantId: row.id, state: nextState, actionsRemaining: action.actionsRemaining };
 }
@@ -1605,15 +1926,22 @@ export async function setNetrunnerQuickhackLoadout(input: {
   if (uniqueIds.some((quickhackId) => !quickhackDefinitions[quickhackId])) throw new MesaError("Quickhack fora do catálogo.", 400, "invalid_quickhack");
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
-  const row = (await query(db().from("mesa_combatants").select("*").eq("id", id).eq("combat_id", combat.id).maybeSingle(), "Falha ao consultar Netrunner")) as CombatantRow | null;
+  const repository = await mesaRepository();
+  const row = await repository.findCombatantById(id, { combatId: combat.id, sessionId: session.id }) as CombatantRow | null;
   if (!row) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
   requireNetrunnerOwnership(participant, row);
   const sheet = row.character_id ? await loadSheet(row.character_id) : null;
   if (!hasCyberdeck(sheet)) throw new MesaError("Netrunner não possui um Cyberdeck válido.", 409, "cyberdeck_required");
   const currentState = connectionStateForRow(row);
   const nextState = { ...currentState, equippedQuickhackIds: uniqueIds };
-  const written = await query(db().from("mesa_combatants").update({ netrunner_state: nextState }).eq("id", row.id).eq("combat_id", combat.id).select("id"), "Falha ao equipar Quickhacks");
-  if (!written || written.length !== 1) throw new MesaError("O loadout mudou; atualize a Mesa.", 409, "quickhack_loadout_conflict");
+  const written = await repository.updateCombatant({
+    id: row.id,
+    sessionId: session.id,
+    combatId: combat.id,
+    patch: { netrunner_state: nextState },
+    expected: { netrunner_state: row.netrunner_state ?? null },
+  });
+  if (written.length !== 1) throw new MesaError("O loadout mudou; atualize a Mesa.", 409, "quickhack_loadout_conflict");
   return { combatantId: row.id, equippedQuickhackIds: uniqueIds, maxQuickhackSlots: 4 };
 }
 
@@ -1624,6 +1952,7 @@ function requireNetrunnerTurn(participant: MesaParticipant, combat: CombatRow, r
   if (row.is_dead) throw new MesaError("Combatente derrotado.", 403, "combatant_defeated");
   if (consumeMeatspace) {
     const movement = effectiveMovementForRow(row);
+    const localRulesStartedAt = performance.now();
     const validation = resolveAction({
       combatStatus: combat.status,
       initiativeStarted: combat.initiative_started,
@@ -1634,7 +1963,11 @@ function requireNetrunnerTurn(participant: MesaParticipant, combat: CombatRow, r
       actionType: "other",
       currentRound: combat.round,
     });
-    if (!validation.ok) throw new MesaError(DENIAL_MESSAGES[validation.reason], 403, validation.reason);
+    if (!validation.ok) {
+      markMesaLocalStage("LOCAL.movement.rules", performance.now() - localRulesStartedAt, false);
+      throw new MesaError(DENIAL_MESSAGES[validation.reason], 403, validation.reason);
+    }
+    markMesaLocalStage("LOCAL.movement.rules", performance.now() - localRulesStartedAt);
   }
 }
 
@@ -1649,18 +1982,24 @@ export async function executeNetAction(input: {
   if (!isImplementedNetAction(action)) throw new MesaError("NET Action não disponível nesta fase.", 400, "unsupported_net_action");
   const targetId = body.targetId === undefined ? null : typeof body.targetId === "string" && body.targetId.trim() ? body.targetId.trim() : null;
   if (body.targetId !== undefined && !targetId) throw new MesaError("Alvo de NET Action inválido.", 400, "invalid_net_target");
-  const resolutionId = `net-action:${body.resolutionId === undefined ? crypto.randomUUID() : requireResolutionId(body.resolutionId)}`;
+  const resolutionId = `net-action:${body.resolutionId === undefined ? createId() : requireResolutionId(body.resolutionId)}`;
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireActiveSession(session);
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const netInfrastructure = await createMesaHostingInfrastructure();
+  const netRepository = netInfrastructure.repository;
 
-  const rows = (await query(db().from("mesa_combatants").select("*").eq("session_id", session.id).eq("combat_id", combat.id), "Falha ao consultar Netrunner")) as CombatantRow[] | null;
-  const actor = rows?.find((row) => row.participant_id === participant.id && row.kind === "character") ?? null;
+  // Pathfinder/Backdoor/Control/Zap/Slide só usam o Netrunner autenticado;
+  // não constroem um CombatState com os demais combatants. Filtrar no banco
+  // evita transferir o elenco inteiro sem mudar a validação de ownership.
+  const actorRows = (await netRepository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[])
+    .filter((entry) => entry.participant_id === participant.id && entry.kind === "character").slice(0, 1);
+  const actor = actorRows?.[0] ?? null;
   if (!actor) throw new MesaError("Netrunner não encontrado.", 404, "combatant_not_found");
   requireNetrunnerOwnership(participant, actor);
     const state = connectionStateForRow(actor);
-  requireLiveNetrunnerConnection(session, actor, state);
+   await requireLiveNetrunnerConnection(session, actor, state);
   if (!state.architectureId) throw new MesaError("Não há Architecture conectada.", 409, "architecture_not_connected");
   if (!Number.isInteger(state.currentFloor) || (state.currentFloor ?? 0) < 1) throw new MesaError("Floor atual inválido.", 409, "invalid_current_floor");
   const currentFloor = state.currentFloor as number;
@@ -1670,8 +2009,7 @@ export async function executeNetAction(input: {
   const interfaceRank = interfaceRankForSheet(sheet);
   if (interfaceRank <= 0) throw new MesaError("Personagem não possui Interface Role Ability.", 409, "interface_required");
 
-  const architectureRow = (await query(db().from("mesa_sessions").select("net_architectures").eq("id", session.id).maybeSingle(), "Falha ao consultar Architecture")) as { net_architectures?: unknown } | null;
-  const architectureRaw = architectureRow?.net_architectures ?? [];
+  const architectureRaw = await netRepository.findSessionNetArchitectures(session.id) ?? [];
   const architecture = normalizeNetArchitectures(architectureRaw).find((entry) => entry.id === state.architectureId) ?? null;
   if (!architecture) throw new MesaError("Architecture conectada não existe.", 409, "architecture_not_found");
   const floor = architecture.floors.find((entry) => entry.index === currentFloor);
@@ -1705,8 +2043,7 @@ export async function executeNetAction(input: {
   const previous = await storedAttackResolution<NetActionOutcome>(session.id, resolutionId, combat.id);
   if (previous?.status === "committed" && previous.result) return { result: previous.result, committed: false };
   if (previous?.status === "processing") return { result: await waitForAttackResolution<NetActionOutcome>(session.id, resolutionId, combat.id), committed: false };
-  const claimRows = (await query(db().rpc("claim_mesa_attack_resolution", { p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId }), "Falha ao reservar NET Action")) as AttackResolutionClaim<NetActionOutcome>[] | null;
-  const claim = claimRows?.[0];
+  const claim = await netInfrastructure.resolutionStore.claimAttack<NetActionOutcome>({ sessionId: session.id, combatId: combat.id, resolutionId });
   if (!claim) throw new MesaError("Não foi possível reservar a NET Action.", 500, "transaction_failed");
   if (!claim.claimed) return { result: await waitForAttackResolution<NetActionOutcome>(session.id, resolutionId, combat.id), committed: false };
 
@@ -1764,6 +2101,23 @@ export async function executeNetAction(input: {
       nextState.currentFloor = nextFloor;
       passwordState = "unlocked";
       nextArchitectures = nextArchitectures.map((entry) => entry.id !== architecture.id ? entry : { ...entry, floors: entry.floors.map((entryFloor) => entryFloor.index !== currentFloor ? entryFloor : { ...entryFloor, nodes: entryFloor.nodes.map((node) => node.id === target!.id && node.type === "password" ? { ...node, state: "unlocked" } : node) }) });
+      // Entrar no Floor não cria descoberta nova: somente ICE já descoberta
+      // pelo Netrunner pode ser ativada. A ativação usa a mesma autoridade e
+      // os mesmos dados persistidos do Pathfinder.
+      const discovered = new Set(nextDiscovery.discoveredNodeIds);
+      const engaged = new Set(nextState.engagedBlackIceIds ?? []);
+      nextArchitectures = nextArchitectures.map((entry) => entry.id !== architecture.id ? entry : {
+        ...entry,
+        floors: entry.floors.map((entryFloor) => entryFloor.index !== nextFloor ? entryFloor : {
+          ...entryFloor,
+          nodes: entryFloor.nodes.map((node) => {
+            if (node.type !== "black_ice" || !node.blackIce || !discovered.has(node.id) || node.blackIceState === "destroyed") return node;
+            engaged.add(node.id);
+            return { ...node, blackIceState: "active" as const, blackIceInitiative: node.blackIceInitiative ?? serverRandom.d10() + node.blackIce.speed, engagedNetrunnerId: actor.id };
+          }),
+        }),
+      });
+      nextState.engagedBlackIceIds = [...engaged];
     }
     if (success && action === "control") {
       controlState = "controlled";
@@ -1774,7 +2128,8 @@ export async function executeNetAction(input: {
       damage = program.damage;
       targetRezz = nextProgram.rezz;
       nextState.programs = (state.programs ?? []).map((entry) => entry.id === program.id ? nextProgram : entry);
-      nextArchitectures = nextArchitectures.map((entry) => entry.id !== architecture.id ? entry : { ...entry, floors: entry.floors.map((entryFloor) => entryFloor.index !== currentFloor ? entryFloor : { ...entryFloor, nodes: entryFloor.nodes.map((node) => node.id === target!.id && node.type === "black_ice" ? { ...node, blackIceState: nextProgram.rezz <= 0 ? "destroyed" : "active" } : node) }) });
+      if (nextProgram.rezz <= 0) nextState.engagedBlackIceIds = (nextState.engagedBlackIceIds ?? []).filter((id) => id !== target!.id);
+      nextArchitectures = nextArchitectures.map((entry) => entry.id !== architecture.id ? entry : { ...entry, floors: entry.floors.map((entryFloor) => entryFloor.index !== currentFloor ? entryFloor : { ...entryFloor, nodes: entryFloor.nodes.map((node) => node.id === target!.id && node.type === "black_ice" ? { ...node, blackIceState: nextProgram.rezz <= 0 ? "destroyed" : "active", ...(nextProgram.rezz <= 0 ? { engagedNetrunnerId: undefined } : {}) } : node) }) });
     }
     if (action === "slide" && success && ice) {
       nextState.engagedBlackIceIds = (state.engagedBlackIceIds ?? []).filter((id) => id !== target!.id);
@@ -1789,23 +2144,239 @@ export async function executeNetAction(input: {
         : action === "control"
           ? `${actor.name}: Control em ${eventTarget}${controlDemonId ? ` (Demon ${controlDemonId})` : ""} (${success ? "controlled" : "uncontrolled"}) ${total}/${dv}`
           : `${actor.name}: ${action === "zap" ? "Zap" : "Slide"} em ${eventTarget} (${success ? "HIT" : "MISS"}) ${total}/${dv}${damage === undefined ? "" : ` dano ${damage}; REZZ ${targetRezz}`}`;
-    const committedResult = await query(db().rpc("commit_mesa_net_action_resolution", {
-      p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token,
-      p_actor_id: actor.id, p_actions_before: actor.actions_remaining, p_actions_after: actionsAfter,
-      p_actor_state_before: actor.netrunner_state ?? null, p_actor_state_after: nextState,
-      p_discovery_before: actor.net_discovery ?? {}, p_discovery_after: nextDiscovery,
-      p_architecture_before: architectureRaw, p_architecture_after: nextArchitectures,
-      p_result: result, p_event_text: eventText, p_private_to_participant_id: actor.participant_id,
-    }), "Falha ao confirmar NET Action") as unknown as NetActionOutcome | null;
+    const committedResult = await netInfrastructure.resolutionStore.commitNetAction<NetActionOutcome>({
+      sessionId: session.id,
+      combatId: combat.id,
+      resolutionId,
+      claimToken: claim.claim_token,
+      rpcArgs: {
+        p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token,
+        p_actor_id: actor.id, p_actions_before: actor.actions_remaining, p_actions_after: actionsAfter,
+        p_actor_state_before: actor.netrunner_state ?? null, p_actor_state_after: nextState,
+        p_discovery_before: actor.net_discovery ?? {}, p_discovery_after: nextDiscovery,
+        p_architecture_before: architectureRaw, p_architecture_after: nextArchitectures,
+        p_result: result, p_event_text: eventText, p_private_to_participant_id: actor.participant_id,
+      },
+    });
     if (!committedResult) throw new MesaError("A NET Action não retornou resultado persistido.", 500, "transaction_failed");
     committed = true;
     await syncActiveNetIceCombatants(session.id, combat.id);
     await syncNetIceInitiative(combat.id);
     return { result: committedResult, committed: true };
   } catch (error) {
-    if (!committed) await query(db().rpc("release_mesa_attack_resolution", { p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token }), "Falha ao liberar NET Action").catch(() => undefined);
+    if (!committed) await netInfrastructure.resolutionStore.releaseAttack({ sessionId: session.id, combatId: combat.id, resolutionId, claimToken: claim.claim_token }).catch(() => undefined);
     throw databaseResolutionError(error) ?? error;
   }
+}
+
+/** Resultado do efeito de dispositivo; `state` é SEMPRE o estado autoritativo. */
+export interface HackableObjectControlOutcome {
+  objectId: string;
+  objectName: string;
+  type: TacticalHackableObjectType;
+  controlNodeId: string;
+  action: HackableDeviceAction;
+  /** `false` quando o estado autoritativo já era o pedido (idempotência/corrida). */
+  applied: boolean;
+  /** Ramo `door`; `null` para qualquer outro tipo. */
+  doorId: string | null;
+  /** Estado da porta; `null` para câmera e demais tipos. */
+  state: "open" | "closed" | null;
+  /** Estado da câmera; `null` para porta e demais tipos (F1.63). */
+  cameraState: HackableDeviceState | null;
+}
+
+function deviceEffectError(reason: DeviceEffectFailure): MesaError {
+  switch (reason) {
+    case "object_not_found":
+      return new MesaError("Objeto hackeável não encontrado.", 404, "hackable_object_not_found");
+    case "object_inactive":
+      return new MesaError(hackableObjectDenialMessage("object_inactive"), 409, "hackable_object_inactive");
+    case "invalid_object_type":
+      return new MesaError("Tipo de objeto hackeável inválido.", 400, "invalid_hackable_object_type");
+    case "invalid_action":
+      return new MesaError("Ação de dispositivo inválida.", 400, "invalid_device_action");
+    case "effect_unsupported":
+      return new MesaError(hackableObjectDenialMessage("action_unsupported"), 409, "device_effect_unsupported");
+    case "door_geometry_missing":
+      return new MesaError(hackableObjectDenialMessage("door_geometry_missing"), 409, "door_geometry_missing");
+    case "already_open":
+    case "already_closed":
+    case "already_online":
+    case "already_disabled":
+      return new MesaError(hackableObjectDenialMessage("action_unsupported"), 409, "device_state_conflict");
+    default:
+      return new MesaError("Ação indisponível.", 409, "device_effect_unsupported");
+  }
+}
+
+/**
+ * F1.62 — gateway do efeito de dispositivo: CONTROL → DOOR OPEN/CLOSE.
+ *
+ * Fluxo (nada de autoridade no navegador):
+ *
+ *   Hackable Object → Control Node → este gateway → efeito puro → estado
+ *   persistido (CAS no JSON do mapa) → Realtime → Tactical Map/Combat.
+ *
+ * O corpo aceita APENAS `objectId` + `action` (intenção). O tipo do objeto, o
+ * Control Node, a descoberta, a autorização e o estado da porta são sempre
+ * resolvidos aqui a partir do estado persistido.
+ *
+ * Autenticação/autorização: Mesa, membership, papel de Player, Netrunner dono
+ * do combatente, Jack In, Access Point e alcance wireless (todos herdados do
+ * sistema existente), Architecture conectada, Control Node existente,
+ * descoberto, controlado e sob autorização deste Netrunner.
+ *
+ * A gravação é um compare-and-set no estado atual da porta: se dois clientes
+ * controlarem a mesma porta ao mesmo tempo, apenas uma escrita vence; a outra
+ * recebe o estado autoritativo sem alterar nada.
+ */
+export async function executeControlDeviceEffect(input: {
+  sessionId: unknown;
+  token: unknown;
+  body: unknown;
+}): Promise<{ result: HackableObjectControlOutcome; changed: boolean }> {
+  const body = typeof input.body === "object" && input.body !== null && !Array.isArray(input.body) ? input.body as Record<string, unknown> : {};
+  for (const key of Object.keys(body)) {
+    if (!["objectId", "action"].includes(key)) {
+      throw new MesaError("Controle de dispositivo aceita apenas intenção; o estado é server-authoritative.", 400, "client_authority_forbidden");
+    }
+  }
+  const objectId = typeof body.objectId === "string" && body.objectId.trim() ? body.objectId.trim().slice(0, 120) : null;
+  if (!objectId) throw new MesaError("Objeto hackeável inválido.", 400, "invalid_hackable_object");
+  const action: unknown = body.action;
+  if (!isHackableDeviceAction(action)) throw new MesaError("Ação de dispositivo inválida.", 400, "invalid_device_action");
+
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireActiveSession(session);
+  // O Mestre configura o dispositivo no Editor; o efeito em jogo é do Netrunner.
+  requirePlayer({ session, participant });
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+
+  const controlInfrastructure = await createMesaHostingInfrastructure();
+  const controlRepository = controlInfrastructure.repository;
+  const rows = await controlRepository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
+  const actor = selectParticipantCharacter(rows, participant, combat.active_combatant_id);
+  if (!actor) throw new MesaError("Netrunner não encontrado.", 404, "combatant_not_found");
+  requireNetrunnerOwnership(participant, actor);
+  const connectionState = connectionStateForRow(actor);
+  // Jack In + Access Point + alcance: mesma validação de conexão das NET Actions.
+  await requireLiveNetrunnerConnection(session, actor, connectionState);
+  if (!connectionState.architectureId) throw new MesaError("Não há Architecture conectada.", 409, "architecture_not_connected");
+
+  const sessionRow = await controlRepository.findSessionById(session.id) as { tactical_map?: unknown; net_architectures?: unknown } | null;
+  const architectures = normalizeNetArchitectures(sessionRow?.net_architectures);
+  const architecture = architectures.find((entry) => entry.id === connectionState.architectureId) ?? null;
+  if (!architecture) throw new MesaError("Architecture conectada não existe.", 409, "architecture_not_found");
+  const discovery = normalizeNetDiscovery(actor.net_discovery, architecture.id);
+  const connectedNodes = new Map(architecture.floors.flatMap((floor) => floor.nodes).map((node) => [node.id, node] as const));
+  const architectureControlNodeIds = new Set(
+    architectures.flatMap((entry) => entry.floors.flatMap((floor) => floor.nodes.filter((node) => node.type === "control_node").map((node) => node.id))),
+  );
+
+  let rawMap: unknown = sessionRow?.tactical_map;
+  let outcome: { result: HackableObjectControlOutcome; changed: boolean } | null = null;
+
+  for (let attempt = 0; attempt < 3 && !outcome; attempt += 1) {
+    const map = sanitizeTacticalMap(rawMap);
+    const object = (map.hackableObjects ?? []).find((entry) => entry.id === objectId);
+    if (!object) throw new MesaError("Objeto hackeável não encontrado.", 404, "hackable_object_not_found");
+    if (!isHackableObjectType(object.type)) throw new MesaError("Tipo de objeto hackeável inválido.", 400, "invalid_hackable_object_type");
+    const objectName = object.name ?? HACKABLE_OBJECT_LABELS[object.type];
+    if (object.active !== true) throw new MesaError(hackableObjectDenialMessage("object_inactive"), 409, "hackable_object_inactive");
+    if (!object.controlNodeId) throw new MesaError(hackableObjectDenialMessage("control_node_missing"), 409, "control_node_missing");
+    if (!architectureControlNodeIds.has(object.controlNodeId)) throw new MesaError("Control Node não existe nesta mesa.", 404, "control_node_not_found");
+    const node = connectedNodes.get(object.controlNodeId) ?? null;
+    if (!node || node.type !== "control_node") throw new MesaError(hackableObjectDenialMessage("control_node_unavailable"), 409, "control_node_unavailable");
+    if (!discovery.discoveredNodeIds.includes(node.id)) throw new MesaError(hackableObjectDenialMessage("control_node_not_discovered"), 403, "control_node_not_discovered");
+    if (node.controlledByDemonId) throw new MesaError(hackableObjectDenialMessage("control_node_demon_controlled"), 409, "control_node_demon_controlled");
+    if (node.controlState !== "controlled") throw new MesaError(hackableObjectDenialMessage("control_node_not_controlled"), 409, "control_node_not_controlled");
+    if (node.controlledByNetrunnerId !== actor.id) throw new MesaError(hackableObjectDenialMessage("no_access"), 403, "no_access");
+
+    // F1.63: mapas persistidos antes desta fase não têm `deviceState` explícito.
+    // Normaliza antes do CAS com uma escrita idempotente do MESMO valor derivado
+    // (`online`) — nenhuma mudança de gameplay — para que o compare-and-set
+    // tenha sempre uma chave presente e o desempate continue atômico.
+    if (object.type === "camera" && !hackableCameraStateIsExplicit(rawMap, objectId)) {
+      const normalized = patchHackableCameraState(rawMap, objectId, DEFAULT_CAMERA_DEVICE_STATE);
+      if (normalized !== rawMap) {
+        await controlRepository.updateSession(session.id, { tactical_map: normalized, updated_at: new Date().toISOString() }, { tactical_map: rawMap });
+        const legacyRow = await controlRepository.findSessionById(session.id) as { tactical_map?: unknown } | null;
+        rawMap = legacyRow?.tactical_map;
+        continue;
+      }
+    }
+
+    const effect = resolveHackableObjectDeviceEffect({ map, objectId, action });
+    if (!effect.ok) {
+      // Estado autoritativo já era o pedido: devolve sem gravar (idempotente).
+      if (effect.reason === "already_open" || effect.reason === "already_closed" || effect.reason === "already_online" || effect.reason === "already_disabled") {
+        outcome = {
+          result: {
+            objectId,
+            objectName,
+            type: object.type,
+            controlNodeId: node.id,
+            action,
+            applied: false,
+            doorId: object.geometryDoorId ?? null,
+            state: hackableObjectDoorState(map, object),
+            cameraState: hackableObjectCameraState(object, map),
+          },
+          changed: false,
+        };
+        break;
+      }
+      throw deviceEffectError(effect.reason);
+    }
+
+    let written: Array<{ id: string }> = [];
+    if (effect.kind === "door") {
+      const nextRawMap = patchTacticalDoorState(rawMap, effect.doorId, effect.stateAfter);
+      written = await controlRepository.updateSession(session.id, { tactical_map: nextRawMap, updated_at: new Date().toISOString() }, { tactical_map: rawMap });
+    } else {
+      const nextRawMap = patchHackableCameraState(rawMap, effect.objectId, effect.cameraStateAfter);
+      written = await controlRepository.updateSession(session.id, { tactical_map: nextRawMap, updated_at: new Date().toISOString() }, { tactical_map: rawMap });
+    }
+    if (written && written.length === 1) {
+      outcome = {
+        result: {
+          objectId,
+          objectName,
+          type: object.type,
+          controlNodeId: node.id,
+          action,
+          applied: true,
+          doorId: effect.kind === "door" ? effect.doorId : null,
+          state: effect.kind === "door" ? effect.stateAfter : null,
+          cameraState: effect.kind === "camera" ? effect.cameraStateAfter : null,
+        },
+        changed: true,
+      };
+      break;
+    }
+
+    // Corrida perdida: relê o estado autoritativo e tenta resolver de novo.
+    const freshRow = await controlRepository.findSessionById(session.id) as { tactical_map?: unknown } | null;
+    rawMap = freshRow?.tactical_map;
+  }
+
+  if (!outcome) throw new MesaError("O estado do dispositivo mudou durante o controle; atualize a Mesa.", 409, "device_state_conflict");
+
+  if (outcome.changed) {
+    // Evento público da Mesa: é uma mudança física, não uma NET Action privada.
+    // O estado já está persistido; falha de histórico não desfaz o efeito.
+    try {
+      await appendEvent(combat.id, {
+        kind: "action",
+        text: `${actor.name}: ${outcome.result.objectName} ${outcome.result.action === "open" ? "aberta" : outcome.result.action === "close" ? "fechada" : outcome.result.action === "enable" ? "ativada" : "desativada"} via Control Node`,
+      });
+    } catch {
+      // best-effort: o efeito já foi aplicado e o Realtime já será publicado.
+    }
+  }
+  return outcome;
 }
 
 function quickhackCyberwareIds(row: CombatantRow): string[] {
@@ -1818,9 +2389,20 @@ function validateQuickhackTarget(quickhackId: string, target: CombatantRow): str
     throw new MesaError("O alvo não possui cyberware compatível.", 400, "target_not_compatible");
   }
   if (quickhackId === "shard_ejection") {
-    throw new MesaError("O alvo não possui chipware representado no estado da Mesa.", 400, "target_not_compatible");
+    const chipware = target.supplies?.inventory?.find((entry) => entry.category === "chipware" && entry.quantity > 0);
+    if (!chipware) throw new MesaError("O alvo não possui chipware compatível.", 400, "target_not_compatible");
   }
   return cyberwareIds;
+}
+
+function ejectChipware(target: CombatantRow): { supplies: MesaSupplies; item: string } {
+  const supplies = target.supplies ?? { inventory: [] };
+  const chipware = supplies.inventory?.find((entry) => entry.category === "chipware" && entry.quantity > 0);
+  if (!chipware) throw new MesaError("O alvo não possui chipware compatível.", 400, "target_not_compatible");
+  const inventory = (supplies.inventory ?? [])
+    .map((entry) => entry.itemId === chipware.itemId ? { ...entry, quantity: entry.quantity - 1 } : entry)
+    .filter((entry) => entry.quantity > 0);
+  return { supplies: { ...supplies, inventory }, item: chipware.item };
 }
 
 /** F1.52 — execução completa de Quickhack, incluindo rolagem e mutação server-side. */
@@ -1839,23 +2421,24 @@ export async function executeCombatQuickhack(input: {
   if (!quickhack) throw new MesaError("Quickhack fora do catálogo.", 400, "invalid_quickhack");
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const quickhackInfrastructure = await createMesaHostingInfrastructure();
+  const quickhackRepository = quickhackInfrastructure.repository;
   const previous = await storedAttackResolution<QuickhackOutcome>(session.id, resolutionId, combat.id);
   if (previous?.status === "committed" && previous.result) return { result: previous.result, committed: false };
   if (previous?.status === "processing") return { result: await waitForAttackResolution<QuickhackOutcome>(session.id, resolutionId, combat.id), committed: false };
-  const claimRows = (await query(db().rpc("claim_mesa_attack_resolution", { p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId }), "Falha ao reservar Quickhack")) as AttackResolutionClaim<QuickhackOutcome>[] | null;
-  const claim = claimRows?.[0];
+  const claim = await quickhackInfrastructure.resolutionStore.claimAttack<QuickhackOutcome>({ sessionId: session.id, combatId: combat.id, resolutionId });
   if (!claim) throw new MesaError("Não foi possível reservar o Quickhack.", 500, "transaction_failed");
   if (!claim.claimed) return { result: await waitForAttackResolution<QuickhackOutcome>(session.id, resolutionId, combat.id), committed: false };
   let committed = false;
   try {
-    const rows = (await query(db().from("mesa_combatants").select("*").eq("combat_id", combat.id).eq("session_id", session.id), "Falha ao consultar Quickhack")) as CombatantRow[] | null;
-    const actor = rows?.find((row) => row.participant_id === participant.id && row.kind === "character");
+    const rows = await quickhackRepository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
+    const actor = rows ? selectParticipantCharacter(rows, participant, combat.active_combatant_id) : null;
     const target = rows?.find((row) => row.id === targetId);
     if (!actor) throw new MesaError("Netrunner não encontrado.", 404, "combatant_not_found");
     if (!target || target.session_id !== session.id || target.combat_id !== combat.id) throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
     if (target.id === actor.id || target.kind !== "enemy" || target.is_dead) throw new MesaError("Alvo inválido para Quickhack.", 400, "invalid_quickhack_target");
     const actorState = connectionStateForRow(actor);
-    requireLiveNetrunnerConnection(session, actor, actorState);
+     await requireLiveNetrunnerConnection(session, actor, actorState);
     if (!actorState.equippedQuickhackIds.includes(quickhackId)) throw new MesaError("Quickhack não está equipado no Cyberdeck.", 409, "quickhack_not_equipped");
     if (actorState.netActionsRemaining <= 0) throw new MesaError("Não há NET Actions restantes.", 403, "net_actions_exhausted");
     const ramCost = getQuickhackRamCost(quickhackId);
@@ -1875,11 +2458,18 @@ export async function executeCombatQuickhack(input: {
     let targetConditions = [...(target.conditions ?? [])];
     let targetPatch: EngineDamagePatch = {};
     let damage = 0;
+    let targetSuppliesNext: MesaSupplies | null = null;
+    let ejectedChipware: string | undefined;
     if (success) {
       const resolved = resolveQuickhackEffect({ quickhackId, sourceCombatantId: actor.id, currentRound: combat.round, rng: serverRandom });
-      const effect: MesaQuickhackEffect = { ...resolved.effect, id: crypto.randomUUID(), ...(quickhackId === "short_circuit" ? { disabledCyberwareIds: cyberwareIds.slice(0, 3) } : {}), ...(quickhackId === "cyberware_malfunction" ? { disabledCyberwareIds: cyberwareIds.slice(0, 1) } : {}) };
+      const effect: MesaQuickhackEffect = { ...resolved.effect, id: createId(), ...(quickhackId === "short_circuit" ? { disabledCyberwareIds: cyberwareIds.slice(0, 3) } : {}), ...(quickhackId === "cyberware_malfunction" ? { disabledCyberwareIds: cyberwareIds.slice(0, 1) } : {}) };
       targetEffectsNext = [...targetEffects.filter((effect) => effect.quickhackId !== quickhackId), effect];
       targetConditions = [...new Set([...targetConditions, ...(effect.conditionIds ?? [])])];
+      if (quickhackId === "shard_ejection") {
+        const ejected = ejectChipware(target);
+        targetSuppliesNext = ejected.supplies;
+        ejectedChipware = ejected.item;
+      }
       if (quickhackId === "synapse_burnout" && resolved.damage) {
         const participants = (rows ?? []).map((row) => combatParticipantFromRow(row)).filter((entry): entry is CombatParticipant => entry !== null);
         const damageState: CombatState = { id: combat.id, status: combat.status, round: combat.round, initiativeStarted: combat.initiative_started, activeParticipantId: combat.active_combatant_id, participants };
@@ -1889,21 +2479,26 @@ export async function executeCombatQuickhack(input: {
         damage = resolved.damage.amount;
       }
     }
-    const result: QuickhackOutcome = { quickhackId, quickhackName: quickhack.name, targetCombatantId: target.id, roll, interfaceRank: actorState.interfaceRank, total, dv: getQuickhackDV(quickhackId), success, ramCost, ramRemaining: nextState.ramCurrent, netActionsRemaining: nextState.netActionsRemaining, effectApplied: success, damage };
+    const result: QuickhackOutcome = { quickhackId, quickhackName: quickhack.name, targetCombatantId: target.id, roll, interfaceRank: actorState.interfaceRank, total, dv: getQuickhackDV(quickhackId), success, ramCost, ramRemaining: nextState.ramCurrent, netActionsRemaining: nextState.netActionsRemaining, effectApplied: success, damage, ...(ejectedChipware ? { ejectedChipware } : {}) };
     const actionsAfter = actorState.meatspaceActionUsedForNetrunning ? actor.actions_remaining : actor.actions_remaining - 1;
-    const committedResult = await query(db().rpc("commit_mesa_quickhack_resolution", {
-      p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token,
-      p_actor_id: actor.id, p_target_id: target.id, p_actions_before: actor.actions_remaining, p_actions_after: actionsAfter,
-      p_actor_state_before: actor.netrunner_state ?? null, p_actor_state_after: nextState,
-      p_target_hp_before: target.hp_current, p_target_dead_before: target.is_dead, p_target_patch: targetPatch,
-      p_target_effects: targetEffectsNext, p_target_conditions: targetConditions, p_result: result,
-      p_event_text: `${actor.name}: ${quickhack.name} → ${target.name} (${success ? "sucesso" : "falha"}) ${total}/${getQuickhackDV(quickhackId)}`,
-    }), "Falha ao confirmar Quickhack") as unknown as QuickhackOutcome | null;
+    const committedResult = await quickhackInfrastructure.resolutionStore.commitQuickhack<QuickhackOutcome>({
+      sessionId: session.id, combatId: combat.id, resolutionId, claimToken: claim.claim_token,
+      rpcArgs: {
+        p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token,
+        p_actor_id: actor.id, p_target_id: target.id, p_actions_before: actor.actions_remaining, p_actions_after: actionsAfter,
+        p_actor_state_before: actor.netrunner_state ?? null, p_actor_state_after: nextState,
+        p_target_hp_before: target.hp_current, p_target_dead_before: target.is_dead, p_target_patch: targetPatch,
+        p_target_effects: targetEffectsNext, p_target_conditions: targetConditions,
+        p_target_supplies_before: target.supplies ?? null, p_target_supplies_after: targetSuppliesNext,
+        p_result: result,
+        p_event_text: `${actor.name}: ${quickhack.name} → ${target.name} (${success ? "sucesso" : "falha"})${ejectedChipware ? ` — ejetou ${ejectedChipware}` : ""} ${total}/${getQuickhackDV(quickhackId)}`,
+      },
+    });
     if (!committedResult) throw new MesaError("A resolução do Quickhack não retornou resultado persistido.", 500, "transaction_failed");
     committed = true;
     return { result: committedResult, committed: true };
   } catch (error) {
-    if (!committed) await query(db().rpc("release_mesa_attack_resolution", { p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token }), "Falha ao liberar Quickhack").catch(() => undefined);
+    if (!committed) await quickhackInfrastructure.resolutionStore.releaseAttack({ sessionId: session.id, combatId: combat.id, resolutionId, claimToken: claim.claim_token }).catch(() => undefined);
     throw databaseResolutionError(error) ?? error;
   }
 }
@@ -1911,8 +2506,54 @@ export async function executeCombatQuickhack(input: {
 /** Unsafe Jack Out interno: não é uma autoridade que o cliente possa solicitar. */
 async function persistUnsafeJackOut(row: CombatantRow, combat: CombatRow): Promise<NetrunnerConnectionState> {
   const nextState = unsafeJackOutState(connectionStateForRow(row));
-  await query(db().from("mesa_combatants").update({ netrunner_state: nextState }).eq("id", row.id).eq("combat_id", combat.id).select("id"), "Falha ao registrar Unsafe Jack Out");
+  const repository = await mesaRepository();
+  const written = await repository.updateCombatant({
+    id: row.id,
+    sessionId: combat.session_id,
+    combatId: combat.id,
+    patch: { netrunner_state: nextState },
+    expected: { netrunner_state: row.netrunner_state ?? null },
+  });
+  if (written.length !== 1) throw new MesaError("Falha ao registrar Unsafe Jack Out.", 409, "action_conflict");
   return nextState;
+}
+
+/** F1.61.1 — equipamento sem HP: somente condição funcional/destruído. */
+export async function setCyberdeckStatus(input: {
+  sessionId: unknown;
+  token: unknown;
+  combatantId: unknown;
+  status: unknown;
+}): Promise<{ combatantId: string; cyberdeckStatus: "functional" | "destroyed"; state: NetrunnerConnectionState }> {
+  const { session, participant } = await authenticate(input.sessionId, input.token);
+  requireActiveSession(session);
+  requireGM({ session, participant });
+  const combatantId = typeof input.combatantId === "string" ? input.combatantId.trim() : "";
+  const status = input.status === "destroyed" || input.status === "functional" ? input.status : null;
+  if (!combatantId || !status) throw new MesaError("Estado de Cyberdeck inválido.", 400, "invalid_cyberdeck_status");
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const repository = await mesaRepository();
+  const row = await repository.findCombatantById(combatantId, { combatId: combat.id, sessionId: session.id }) as CombatantRow | null;
+  if (!row || row.kind !== "character") throw new MesaError("Netrunner não encontrado.", 404, "combatant_not_found");
+  const current = connectionStateForRow(row);
+  if (status === "functional") {
+    if (current.isJackedIn) throw new MesaError("O Cyberdeck precisa estar desconectado para ser reparado.", 409, "cyberdeck_still_connected");
+    const next = { ...current, cyberdeckStatus: "functional" as const, ramCurrent: current.ramCurrent, netActionsRemaining: 0 };
+    const written = await repository.updateCombatant({ id: row.id, sessionId: session.id, combatId: combat.id, patch: { netrunner_state: next }, expected: { netrunner_state: row.netrunner_state ?? null } });
+    if (written.length !== 1) throw new MesaError("O estado do Cyberdeck mudou; atualize a Mesa.", 409, "cyberdeck_conflict");
+    await appendEvent(combat.id, { kind: "action", text: `${row.name}: Cyberdeck reparado` });
+    return { combatantId: row.id, cyberdeckStatus: "functional", state: next };
+  }
+  if (current.cyberdeckStatus === "destroyed") return { combatantId: row.id, cyberdeckStatus: "destroyed", state: current };
+  const consequences = await unsafeJackOutNetConsequences(row, current, session.id);
+  const next = { ...unsafeJackOutState(consequences.state), cyberdeckStatus: "destroyed" as const, ramCurrent: 0, netActionsRemaining: 0, netActionsMax: 0 };
+  await clearNetIceEngagement(session.id, current.architectureId, row.id);
+  const written = await repository.updateCombatant({ id: row.id, sessionId: session.id, combatId: combat.id, patch: { netrunner_state: next }, expected: { netrunner_state: row.netrunner_state ?? null } });
+  if (written.length !== 1) throw new MesaError("O estado do Cyberdeck mudou; atualize a Mesa.", 409, "cyberdeck_conflict");
+  for (const event of consequences.events) await appendEvent(combat.id, { kind: "action", text: event });
+  await appendEvent(combat.id, { kind: "action", text: `${row.name}: Cyberdeck destruído — Unsafe Jack Out` });
+  return { combatantId: row.id, cyberdeckStatus: "destroyed", state: next };
 }
 
 // ---------------------------------------------------------------------------
@@ -1929,14 +2570,12 @@ function persistedPosition(raw: unknown): TacticalPosition | null {
 
 /** Estado da mesa projetado para o papel autenticado que pede o snapshot. */
 export async function getMesaState(sessionId: string, viewerParticipantId: string | null): Promise<MesaState> {
-  const [sessionRow, participantsRow, combatRow, combatantsRow] = await Promise.all([
-    query(db().from("mesa_sessions").select("*").eq("id", sessionId).maybeSingle(), "Falha ao consultar a mesa"),
-    query(db().from("mesa_participants").select("*").eq("session_id", sessionId).order("created_at"), "Falha ao consultar participantes"),
-    query(db().from("mesa_combats").select("*").eq("session_id", sessionId).maybeSingle(), "Falha ao consultar o combate"),
-    query(
-      db().from("mesa_combatants").select("*").eq("session_id", sessionId).order("sort_order"),
-      "Falha ao consultar combatentes",
-    ),
+  const repository = await mesaRepository();
+   const [sessionRow, participantsRow, combatRow, combatantsRow] = await Promise.all([
+    measureMesaDb(repository.findSessionById(sessionId), "table.mesa_sessions.select_by_id"),
+    measureMesaDb(repository.listParticipantsBySession(sessionId), "table.mesa_participants.select_by_session"),
+    measureMesaDb(repository.findCombatBySession(sessionId), "table.mesa_combats.select_by_session"),
+    measureMesaDb(repository.listCombatantsBySession(sessionId), "table.mesa_combatants.select_by_session"),
   ]);
 
   if (!sessionRow) throw new MesaError("Mesa não encontrada.", 404, "session_not_found");
@@ -1944,16 +2583,17 @@ export async function getMesaState(sessionId: string, viewerParticipantId: strin
   const viewerRow = (participantsRow ?? []).find((row) => row.id === viewerParticipantId);
   const stateVersion = [
     (sessionRow as SessionRow).updated_at,
-    combatRow ? (combatRow as CombatRow).updated_at : null,
+    combatRow ? (combatRow as unknown as CombatRow).updated_at : null,
   ]
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .sort()
     .at(-1);
 
+  const projectionStartedAt = performance.now();
   const session = toSession(sessionRow as SessionRow);
   const architectures = normalizeNetArchitectures((sessionRow as SessionRow).net_architectures);
-  const currentRound = (combatRow as CombatRow | null)?.round ?? Number.POSITIVE_INFINITY;
-  const allCombatants = (combatantsRow ?? []).map((row) => toCombatant(row as CombatantRow, currentRound));
+  const currentRound = (combatRow as unknown as CombatRow | null)?.round ?? Number.POSITIVE_INFINITY;
+  const allCombatants = (combatantsRow ?? []).map((row) => toCombatant(row as unknown as CombatantRow, currentRound));
   const viewer = viewerRow
     ? {
         participantId: viewerRow.id,
@@ -1971,18 +2611,22 @@ export async function getMesaState(sessionId: string, viewerParticipantId: strin
     session.tacticalMap ?? DEFAULT_TACTICAL_MAP,
     persistedPositions,
   );
-  const combat = combatRow ? toCombat(combatRow as CombatRow) : null;
+  markMesaServerStage("T11.combatants", performance.now() - projectionStartedAt);
+   const combat = combatRow ? toCombat(combatRow as unknown as CombatRow) : null;
 
   const ownCombatant = viewer.participantId ? allCombatants.find((entry) => entry.kind === "character" && entry.participantId === viewer.participantId) : null;
   const architectureId = ownCombatant?.netrunnerState?.architectureId ?? null;
   const architecture = architectureId ? architectures.find((entry) => entry.id === architectureId) ?? null : null;
   const netArchitecture: NetArchitectureProjection | null = architecture && ownCombatant?.netrunnerState?.isJackedIn
-    ? projectNetArchitecture(architecture, ownCombatant.netrunnerState.currentFloor ?? 1, ownCombatant.netDiscovery ?? normalizeNetDiscovery(null, architecture.id), viewer.role === "gm")
+    ? projectNetArchitecture(architecture, ownCombatant.netrunnerState.currentFloor ?? 1, ownCombatant.netDiscovery ?? normalizeNetDiscovery(null, architecture.id), viewer.role === "gm", ownCombatant.id)
     : viewer.role === "gm" && architectures[0]
-      ? projectNetArchitecture(architectures[0], architectures[0].floors[0]?.index ?? 1, normalizeNetDiscovery(null, architectures[0].id), true)
+      ? projectNetArchitecture(architectures[0], architectures[0].floors[0]?.index ?? 1, normalizeNetDiscovery(null, architectures[0].id), true, ownCombatant?.id ?? null)
       : null;
+  markMesaServerStage("T11.net", performance.now() - projectionStartedAt);
   const discoveredControlNodeIds = new Set((netArchitecture?.nodes ?? []).filter((node) => node.type === "control_node").map((node) => node.id));
   session.tacticalMap = projectTacticalMapForViewer(session.tacticalMap ?? DEFAULT_TACTICAL_MAP, viewer.role === "gm", discoveredControlNodeIds);
+  markMesaServerStage("T11.tacticalMap", performance.now() - projectionStartedAt);
+  markMesaServerStage("T11", performance.now() - projectionStartedAt);
 
   return {
     ...(stateVersion ? { stateVersion } : {}),
@@ -2035,6 +2679,85 @@ async function executeBlackIceTurn(combat: CombatRow, iceRow: CombatantRow): Pro
 }
 
 /**
+ * Variante local do turno de ICE. Todas as leituras/escritas recebem o
+ * repository do mesmo contexto transacional de `endTurnLocalTransactional`.
+ * A regra (alvo, ataque, REZZ/Brain Damage e log privado) é a mesma da
+ * implementação Supabase acima; somente a infraestrutura muda.
+ */
+async function executeBlackIceTurnWithRepository(
+  repository: MesaRepository,
+  combat: CombatRow,
+  iceRow: CombatantRow,
+): Promise<void> {
+  const ice = iceRow.net_ice_state;
+  if (!ice || ice.state !== "active" || iceRow.is_dead || !ice.engagedNetrunnerId) {
+    await appendEventWithRepository(repository, combat.id, combat.session_id, {
+      kind: "turn",
+      text: `${iceRow.name}: turno ignorado (ICE inativa)`,
+    });
+    return;
+  }
+  const target = await repository.findCombatantById(ice.engagedNetrunnerId, {
+    combatId: combat.id,
+    sessionId: combat.session_id,
+  }) as CombatantRow | null;
+  if (!target || target.kind !== "character" || target.is_dead) {
+    await appendEventWithRepository(repository, combat.id, combat.session_id, {
+      kind: "action",
+      text: `${iceRow.name}: nenhum Netrunner válido para atacar`,
+    });
+    return;
+  }
+  const targetState = connectionStateForRow(target);
+  if (!targetState.isJackedIn || targetState.architectureId !== ice.architectureId || targetState.currentFloor !== ice.floorIndex) {
+    await appendEventWithRepository(repository, combat.id, combat.session_id, {
+      kind: "action",
+      text: `${iceRow.name}: alvo fora da NET`,
+    });
+    return;
+  }
+  const resolution = iceAttack({ ice, targetDefense: 10, rng: serverRandom });
+  if (ice.type === "anti_program") {
+    const program = (targetState.programs ?? []).find((entry) => entry.state === "active");
+    if (!program) {
+      await appendEventWithRepository(repository, combat.id, combat.session_id, { kind: "action", text: `${iceRow.name}: nenhum programa ativo (${resolution.total}/10)` });
+      return;
+    }
+    const nextProgram = applyProgramDamage(program, ice.damage ?? 0);
+    const nextState = { ...targetState, programs: (targetState.programs ?? []).map((entry) => entry.id === program.id ? nextProgram : entry) };
+    const written = await repository.updateCombatant({
+      id: target.id,
+      sessionId: combat.session_id,
+      combatId: combat.id,
+      patch: { netrunner_state: nextState },
+      expected: { netrunner_state: target.netrunner_state ?? null },
+    });
+    if (written.length !== 1) throw new MesaError("O estado do Netrunner mudou durante o turno.", 409, "turn_conflict");
+    await appendEventWithRepository(repository, combat.id, combat.session_id, {
+      kind: "action",
+      text: `${iceRow.name}: Anti-Program → ${program.name} (${resolution.hit ? `HIT, ${ice.damage ?? 0} REZZ, restante ${nextProgram.rezz}` : "MISS"}) ${resolution.total}/10`,
+      ...(target.participant_id ? { privateToParticipantId: target.participant_id } : {}),
+    });
+    return;
+  }
+  const damage = resolution.hit ? brainDamageForIce(ice) : 0;
+  const nextBrainDamage = (target.brain_damage ?? 0) + damage;
+  const written = await repository.updateCombatant({
+    id: target.id,
+    sessionId: combat.session_id,
+    combatId: combat.id,
+    patch: { brain_damage: nextBrainDamage, netrunner_state: { ...targetState, brainDamage: nextBrainDamage } },
+    expected: { brain_damage: target.brain_damage ?? 0, netrunner_state: target.netrunner_state ?? null },
+  });
+  if (written.length !== 1) throw new MesaError("O estado do Netrunner mudou durante o turno.", 409, "turn_conflict");
+  await appendEventWithRepository(repository, combat.id, combat.session_id, {
+    kind: "action",
+    text: `${iceRow.name}: Anti-Personnel → ${target.name} (${resolution.hit ? `HIT, ${damage} Brain Damage` : "MISS"}) ${resolution.total}/10`,
+    ...(target.participant_id ? { privateToParticipantId: target.participant_id } : {}),
+  });
+}
+
+/**
  * Metadados de controle que não devem entrar no snapshot compartilhado.
  * O GM recebe somente as armas materializadas no combat snapshot; Players
  * continuam vendo apenas a projeção pública de `MesaCombatant`.
@@ -2044,16 +2767,14 @@ export async function getMesaControlMetadata(sessionId: string, participantId: s
   weapons: NonNullable<CombatParticipant["weapons"]>;
   attacks: AvailableAttack[];
 }[]> {
-  const participant = (await query(
-    db().from("mesa_participants").select("role").eq("id", participantId).eq("session_id", sessionId).maybeSingle(),
-    "Falha ao consultar o controlador",
-  )) as { role: MesaParticipant["role"] } | null;
-  if (!participant || participant.role !== "gm") throw new MesaError("Apenas o Mestre pode consultar o controle do combate.", 403, "gm_only");
+  const repository = await mesaRepository();
+  const participant = await repository.listParticipantsBySession(sessionId).then((rows) => rows.find((row) => row.id === participantId)) as ({ role: MesaParticipant["role"]; session_id: string } | null);
+  const session = await repository.findSessionById(sessionId) as ({ gm_id: string | null } | null);
+  if (!participant || !session || participant.session_id !== sessionId || participant.role !== "gm" || session.gm_id !== participantId) {
+    throw new MesaError("Apenas o Mestre pode consultar o controle do combate.", 403, "gm_only");
+  }
 
-  const rows = (await query(
-    db().from("mesa_combatants").select("id,kind,combat_snapshot").eq("session_id", sessionId).eq("kind", "enemy"),
-    "Falha ao consultar metadados de controle",
-  )) as Array<{ id: string; kind: "enemy"; combat_snapshot: CombatParticipant | null }> | null;
+  const rows = await repository.listCombatantsBySession(sessionId).then((entries) => entries.filter((row) => row.kind === "enemy")) as unknown as Array<{ id: string; kind: "enemy"; combat_snapshot: CombatParticipant | null }>;
 
   return (rows ?? []).map((row) => {
     const snapshot = row.combat_snapshot;
@@ -2089,10 +2810,8 @@ export async function updateTacticalMap(input: { sessionId: unknown; token: unkn
   requireGM({ session, participant });
   validateTacticalCoverMetadata(input.map);
   const requestedMap = sanitizeTacticalMap(input.map);
-  const currentRow = (await query(
-    db().from("mesa_sessions").select("tactical_map,net_architectures").eq("id", session.id).maybeSingle(),
-    "Falha ao consultar o mapa tático atual",
-  )) as { tactical_map?: unknown; net_architectures?: unknown } | null;
+  const repository = await mesaRepository();
+  const currentRow = await repository.findSessionById(session.id) as { tactical_map?: unknown; net_architectures?: unknown } | null;
   const currentMap = sanitizeTacticalMap(currentRow?.tactical_map);
   const currentArchitectures = normalizeNetArchitectures(currentRow?.net_architectures);
   const architectureIds = new Set(currentArchitectures.map((architecture) => architecture.id));
@@ -2103,10 +2822,11 @@ export async function updateTacticalMap(input: { sessionId: unknown; token: unkn
     }
   }
   for (const object of requestedMap.hackableObjects ?? []) {
-    if (object.linkedControlNodeId && !controlNodeIds.has(object.linkedControlNodeId)) {
+    if (object.controlNodeId && !controlNodeIds.has(object.controlNodeId)) {
       throw new MesaError("Objeto hackeável referencia um Control Node inexistente.", 400, "control_node_not_found");
     }
   }
+  validateTacticalHackableObjects((input.map as { hackableObjects?: unknown } | null)?.hackableObjects, requestedMap.geometry?.doors ?? []);
   const currentGeometry = currentMap.geometry ?? { walls: [], doors: [] };
   const requestedGeometry = requestedMap.geometry ?? { walls: [], doors: [] };
   const currentById = new Map([...currentGeometry.walls, ...currentGeometry.doors].map((entry) => [entry.id, entry]));
@@ -2127,10 +2847,8 @@ export async function updateTacticalMap(input: { sessionId: unknown; token: unkn
       doors: requestedGeometry.doors.map(preserveCoverState),
     },
   };
-  await query(
-    db().from("mesa_sessions").update({ tactical_map: map, updated_at: new Date().toISOString() }).eq("id", session.id),
-    "Falha ao salvar o mapa tático",
-  );
+  const written = await repository.updateSession(session.id, { tactical_map: map, updated_at: new Date().toISOString() });
+  if (written.length !== 1) throw new MesaError("Falha ao salvar o mapa tático.", 409, "session_conflict");
 }
 
 /** F1.53 — configuração administrativa; não executa nenhuma NET Action. */
@@ -2153,19 +2871,15 @@ export async function updateNetArchitectures(input: {
     ids.add(architecture.id);
     architectures.push(architecture);
   }
-  const mapRow = (await query(
-    db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(),
-    "Falha ao consultar Access Points",
-  )) as { tactical_map?: unknown } | null;
+  const repository = await mesaRepository();
+  const mapRow = await repository.findSessionById(session.id) as { tactical_map?: unknown } | null;
   const map = sanitizeTacticalMap(mapRow?.tactical_map);
   const architectureIds = new Set(architectures.map((architecture) => architecture.id));
   if ((map.accessPoints ?? []).some((accessPoint) => accessPoint.architectureId !== null && !architectureIds.has(accessPoint.architectureId))) {
     throw new MesaError("Remova ou reconfigure Access Points que apontam para arquiteturas removidas.", 409, "architecture_in_use");
   }
-  await query(
-    db().from("mesa_sessions").update({ net_architectures: architectures, updated_at: new Date().toISOString() }).eq("id", session.id),
-    "Falha ao salvar arquiteturas NET",
-  );
+  const written = await repository.updateSessionNetArchitectures(session.id, architectures);
+  if (written.length !== 1) throw new MesaError("Falha ao salvar arquiteturas NET.", 409, "session_conflict");
   return architectures;
 }
 
@@ -2187,18 +2901,19 @@ export async function positionCombatantPreparation(input: { sessionId: unknown; 
   requireGM({ session, participant });
   const id = typeof input.combatantId === "string" ? input.combatantId.trim() : "";
   const position = normalizeTacticalPosition(input.position, { x: 0.5, y: 0.5 });
-  const combat = (await query(db().from("mesa_combats").select("id,status,initiative_started").eq("session_id", session.id).maybeSingle(), "Falha ao consultar o combate")) as Pick<CombatRow, "id" | "status" | "initiative_started"> | null;
+  const repository = await mesaRepository();
+  const combat = await repository.findCombatBySession(session.id) as Pick<CombatRow, "id" | "status" | "initiative_started"> | null;
   if (!combat || (combat.status === "active" && combat.initiative_started)) {
     throw new MesaError("O posicionamento livre só existe antes da iniciativa.", 409, "combat_active");
   }
   let map = DEFAULT_TACTICAL_MAP;
   try {
-    const sessionMap = (await query(db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(), "Falha ao consultar mapa")) as { tactical_map?: TacticalMap | null } | null;
+    const sessionMap = await repository.findSessionById(session.id) as { tactical_map?: TacticalMap | null } | null;
     map = sanitizeTacticalMap(sessionMap?.tactical_map);
   } catch { /* migration ainda não aplicada: usa escala padrão */ }
   await ensurePositionAvailable(session.id, combat.id, id, position, map);
-  const written = await query(db().from("mesa_combatants").update({ position }).eq("id", id).eq("session_id", session.id).select("id"), "Falha ao salvar a posição");
-  if (!written || written.length !== 1) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  const written = await repository.updateCombatant({ id, sessionId: session.id, combatId: combat.id, patch: { position } });
+  if (written.length !== 1) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
 }
 
 // ---------------------------------------------------------------------------
@@ -2211,19 +2926,8 @@ async function insertParticipant(
   displayName: string,
   role: MesaParticipant["role"],
 ): Promise<MesaParticipant> {
-  const row = await query(
-    db()
-      .from("mesa_participants")
-      .insert({
-        session_id: sessionId,
-        player_token: playerToken,
-        display_name: displayName,
-        role,
-      })
-      .select("*")
-      .single(),
-    "Falha ao criar o participante",
-  );
+  const repository = await mesaRepository();
+  const row = await repository.insertParticipant({ sessionId, playerToken, displayName, role });
   if (!row) throw new MesaError("Não foi possível criar o participante.", 500, "participant_failed");
   return toParticipant(row as unknown as ParticipantRow);
 }
@@ -2239,25 +2943,23 @@ export async function createMesa(input: {
   const playerToken = requireToken(input.playerToken);
 
   let sessionRow: SessionRow | null = null;
-  let lastError: { message: string } | null = null;
+  let lastError: Error | null = null;
+  const repository = await mesaRepository();
 
   for (let attempt = 0; attempt < JOIN_CODE_ATTEMPTS && !sessionRow; attempt += 1) {
     const joinCode = generateJoinCode();
-    const { data, error } = await db()
-      .from("mesa_sessions")
-      .insert({ name, join_code: joinCode, status: "lobby" })
-      .select("*")
-      .single();
-    if (error) {
+    try {
+      sessionRow = await repository.createSession({ name, joinCode, status: "lobby" }) as SessionRow;
+      lastError = null;
+    } catch (caught) {
+      const error = caught instanceof Error ? caught : new Error(String(caught));
       // Colisão de código único → tenta outro; outros erros interrompem.
       if (error.message.includes("duplicate key")) {
         lastError = error;
         continue;
       }
-      throw new DatabaseQueryError(`Falha ao criar a mesa: ${error.message}`);
+      throw error;
     }
-    sessionRow = data as unknown as SessionRow;
-    lastError = null;
   }
 
   if (!sessionRow) {
@@ -2266,14 +2968,11 @@ export async function createMesa(input: {
 
   try {
     const participant = await insertParticipant(sessionRow.id, playerToken, displayName, "gm");
-    await query(
-      db().from("mesa_sessions").update({ gm_id: participant.id, updated_at: new Date().toISOString() }).eq("id", sessionRow.id),
-      "Falha ao registrar o Mestre",
-    );
+    await repository.updateSession(sessionRow.id, { gm_id: participant.id, updated_at: new Date().toISOString() });
     return { session: { ...toSession(sessionRow), gmId: participant.id }, participant };
   } catch (error) {
     // Remove a órfã para não deixar mesa sem Mestre.
-    await db().from("mesa_sessions").delete().eq("id", sessionRow.id);
+    await repository.deleteSession(sessionRow.id);
     throw error;
   }
 }
@@ -2290,33 +2989,16 @@ export async function joinMesa(input: {
   const displayName = sanitizeDisplayName(input.displayName);
   const playerToken = requireToken(input.playerToken);
 
-  const sessionRow = (await query(
-    db().from("mesa_sessions").select("*").eq("join_code", joinCode).maybeSingle(),
-    "Falha ao consultar a mesa",
-  )) as SessionRow | null;
+  const repository = await mesaRepository();
+  const sessionRow = await repository.findSessionByJoinCode(joinCode) as SessionRow | null;
   if (!sessionRow) throw new MesaError("Mesa não encontrada com este código.", 404, "session_not_found");
   if (sessionRow.status === "finished") throw new MesaError("Esta sessão foi encerrada.", 410, "session_finished");
 
-  const existing = (await query(
-    db()
-      .from("mesa_participants")
-      .select("*")
-      .eq("session_id", sessionRow.id)
-      .eq("player_token", playerToken)
-      .maybeSingle(),
-    "Falha ao consultar o participante",
-  )) as ParticipantRow | null;
+  const existing = await repository.findParticipantByToken(sessionRow.id, playerToken) as ParticipantRow | null;
 
   if (existing) {
-    const updated = (await query(
-      db()
-        .from("mesa_participants")
-        .update({ connected_at: new Date().toISOString(), display_name: displayName })
-        .eq("id", existing.id)
-        .select("*")
-        .single(),
-      "Falha ao atualizar o participante",
-    )) as ParticipantRow | null;
+    const updatedRows = await repository.updateParticipant(existing.id, sessionRow.id, { connected_at: new Date().toISOString(), display_name: displayName });
+    const updated = (updatedRows[0] ?? null) as ParticipantRow | null;
     return { session: toSession(sessionRow), participant: toParticipant(updated ?? existing) };
   }
 
@@ -2382,7 +3064,9 @@ export async function linkCharacter(input: {
   // outro estado de combate enquanto a Mesa estiver resolvendo o combate.
   // Fora de combate, o fluxo de vinculação/salvamento permanece inalterado;
   // GM também preserva o comportamento existente.
-  if (participant.role === "player" && (await getActiveCombat(session.id))) {
+  const repository = await mesaRepository();
+  const combat = await repository.findCombatBySession(session.id);
+  if (participant.role === "player" && combat?.status === "active") {
     throw new MesaError(
       "A ficha está bloqueada durante o combate da Mesa; o estado de combate é atualizado pelos gateways.",
       409,
@@ -2391,10 +3075,9 @@ export async function linkCharacter(input: {
   }
 
   if (input.characterId === null || input.characterId === undefined || input.characterId === "") {
-    const cleared = (await query(
-      db().from("mesa_participants").update({ character_id: null }).eq("id", participant.id).select("*").single(),
-      "Falha ao desvincular o personagem",
-    )) as ParticipantRow | null;
+    const clearedRows = await repository.updateParticipant(participant.id, session.id, { character_id: null });
+    const cleared = (clearedRows[0] ?? null) as ParticipantRow | null;
+    if (!cleared) throw new MesaError("Participante não encontrado.", 404, "participant_not_found");
     return toParticipant(cleared as ParticipantRow);
   }
 
@@ -2405,10 +3088,7 @@ export async function linkCharacter(input: {
 
   const token = requireToken(input.token);
 
-  const existing = (await query(
-    db().from("mesa_characters").select("*").eq("id", input.characterId).maybeSingle(),
-    "Falha ao consultar o personagem",
-  )) as SheetRow | null;
+  const existing = await repository.findCharacterById(input.characterId) as SheetRow | null;
 
   if (existing && existing.owner_token !== token) {
     // Uma ficha só pode ser atualizada por quem a enviou originalmente.
@@ -2417,27 +3097,17 @@ export async function linkCharacter(input: {
 
   const display = sheet.identity?.name?.trim() || "Personagem";
 
-  await query(
-    db()
-      .from("mesa_characters")
-      .upsert(
-        {
-          id: input.characterId,
-          owner_token: token,
-          display_name: display.slice(0, 60),
-          sheet,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "id" },
-      )
-      .select("id"),
-    "Falha ao salvar a ficha",
-  );
+  await repository.upsertCharacter({
+    id: input.characterId,
+    ownerToken: token,
+    displayName: display.slice(0, 60),
+    sheet,
+    updatedAt: new Date().toISOString(),
+  });
 
-  const updated = (await query(
-    db().from("mesa_participants").update({ character_id: input.characterId }).eq("id", participant.id).select("*").single(),
-    "Falha ao vincular o personagem",
-  )) as ParticipantRow | null;
+  const updatedRows = await repository.updateParticipant(participant.id, session.id, { character_id: input.characterId });
+  const updated = (updatedRows[0] ?? null) as ParticipantRow | null;
+  if (!updated) throw new MesaError("Participante não encontrado.", 404, "participant_not_found");
 
   return toParticipant(updated as ParticipantRow);
 }
@@ -2447,10 +3117,8 @@ export async function linkCharacter(input: {
 // ---------------------------------------------------------------------------
 
 async function getActiveCombat(sessionId: string): Promise<CombatRow | null> {
-  const row = (await query(
-    db().from("mesa_combats").select("*").eq("session_id", sessionId).maybeSingle(),
-    "Falha ao consultar o combate",
-  )) as CombatRow | null;
+  const repository = await mesaRepository();
+  const row = await repository.findCombatBySession(sessionId) as CombatRow | null;
   return row && row.status === "active" ? row : null;
 }
 
@@ -2472,25 +3140,75 @@ async function getActiveCombat(sessionId: string): Promise<CombatRow | null> {
  * comportamento continuam os do F0.1.
  */
 export async function appendEvent(combatId: string, event: Omit<MesaEvent, "at">): Promise<void> {
-  const row = (await query(
-    db().from("mesa_combats").select("event_log").eq("id", combatId).maybeSingle(),
-    "Falha ao consultar o histórico do combate",
-  )) as { event_log: MesaEvent[] | null } | null;
-  const currentLog = Array.isArray(row?.event_log) ? row.event_log : [];
-  if (event.resolutionId && currentLog.some((entry) => entry.resolutionId === event.resolutionId)) return;
+  const infrastructure = await createMesaHostingInfrastructure();
+  if (infrastructure.mode === "supabase") {
+    const row = (await query(
+      getSupabaseAdmin().from("mesa_combats").select("event_log").eq("id", combatId).maybeSingle(),
+      "Falha ao consultar o histórico do combate",
+    )) as { event_log: MesaEvent[] | null } | null;
+    const currentLog = Array.isArray(row?.event_log) ? row.event_log : [];
+    if (event.resolutionId && currentLog.some((entry) => entry.resolutionId === event.resolutionId)) return;
+    const next = [...currentLog, { at: new Date().toISOString(), ...event }].slice(-MAX_EVENT_LOG);
+    await query(
+      getSupabaseAdmin().from("mesa_combats").update({ event_log: next, updated_at: new Date().toISOString() }).eq("id", combatId),
+      "Falha ao registrar o evento",
+    );
+    return;
+  }
+  const repository = infrastructure.repository;
+  const combat = await repository.findCombatById(combatId) as CombatRow | null;
+  if (!combat) throw new MesaError("Combate não encontrado.", 404, "combat_not_found");
+  const currentLog = await repository.findCombatEventLog(combatId, combat.session_id);
+  if (event.resolutionId && currentLog.some((entry) => (
+    typeof entry === "object" && entry !== null && (entry as MesaEvent).resolutionId === event.resolutionId
+  ))) return;
   const next = [...currentLog, { at: new Date().toISOString(), ...event }].slice(-MAX_EVENT_LOG);
-  await query(
-    db().from("mesa_combats").update({ event_log: next, updated_at: new Date().toISOString() }).eq("id", combatId),
-    "Falha ao registrar o evento",
-  );
+  const written = await repository.replaceCombatEventLog(combatId, combat.session_id, next);
+  if (written.length !== 1) throw new MesaError("Falha ao registrar o evento.", 409, "transaction_failed");
+}
+
+/**
+ * Variante preparada para operações compostas: o read-modify-write usa o
+ * repository recebido pelo contexto e, portanto, não adquire outro client.
+ * O chamador transacional deve manter o lock de `mesa_combats`.
+ */
+async function appendEventWithRepository(
+  repository: MesaRepository,
+  combatId: string,
+  sessionId: string,
+  event: Omit<MesaEvent, "at">,
+): Promise<void> {
+  const currentLog = await repository.findCombatEventLog(combatId, sessionId);
+  if (event.resolutionId && currentLog.some((entry) => (
+    typeof entry === "object" && entry !== null && (entry as MesaEvent).resolutionId === event.resolutionId
+  ))) return;
+  const next = [...currentLog, { at: new Date().toISOString(), ...event }].slice(-MAX_EVENT_LOG);
+  const written = await repository.replaceCombatEventLog(combatId, sessionId, next);
+  if (written.length !== 1) throw new DatabaseQueryError("Falha ao registrar o evento: combate não encontrado");
 }
 
 async function loadSheet(characterId: string): Promise<Character | null> {
-  const row = (await query(
-    db().from("mesa_characters").select("sheet").eq("id", characterId).maybeSingle(),
-    "Falha ao consultar a ficha",
-  )) as { sheet: Character } | null;
-  return row?.sheet ?? null;
+  const repository = await mesaRepository();
+  const row = await repository.findCharacterById(characterId);
+  return (row?.sheet as Character | undefined) ?? null;
+}
+
+/**
+ * Carrega as fichas usadas por uma operação em uma única consulta.
+ *
+ * A ordem do resultado do banco não é usada para resolver regras: os
+ * chamadores continuam percorrendo participantes/combatants na ordem já
+ * carregada. O Map apenas elimina o round trip por ficha e preserva `null`
+ * para uma ficha ausente, como `loadSheet` fazia.
+ */
+async function loadSheets(characterIds: string[]): Promise<Map<string, Character | null>> {
+  const ids = [...new Set(characterIds.filter((id) => id.length > 0))];
+  if (ids.length === 0) return new Map();
+  const sheets = new Map<string, Character | null>(ids.map((id) => [id, null]));
+  const repository = await mesaRepository();
+  const rows = await Promise.all(ids.map((id) => repository.findCharacterById(id)));
+  rows.forEach((row, index) => sheets.set(ids[index], (row?.sheet as Character | undefined) ?? null));
+  return sheets;
 }
 
 /**
@@ -2526,6 +3244,248 @@ function sanitizeEncounterRef(raw: unknown): { id: string; name: string } | null
 }
 
 /**
+ * Início/reinício completo no PostgreSQL local.
+ *
+ * O callback inteiro usa os adapters construídos sobre o mesmo PoolClient.
+ * Os SELECT ... FOR UPDATE somente serializam concorrentes da mesma sessão e
+ * do mesmo encontro; regras, projeções e payloads continuam no store.
+ */
+async function startCombatLocalTransactional(input: {
+  infrastructure: MesaHostingInfrastructure;
+  session: MesaSession;
+  encounter: { id: string; name: string } | null;
+  restart: boolean;
+  gmOnly: boolean;
+  enemies: EnemyInput[];
+}): Promise<void> {
+  const begin = input.infrastructure.beginLocalTransaction;
+  if (!begin) {
+    throw new MesaError("A transação local da Mesa não está disponível.", 503, "local_transaction_unavailable");
+  }
+
+  const context = await begin();
+  let operationFailed = false;
+  try {
+    const repository = context.repository;
+    const sessionId = input.session.id;
+
+    // A reserva do encontro e o combate vivo são serializados no mesmo
+    // contexto. O UNIQUE continua sendo a autoridade final contra corridas.
+    if (input.encounter) {
+      await context.query(
+        "select id from public.mesa_battles where encounter_id = $1 for update",
+        [input.encounter.id],
+      );
+    }
+    await context.query(
+      "select id from public.mesa_combats where session_id = $1 for update",
+      [sessionId],
+    );
+    await context.query(
+      "select id from public.mesa_participants where session_id = $1 order by created_at, id for update",
+      [sessionId],
+    );
+
+    const priorBattle = input.encounter
+      ? await repository.findBattleByEncounter(input.encounter.id)
+      : null;
+    let reuseBattleId: string | null = null;
+    if (priorBattle) {
+      if (priorBattle.status === "completed") {
+        throw new MesaError(
+          "Este encontro já foi concluído em uma partida e não pode ser iniciado de novo.",
+          409,
+          "encounter_used",
+        );
+      }
+      if (priorBattle.session_id !== sessionId) {
+        throw new MesaError(
+          `Este encontro já está em combate na Mesa ${priorBattle.join_code}.`,
+          409,
+          "encounter_in_use",
+        );
+      }
+      if (!input.restart) {
+        throw new MesaError(
+          "Este encontro já está em combate nesta mesa. Reinicie para recomeçar.",
+          409,
+          "encounter_restart",
+        );
+      }
+      reuseBattleId = priorBattle.id;
+    }
+
+    const existingCombat = await repository.findCombatBySession(sessionId) as unknown as CombatRow | null;
+    if (existingCombat?.status === "active" && !reuseBattleId) {
+      throw new MesaError("Já existe um combate ativo nesta mesa.", 409, "combat_already_active");
+    }
+
+    const participantsRow = await repository.listParticipantsBySession(sessionId) as ParticipantRow[];
+    const linked = participantsRow.filter((row) => row.character_id);
+    if (linked.length === 0 && input.enemies.length === 0) {
+      throw new MesaError("Vincule ao menos um personagem ou inimigo antes de iniciar o combate.", 400, "no_combatants");
+    }
+    const characterIds = [...new Set(linked.map((row) => row.character_id).filter((id): id is string => Boolean(id)))];
+    if (characterIds.length > 0) {
+      await context.query(
+        "select id from public.mesa_characters where id = any($1::text[]) for share",
+        [characterIds],
+      );
+    }
+
+    let battleId = reuseBattleId;
+    if (!battleId) {
+      try {
+        const battle = await repository.createBattle({
+          sessionId,
+          joinCode: input.session.joinCode,
+          encounterId: input.encounter?.id ?? null,
+          encounterName: input.encounter?.name ?? "Combate",
+        });
+        battleId = battle.id;
+      } catch (error) {
+        if (input.encounter && error instanceof Error && error.message.includes("duplicate key")) {
+          throw new MesaError(
+            "Este encontro já foi usado em uma partida e não pode ser iniciado de novo.",
+            409,
+            "encounter_used",
+          );
+        }
+        throw error;
+      }
+    }
+
+    let combatId: string;
+    const priorPositions = existingCombat
+      ? (await repository.listCombatantsByCombat(existingCombat.id, sessionId) as unknown as CombatantRow[])
+          .map((row) => ({ participant_id: row.participant_id, source_key: row.source_key, kind: row.kind, position: row.position }))
+      : [];
+
+    if (existingCombat) {
+      await repository.deleteCombatants({ combatId: existingCombat.id, sessionId }, "Falha ao limpar combatentes");
+      const resetRows = await repository.updateCombat(existingCombat.id, sessionId, {
+        status: "active",
+        round: 1,
+        active_combatant_id: null,
+        turn_started_at: null,
+        initiative_started: false,
+        event_log: [],
+        updated_at: new Date().toISOString(),
+      });
+      combatId = (resetRows[0] as unknown as CombatRow | undefined)?.id ?? existingCombat.id;
+    } else {
+      const created = await repository.createCombat({
+        sessionId,
+        status: "active",
+        round: 1,
+        initiativeStarted: false,
+        eventLog: [],
+      });
+      combatId = created.id;
+    }
+
+    const materializedParticipants = participantsRow.filter((row) =>
+      row.character_id && shouldMaterializeParticipantInCombat(row.role, row.character_id, input.gmOnly ? "gm_only" : "character"),
+    );
+    const sheets = new Map<string, Character | null>();
+    for (const row of materializedParticipants) {
+      const character = await repository.findCharacterById(row.character_id as string);
+      sheets.set(row.character_id as string, (character?.sheet ?? null) as Character | null);
+    }
+
+    const rows: Record<string, unknown>[] = [];
+    let sortOrder = 0;
+    for (const row of participantsRow) {
+      if (!row.character_id) continue;
+      if (!shouldMaterializeParticipantInCombat(row.role, row.character_id, input.gmOnly ? "gm_only" : "character")) continue;
+      const sheet = sheets.get(row.character_id) ?? null;
+      if (!sheet) continue;
+      const movement = movementBudgetFor(sheet);
+      const snapshot = toCombatParticipant(sheet);
+      rows.push({
+        combat_id: combatId,
+        session_id: sessionId,
+        kind: "character",
+        character_id: row.character_id,
+        participant_id: row.id,
+        name: (sheet.identity?.name || row.display_name).slice(0, 60),
+        actions_max: ACTIONS_PER_TURN,
+        actions_remaining: ACTIONS_PER_TURN,
+        movement_max: movement,
+        movement_remaining: movement,
+        hp_current: sheet.combat.hp.current,
+        hp_max: sheet.combat.hp.max,
+        is_dead: Boolean(sheet.combat.isDead),
+        death_save_dc: Math.max(0, Math.floor(sheet.combat.deathSaveDC)),
+        death_save_failures: Math.max(0, Math.floor(sheet.combat.deathSaveFailures)),
+        combat_snapshot: snapshot,
+        combat_ammo: ammoStateForParticipant(snapshot),
+        supplies: suppliesForCharacter(sheet, snapshot),
+        combat_armor: { ...snapshot.combat.armor },
+        critical_injuries: [...snapshot.combat.criticalInjuries],
+        sort_order: sortOrder++,
+        position: priorPositions.find((old) => old.participant_id === row.id)?.position ?? { x: 0.22, y: 0.2 + (sortOrder % 5) * 0.14 },
+        avatar_url: typeof sheet.identity?.photoUrl === "string" ? sheet.identity.photoUrl.slice(0, 2_000_000) : null,
+      });
+    }
+
+    for (const enemy of input.enemies) {
+      const movement = enemyMovementBudget(enemy.move, enemy.snapshot);
+      rows.push({
+        combat_id: combatId,
+        session_id: sessionId,
+        kind: "enemy",
+        name: enemy.name,
+        source_key: enemy.key,
+        initiative_detail: enemyInitiativeDetail(enemy),
+        supplies: enemy.supplies ?? null,
+        combat_snapshot: enemy.snapshot,
+        combat_ammo: ammoStateForParticipant(enemy.snapshot),
+        ...(enemy.snapshot ? {
+          combat_armor: { ...enemy.snapshot.combat.armor },
+          critical_injuries: [...enemy.snapshot.combat.criticalInjuries],
+        } : {}),
+        actions_max: ACTIONS_PER_TURN,
+        actions_remaining: ACTIONS_PER_TURN,
+        movement_max: movement,
+        movement_remaining: movement,
+        hp_current: enemy.hp,
+        hp_max: enemy.hpMax,
+        is_dead: false,
+        death_save_dc: 0,
+        death_save_failures: 0,
+        sort_order: sortOrder++,
+        position: priorPositions.find((old) => old.kind === "enemy" && old.source_key === enemy.key)?.position ?? { x: 0.78, y: 0.2 + (sortOrder % 5) * 0.14 },
+      });
+    }
+
+    if (rows.length === 0) throw new MesaError("Nenhum combatente pôde ser criado.", 400, "no_combatants");
+    await repository.insertCombatants(rows, "Falha ao criar os combatentes");
+    const updatedSession = await repository.updateSession(sessionId, { status: "active", updated_at: new Date().toISOString() });
+    if (updatedSession.length === 0) throw new MesaError("Mesa não encontrada.", 404, "session_not_found");
+
+    const event: MesaEvent = { at: new Date().toISOString(), kind: "combat_started", text: "Combate iniciado" };
+    const updatedCombat = await repository.replaceCombatEventLog(combatId, sessionId, [event]);
+    if (updatedCombat.length === 0) throw new MesaError("Combate não encontrado.", 404, "combat_not_found");
+
+     const battleCombatants = await repository.listCombatantsByCombat(combatId, sessionId) as unknown as CombatantRow[];
+     if (!battleId) throw new MesaError("Partida não encontrada.", 500, "battle_not_found");
+     const updatedBattle = await repository.updateBattle(battleId, sessionId, {
+      combatants: startBattleSnapshot(battleCombatants.map((row) => toCombatant(row))),
+    });
+    if (updatedBattle.length === 0) throw new MesaError("Partida não encontrada.", 404, "battle_not_found");
+
+    await context.commit();
+  } catch (error) {
+    operationFailed = true;
+    try { await context.rollback(); } catch { /* preserva o erro original */ }
+    throw error;
+  } finally {
+    try { await context.release(); } catch { if (!operationFailed) throw new MesaError("Falha ao liberar a transação local.", 503, "local_transaction_release_failed"); }
+  }
+}
+
+/**
  * Reinicia (ou cria) o combate da mesa e monta os combatentes vinculados.
  *
  * Quando o pedido vem de um encontro, nasce junto a **partida** dele em
@@ -2552,6 +3512,21 @@ export async function startCombat(input: {
   const encounter = sanitizeEncounterRef(input.encounter);
   const restart = input.restart === true;
   const gmOnly = input.gmParticipation === "gm_only";
+
+  // O modo local precisa decidir a infraestrutura antes de qualquer leitura
+  // de encontro/combate. Todo o restante do fluxo é executado pelo contexto
+  // transacional compartilhado; o caminho Supabase abaixo permanece intacto.
+  const infrastructure = await createMesaHostingInfrastructure();
+  if (infrastructure.mode === "local") {
+    return startCombatLocalTransactional({
+      infrastructure,
+      session,
+      encounter,
+      restart,
+      gmOnly,
+      enemies: sanitizeEnemies(input.enemies),
+    });
+  }
 
   // 1. Encontro checado ANTES de qualquer escrita: falhou aqui e nada mudou.
   let reuseBattleId: string | null = null;
@@ -2588,18 +3563,13 @@ export async function startCombat(input: {
     }
   }
 
-  const existingCombat = (await query(
-    db().from("mesa_combats").select("*").eq("session_id", session.id).maybeSingle(),
-    "Falha ao consultar o combate",
-  )) as CombatRow | null;
+  const repository = await mesaRepository();
+  const existingCombat = await repository.findCombatBySession(session.id) as unknown as CombatRow | null;
   if (existingCombat && existingCombat.status === "active" && !reuseBattleId) {
     throw new MesaError("Já existe um combate ativo nesta mesa.", 409, "combat_already_active");
   }
 
-  const participantsRow = (await query(
-    db().from("mesa_participants").select("*").eq("session_id", session.id),
-    "Falha ao consultar participantes",
-  )) as ParticipantRow[];
+  const participantsRow = await repository.listParticipantsBySession(session.id) as unknown as ParticipantRow[];
 
   const linked = participantsRow.filter((row) => row.character_id);
   const enemies = sanitizeEnemies(input.enemies);
@@ -2624,14 +3594,14 @@ export async function startCombat(input: {
     // combate depois de um anterior encerrado.
     let combatId: string;
     const priorPositions = existingCombat
-      ? ((await query(db().from("mesa_combatants").select("participant_id,source_key,kind,position").eq("combat_id", existingCombat.id), "Falha ao consultar posições anteriores")) as Array<Pick<CombatantRow, "participant_id" | "source_key" | "kind" | "position">> | null) ?? []
+      ? (await repository.listCombatantsByCombat(existingCombat.id, session.id) as unknown as Array<Pick<CombatantRow, "participant_id" | "source_key" | "kind" | "position">>)
       : [];
     if (existingCombat) {
-      await query(db().from("mesa_combatants").delete().eq("combat_id", existingCombat.id), "Falha ao limpar combatentes");
-      const reset = (await query(
-        db()
-          .from("mesa_combats")
-          .update({
+      await measureMesaDb(
+        (await mesaRepository()).deleteCombatants({ combatId: existingCombat.id }, "Falha ao limpar combatentes"),
+        "limpar combatentes",
+      );
+      const resetRows = await repository.updateCombat(existingCombat.id, session.id, {
             status: "active",
             round: 1,
             active_combatant_id: null,
@@ -2639,33 +3609,26 @@ export async function startCombat(input: {
             initiative_started: false,
             event_log: [],
             updated_at: new Date().toISOString(),
-          })
-          .eq("id", existingCombat.id)
-          .select("*")
-          .single(),
-        "Falha ao reiniciar o combate",
-      )) as CombatRow | null;
+          });
+      const reset = (resetRows[0] ?? null) as unknown as CombatRow | null;
       combatId = (reset ?? existingCombat).id;
     } else {
-      const created = (await query(
-        db()
-          .from("mesa_combats")
-          .insert({ session_id: session.id, status: "active", round: 1, initiative_started: false, event_log: [] })
-          .select("*")
-          .single(),
-        "Falha ao criar o combate",
-      )) as CombatRow | null;
+      const created = await repository.createCombat({ sessionId: session.id, status: "active", round: 1, initiativeStarted: false, eventLog: [] }) as unknown as CombatRow;
       if (!created) throw new MesaError("Não foi possível iniciar o combate.", 500, "combat_failed");
       combatId = created.id;
     }
 
     const rows: Record<string, unknown>[] = [];
+    const materializedParticipants = participantsRow.filter((row) =>
+      row.character_id && shouldMaterializeParticipantInCombat(row.role, row.character_id, gmOnly ? "gm_only" : "character"),
+    );
+    const sheets = await loadSheets(materializedParticipants.map((row) => row.character_id as string));
     let sortOrder = 0;
 
     for (const row of participantsRow) {
       if (!row.character_id) continue;
       if (!shouldMaterializeParticipantInCombat(row.role, row.character_id, gmOnly ? "gm_only" : "character")) continue;
-      const sheet = await loadSheet(row.character_id);
+      const sheet = sheets.get(row.character_id) ?? null;
       if (!sheet) continue;
       // MOVE × 2 metros por turno — mesma regra do modo local, calculada aqui.
       const movement = movementBudgetFor(sheet);
@@ -2734,16 +3697,17 @@ export async function startCombat(input: {
     if (rows.length === 0) throw new MesaError("Nenhum combatente pôde ser criado.", 400, "no_combatants");
 
     await insertCombatantRows(rows, "Falha ao criar os combatentes");
-    await query(db().from("mesa_sessions").update({ status: "active", updated_at: new Date().toISOString() }).eq("id", session.id), "Falha ao atualizar a mesa");
+    const sessionWritten = await repository.updateSession(session.id, { status: "active", updated_at: new Date().toISOString() });
+    if (sessionWritten.length !== 1) throw new MesaError("Falha ao atualizar a mesa.", 409, "session_conflict");
     await appendEvent(combatId, { kind: "combat_started", text: "Combate iniciado" });
 
     // 3. Snapshot de ENTRADA da partida: com que vida cada linha começou.
     if (battleId) {
       const combatants = await listCombatants(session.id);
-      await updateBattleRoster(battleId, startBattleSnapshot(combatants.map((row) => toCombatant(row))));
+      await updateBattleRoster(battleId, session.id, startBattleSnapshot(combatants.map((row) => toCombatant(row))));
     }
   } catch (error) {
-    if (battleId && !reuseBattleId) await discardBattle(battleId);
+    if (battleId && !reuseBattleId) await discardBattle(battleId, session.id);
     throw error;
   }
 }
@@ -2801,11 +3765,12 @@ function sanitizeSupplies(raw: unknown): MesaSupplies | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const input = raw as Record<string, unknown>;
 
-  const entries: Array<{ item: string; quantity: number }> = [];
+  const entries: Array<{ item: string; quantity: number; category?: "chipware" }> = [];
   if (Array.isArray(input.inventory)) {
     for (const entry of input.inventory) {
       if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
       const item = (entry as Record<string, unknown>).item;
+      const category = (entry as Record<string, unknown>).category === "chipware" ? "chipware" as const : undefined;
       const quantity = Number((entry as Record<string, unknown>).quantity);
       if (typeof item !== "string") continue;
       const name = item.trim().slice(0, 60);
@@ -2817,7 +3782,7 @@ function sanitizeSupplies(raw: unknown): MesaSupplies | null {
       const itemId = stableItemId(name);
       if (itemId.length === 0) continue;
       if (entries.some((existing) => stableItemId(existing.item) === itemId)) continue;
-      entries.push({ item: name, quantity: qty });
+       entries.push({ item: name, quantity: qty, ...(category ? { category } : {}) });
     }
   }
   // F1.13.2 — o `itemId` é SEMPRE derivado no servidor (nunca aceito do
@@ -2912,6 +3877,203 @@ function sanitizeEnemies(raw: unknown): EnemyInput[] {
   });
 }
 
+async function updateCombatantLocalTransactional(
+  session: MesaSession,
+  combatantId: string,
+  rawPatch: unknown,
+): Promise<void> {
+  await withLocalPostgresTransaction(async (context) => {
+    const repository = context.repository;
+    await context.query(
+      "select id from public.mesa_combatants where id = $1 and session_id = $2 for update",
+      [combatantId, session.id],
+    );
+    const row = await repository.findCombatantById(combatantId, { sessionId: session.id }) as CombatantRow | null;
+    if (!row) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+
+    await context.query(
+      "select id from public.mesa_combats where id = $1 and session_id = $2 for update",
+      [row.combat_id, session.id],
+    );
+  const combat = await repository.findCombatById(row.combat_id, session.id) as unknown as CombatRow | null;
+    const activeCombat = combat?.status === "active" ? combat : null;
+    const patch = (typeof rawPatch === "object" && rawPatch !== null ? rawPatch : {}) as Record<string, unknown>;
+    const update: Record<string, unknown> = {};
+
+    if (patch.position !== undefined) {
+      if (activeCombat) throw new MesaError("Durante o combate, arraste pelo Movement Gateway.", 409, "combat_active");
+      const position = normalizeTacticalPosition(patch.position);
+      if (combat) {
+        await context.query(
+          "select id from public.mesa_combatants where combat_id = $1 and session_id = $2 for update",
+          [combat.id, session.id],
+        );
+        const map = session.tacticalMap ?? DEFAULT_TACTICAL_MAP;
+        const rows = await repository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
+        const occupied = rows.some((candidate) => candidate.id !== row.id && tacticalPositionsOverlap(
+          normalizeTacticalPosition(candidate.position),
+          position,
+          map,
+        ));
+        if (occupied) throw new MesaError("Esse espaço já está ocupado.", 409, "position_occupied");
+      }
+      update.position = position;
+    }
+
+    const touchesVitalState = "hpCurrent" in patch || "isDead" in patch;
+    if (touchesVitalState && row.kind === "character" && activeCombat) {
+      throw new MesaError(
+        "Durante o combate, o HP de um Personagem é autoritativo na Mesa: aplique dano pelo gateway de dano externo.",
+        409,
+        "mesa_authoritative",
+      );
+    }
+
+    if (typeof patch.hpCurrent === "number" && Number.isFinite(patch.hpCurrent)) {
+      const hp = Math.max(-999, Math.min(row.hp_max, Math.floor(patch.hpCurrent)));
+      update.hp_current = hp;
+      update.is_dead = hp <= 0 ? Boolean(patch.isDead ?? row.is_dead) : false;
+    }
+    if (typeof patch.isDead === "boolean") update.is_dead = patch.isDead;
+    if (Array.isArray(patch.conditions)) {
+      update.conditions = patch.conditions
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.slice(0, 40))
+        .slice(0, 12);
+    }
+    if (typeof patch.initiative === "number" && Number.isFinite(patch.initiative)) {
+      update.initiative = Math.floor(patch.initiative);
+    }
+    if (Object.keys(update).length === 0) throw new MesaError("Nada para atualizar.", 400, "empty_patch");
+
+    const written = await repository.updateCombatant({
+      id: row.id,
+      sessionId: session.id,
+      combatId: row.combat_id,
+      patch: update,
+    });
+    if (written.length === 0) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  });
+}
+
+async function removeCombatantLocalTransactional(
+  session: MesaSession,
+  combatantId: string,
+): Promise<void> {
+  await withLocalPostgresTransaction(async (context) => {
+    const repository = context.repository;
+    await context.query(
+      "select id from public.mesa_combatants where id = $1 and session_id = $2 for update",
+      [combatantId, session.id],
+    );
+    const row = await repository.findCombatantById(combatantId, { sessionId: session.id }) as CombatantRow | null;
+    if (!row || row.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+    if (row.kind !== "enemy") {
+      throw new MesaError("Só é possível remover inimigos. Personagens saem desvinculando a ficha.", 400, "not_enemy");
+    }
+
+    await context.query(
+      "select id from public.mesa_combats where session_id = $1 for update",
+      [session.id],
+    );
+    await context.query(
+      "select id from public.mesa_battles where session_id = $1 and status = 'active' for update",
+      [session.id],
+    );
+    const combat = await repository.findCombatBySession(session.id) as unknown as CombatRow | null;
+    if (combat?.status === "active" && combat.active_combatant_id === row.id) {
+      // A passagem de turno continua sendo a única autoridade para efeitos,
+      // NET/ICE, Quickhack, economia e encerramento. A opção de remoção faz a
+      // exclusão dentro desse mesmo contexto, antes do snapshot histórico.
+      await advanceActiveTurnLocal(context, session.id, combat, { removeActiveCombatantId: row.id });
+      return;
+    }
+
+    await repository.deleteCombatants(
+      { id: row.id, combatId: row.combat_id, sessionId: session.id },
+      "Falha ao remover o combatente",
+    );
+  });
+}
+
+/** Adiciona inimigos no modo local dentro de uma única transação. */
+async function addEnemiesLocalTransactional(
+  session: MesaSession,
+  enemies: EnemyInput[],
+): Promise<void> {
+  await withLocalPostgresTransaction(async (context) => {
+    const repository = context.repository;
+
+    // O combate e suas linhas são serializados antes de calcular o próximo
+    // sort_order. Sem o lock, duas inclusões concorrentes poderiam reutilizar
+    // a mesma posição de iniciativa.
+    await context.query(
+      "select id from public.mesa_combats where session_id = $1 for update",
+      [session.id],
+    );
+    const combat = await repository.findCombatBySession(session.id) as unknown as CombatRow | null;
+    if (!combat || combat.status !== "active") {
+      throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+    }
+    await context.query(
+      "select id from public.mesa_combatants where combat_id = $1 and session_id = $2 order by sort_order desc nulls last, id desc for update",
+      [combat.id, session.id],
+    );
+
+    const current = await repository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
+    let sortOrder = (current[current.length - 1]?.sort_order ?? -1) + 1;
+    const rows = enemies.map((enemy) => {
+      const movement = enemyMovementBudget(enemy.move, enemy.snapshot);
+      return {
+        combat_id: combat.id,
+        session_id: session.id,
+        kind: "enemy" as const,
+        name: enemy.name,
+        source_key: enemy.key,
+        // Já em combate: entra no fim da ordem com iniciativa 0.
+        initiative: combat.initiative_started ? 0 : null,
+        initiative_detail: enemyInitiativeDetail(enemy),
+        supplies: enemy.supplies,
+        combat_snapshot: enemy.snapshot,
+        combat_ammo: ammoStateForParticipant(enemy.snapshot),
+        ...(enemy.snapshot
+          ? {
+              combat_armor: { ...enemy.snapshot.combat.armor },
+              critical_injuries: [...enemy.snapshot.combat.criticalInjuries],
+            }
+          : {}),
+        actions_max: ACTIONS_PER_TURN,
+        actions_remaining: ACTIONS_PER_TURN,
+        movement_max: movement,
+        movement_remaining: movement,
+        hp_current: enemy.hp,
+        hp_max: enemy.hpMax,
+        is_dead: false,
+        death_save_dc: 0,
+        death_save_failures: 0,
+        sort_order: sortOrder++,
+        position: { x: 0.78, y: 0.2 + (sortOrder % 5) * 0.14 },
+      };
+    });
+
+    await repository.insertCombatants(rows, "Falha ao adicionar inimigos");
+    const currentLog = await repository.findCombatEventLog(combat.id, session.id);
+    const event: MesaEvent = {
+      at: new Date().toISOString(),
+      kind: "enemy",
+      text: `${rows.length} inimigo(s) adicionado(s)`,
+    };
+    const updated = await repository.replaceCombatEventLog(
+      combat.id,
+      session.id,
+      [...currentLog, event].slice(-MAX_EVENT_LOG),
+    );
+    if (updated.length === 0) {
+      throw new MesaError("Combate não encontrado.", 404, "combat_not_found");
+    }
+  });
+}
+
 /** Adiciona inimigos a um combate já em andamento (somente GM). */
 export async function addEnemies(input: {
   sessionId: unknown;
@@ -2921,11 +4083,16 @@ export async function addEnemies(input: {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireGM({ session, participant });
 
-  const combat = await getActiveCombat(session.id);
-  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
-
   const enemies = sanitizeEnemies(input.enemies);
   if (enemies.length === 0) throw new MesaError("Informe ao menos um inimigo.", 400, "invalid_enemies");
+
+  const infrastructure = await createMesaHostingInfrastructure();
+  if (infrastructure.mode === "local") {
+    return addEnemiesLocalTransactional(session, enemies);
+  }
+
+  const combat = await getActiveCombat(session.id);
+  if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
 
   const current = (await query(
     db().from("mesa_combatants").select("sort_order").eq("combat_id", combat.id).order("sort_order", { ascending: false }).limit(1),
@@ -2979,9 +4146,14 @@ export async function removeCombatant(input: {
 }): Promise<void> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireGM({ session, participant });
+  const combatantId = String(input.combatantId ?? "");
+  const infrastructure = await createMesaHostingInfrastructure();
+  if (infrastructure.mode === "local") {
+    return removeCombatantLocalTransactional(session, combatantId);
+  }
 
   const row = (await query(
-    db().from("mesa_combatants").select("*").eq("id", String(input.combatantId ?? "")).maybeSingle(),
+    db().from("mesa_combatants").select("*").eq("id", combatantId).maybeSingle(),
     "Falha ao consultar o combatente",
   )) as CombatantRow | null;
   if (!row || row.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
@@ -2990,7 +4162,10 @@ export async function removeCombatant(input: {
   }
 
   const combat = await getActiveCombat(session.id);
-  await query(db().from("mesa_combatants").delete().eq("id", row.id), "Falha ao remover o combatente");
+  await measureMesaDb(
+    (await mesaRepository()).deleteCombatants({ id: row.id }, "Falha ao remover o combatente"),
+    "remover o combatente",
+  );
 
   if (combat && combat.active_combatant_id === row.id) {
     await advanceActiveTurn(session.id, combat);
@@ -3013,9 +4188,14 @@ export async function updateCombatant(input: {
 }): Promise<void> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireGM({ session, participant });
+  const combatantId = String(input.combatantId ?? "");
+  const infrastructure = await createMesaHostingInfrastructure();
+  if (infrastructure.mode === "local") {
+    return updateCombatantLocalTransactional(session, combatantId, input.patch);
+  }
 
   const row = (await query(
-    db().from("mesa_combatants").select("*").eq("id", String(input.combatantId ?? "")).maybeSingle(),
+    db().from("mesa_combatants").select("*").eq("id", combatantId).maybeSingle(),
     "Falha ao consultar o combatente",
   )) as CombatantRow | null;
   if (!row || row.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
@@ -3095,18 +4275,8 @@ function sanitizeHp(raw: unknown): number {
 async function findEnemyBySourceKey(combatId: string, key: string): Promise<CombatantRow | null> {
   if (sourceKeySupport === "no") throw new MesaError(SOURCE_KEY_MIGRATION, 503, "migration_pending");
   try {
-    const rows = (await query(
-      db()
-        .from("mesa_combatants")
-        .select("*")
-        .eq("combat_id", combatId)
-        .eq("kind", "enemy")
-        .eq("source_key", key)
-        .order("sort_order")
-        .limit(1),
-      "Falha ao consultar o inimigo",
-    )) as CombatantRow[] | null;
-    return rows?.[0] ?? null;
+    const rows = await (await mesaRepository()).listCombatantsByCombat(combatId) as unknown as CombatantRow[];
+    return rows.find((row) => row.kind === "enemy" && row.source_key === key) ?? null;
   } catch (error) {
     if (mentionsSourceKey(error)) {
       sourceKeySupport = "no";
@@ -3133,17 +4303,8 @@ async function findEnemyForRoll(combatId: string, key: string): Promise<Combatan
 
 /** Combatente do próprio participante (ficha dele é quem manda no HP). */
 async function findOwnCombatant(combatId: string, participantId: string): Promise<CombatantRow | null> {
-  const rows = (await query(
-    db()
-      .from("mesa_combatants")
-      .select("*")
-      .eq("combat_id", combatId)
-      .eq("participant_id", participantId)
-      .order("sort_order")
-      .limit(1),
-    "Falha ao consultar o combatente",
-  )) as CombatantRow[] | null;
-  return rows?.[0] ?? null;
+  const rows = await (await mesaRepository()).listCombatantsByCombat(combatId) as unknown as CombatantRow[];
+  return rows.find((row) => row.participant_id === participantId) ?? null;
 }
 
 /**
@@ -3259,23 +4420,19 @@ export async function syncCombatHp(input: {
   if (Object.keys(update).length === 0) return { updated: false };
 
   try {
-    if (hpBefore !== null) {
-      // Não basta o read acima: o Engine pode vencer ENTRE a leitura e o
-      // update. O mesmo valor esperado também precisa estar no WHERE desta
-      // instrução atômica; `select` torna a perda do CAS observável.
-      const written = (await query(
-        db()
-          .from("mesa_combatants")
-          .update(update)
-          .eq("id", row.id)
-          .eq("hp_current", hpBefore)
-          .select("id"),
-        "Falha ao atualizar o HP",
-      )) as Array<{ id: string }> | null;
-      if (!written || written.length === 0) return { updated: false };
-    } else {
-      await query(db().from("mesa_combatants").update(update).eq("id", row.id), "Falha ao atualizar o HP");
-    }
+    // O adapter executa uma única instrução condicional. O domínio continua
+    // responsável por clamping, morte, supplies e pela decisão de no-op.
+    const written = await measureMesaDb(
+      (await mesaRepository()).updateCombatantHp({
+        id: row.id,
+        sessionId: session.id,
+        combatId: combat.id,
+        patch: update,
+        ...(hpBefore === null ? {} : { expected: { hp_current: hpBefore } }),
+      }),
+      "atualizar o HP",
+    );
+    if (hpBefore !== null && written.length === 0) return { updated: false };
   } catch (error) {
     if (suppliesSupport !== "no" && mentionsSupplies(error)) {
       // Migração da mochila pendente: a vida é o que importa, então refaz o
@@ -3283,20 +4440,17 @@ export async function syncCombatHp(input: {
       suppliesSupport = "no";
       const retry = { ...update };
       delete retry.supplies;
-      if (hpBefore !== null) {
-        const written = (await query(
-          db()
-            .from("mesa_combatants")
-            .update(retry)
-            .eq("id", row.id)
-            .eq("hp_current", hpBefore)
-            .select("id"),
-          "Falha ao atualizar o HP",
-        )) as Array<{ id: string }> | null;
-        if (!written || written.length === 0) return { updated: false };
-      } else {
-        await query(db().from("mesa_combatants").update(retry).eq("id", row.id), "Falha ao atualizar o HP");
-      }
+      const written = await measureMesaDb(
+        (await mesaRepository()).updateCombatantHp({
+          id: row.id,
+          sessionId: session.id,
+          combatId: combat.id,
+          patch: retry,
+          ...(hpBefore === null ? {} : { expected: { hp_current: hpBefore } }),
+        }),
+        "atualizar o HP",
+      );
+      if (hpBefore !== null && written.length === 0) return { updated: false };
       return { updated: true };
     }
     if (mentionsSourceKey(error)) {
@@ -3485,7 +4639,9 @@ export async function resolveEnemyDamage(input: {
     ...(input.ignoreArmor === true ? { ignoreArmor: true } : {}),
   };
 
-  const result = execute(state, action, serverRandom);
+   const engineStartedAt = performance.now();
+   const result = execute(state, action, serverRandom);
+   markMesaLocalStage("LOCAL.damage.engine", performance.now() - engineStartedAt, result.ok);
   if (!result.ok) {
     // Recusa do motor → NENHUMA persistência (o patch nem é calculado).
     const engineError = result.errors?.[0];
@@ -3503,17 +4659,14 @@ export async function resolveEnemyDamage(input: {
     // Uma única instrução condicional (Decisão 3): atômica no Postgres, protege
     // a janela leitura→escrita sem lock. Verbas atômicas: só `hp_current` e
     // `is_dead` (as colunas deste palco) — `armor_changed`/lesão não têm coluna.
-    const written = (await query(
-      db()
-        .from("mesa_combatants")
-        .update(patch)
-        .eq("id", row.id)
-        .eq("hp_current", hpBefore)
-        .eq("is_dead", row.is_dead)
-        .select("id"),
-      "Falha ao persistir o dano",
-    )) as Array<{ id: string }> | null;
-    if (!written || written.length === 0) {
+    const written = await (await mesaRepository()).updateCombatantHp({
+      id: row.id,
+      sessionId: session.id,
+      combatId: combat.id,
+      patch: patch as Record<string, unknown>,
+      expected: { hp_current: hpBefore, is_dead: row.is_dead },
+    });
+    if (written.length === 0) {
       // Perdedora da corrida: erro ALTO, nunca escrita silenciosa.
       throw new MesaError(
         "A linha da mesa mudou entre a leitura e a escrita; nada foi aplicado.",
@@ -3712,6 +4865,8 @@ export async function applyPlayerDamage(input: {
 
   const combat = await getActiveCombat(session.id);
   if (!combat) return { ...NO_PLAYER_DAMAGE };
+  const damageInfrastructure = await createMesaHostingInfrastructure();
+  const damageRepository = damageInfrastructure.repository;
 
   /* ------------------------- idempotência durável ------------------------ */
 
@@ -3724,15 +4879,7 @@ export async function applyPlayerDamage(input: {
     return waitForAttackResolution<PlayerDamageOutcome>(session.id, resolutionId, combat.id);
   }
 
-  const claimRows = (await query(
-    db().rpc("claim_mesa_attack_resolution", {
-      p_session_id: session.id,
-      p_combat_id: combat.id,
-      p_resolution_id: resolutionId,
-    }),
-    "Falha ao reservar a resolução do dano",
-  )) as AttackResolutionClaim<PlayerDamageOutcome>[] | null;
-  const claim = claimRows?.[0];
+  const claim = await damageInfrastructure.resolutionStore.claimAttack<PlayerDamageOutcome>({ sessionId: session.id, combatId: combat.id, resolutionId });
   if (!claim) throw new MesaError("Não foi possível reservar a resolução do dano.", 500, "transaction_failed");
   if (!claim.claimed) {
     if (claim.status === "committed" && claim.result) return claim.result;
@@ -3750,10 +4897,7 @@ export async function applyPlayerDamage(input: {
     const targetRowId = typeof body.targetCombatantId === "string" ? body.targetCombatantId.trim() : "";
     if (!targetRowId) throw new MesaError("Alvo do dano ausente (targetCombatantId).", 400, "target_not_found");
 
-    const rows = (await query(
-      db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
-      "Falha ao consultar os combatentes",
-    )) as CombatantRow[] | null;
+    const rows = await damageRepository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
     const targetRow = rows?.find((row) => row.id === targetRowId);
     if (!targetRow || targetRow.session_id !== session.id) {
       throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
@@ -3819,7 +4963,7 @@ export async function applyPlayerDamage(input: {
       ...(damageRolls !== undefined ? { damageRolls } : {}),
     };
 
-    const result = execute(state, action, serverRandom);
+   const result = measureMesaLocal("LOCAL.attack.engine", () => execute(state, action, serverRandom));
     if (!result.ok) {
       const engineError = result.errors?.[0];
       throw new MesaError(
@@ -3850,8 +4994,12 @@ export async function applyPlayerDamage(input: {
     // UMA transação cobre patch (HP/Armor/CI/is_dead), evento e status da
     // resolução. Se qualquer passo falhar, o Postgres desfaz TUDO: HP não
     // muda, Armor não muda, lesão não muda e o evento não é publicado.
-    const committedResult = (await query(
-        db().rpc("commit_mesa_attack_resolution", {
+    const committedResult = await damageInfrastructure.resolutionStore.commitAttack<PlayerDamageOutcome>({
+      sessionId: session.id,
+      combatId: combat.id,
+      resolutionId,
+      claimToken,
+      rpcArgs: {
         p_session_id: session.id,
         p_combat_id: combat.id,
         p_resolution_id: resolutionId,
@@ -3869,24 +5017,15 @@ export async function applyPlayerDamage(input: {
           p_target_patch: patch,
         p_result: outcome,
         p_event_text: eventText,
-      }),
-      "Falha ao confirmar o dano externo",
-    )) as PlayerDamageOutcome | null;
+      },
+    });
     if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
     committed = true;
     return committedResult;
   } catch (error) {
     if (!committed) {
       try {
-        await query(
-          db().rpc("release_mesa_attack_resolution", {
-            p_session_id: session.id,
-            p_combat_id: combat.id,
-            p_resolution_id: resolutionId,
-            p_claim_token: claimToken,
-          }),
-          "Falha ao liberar a resolução do dano",
-        );
+        await damageInfrastructure.resolutionStore.releaseAttack({ sessionId: session.id, combatId: combat.id, resolutionId, claimToken });
       } catch {
         // O erro original é mais útil; resolução sem commit não aplicou efeitos.
       }
@@ -3960,11 +5099,10 @@ export async function registerPlayerDeathSave(input: {
   if (!actorCombatantId) throw new MesaError("Combatente ausente.", 400, "combatant_not_found");
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const deathSaveInfrastructure = await createMesaHostingInfrastructure();
+  const deathSaveRepository = deathSaveInfrastructure.repository;
 
-  const row = (await query(
-    db().from("mesa_combatants").select("*").eq("id", actorCombatantId).eq("combat_id", combat.id).maybeSingle(),
-    "Falha ao consultar combatente",
-  )) as CombatantRow | null;
+  const row = await deathSaveRepository.findCombatantById(actorCombatantId, { combatId: combat.id, sessionId: session.id }) as unknown as CombatantRow | null;
   if (!row || row.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
   if (row.participant_id !== participant.id) throw new MesaError("Você não controla este combatente.", 403, "combatant_not_owned");
   if (row.kind !== "character") throw new MesaError("Death Save exige um personagem.", 400, "not_a_player");
@@ -3981,10 +5119,7 @@ export async function registerPlayerDeathSave(input: {
   if (row.is_dead) throw new MesaError("O personagem já está morto.", 409, "death_save_ineligible");
   if (row.hp_current >= 1) throw new MesaError("Death Save só pode ser rolado com HP menor que 1.", 409, "death_save_ineligible");
 
-  const claimRows = (await query(db().rpc("claim_mesa_attack_resolution", {
-    p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
-  }), "Falha ao reservar a Death Save")) as AttackResolutionClaim<PlayerDeathSaveOutcome>[] | null;
-  const claim = claimRows?.[0];
+  const claim = await deathSaveInfrastructure.resolutionStore.claimAttack<PlayerDeathSaveOutcome>({ sessionId: session.id, combatId: combat.id, resolutionId });
   if (!claim) throw new MesaError("Não foi possível reservar a Death Save.", 500, "transaction_failed");
   if (!claim.claimed) {
     if (claim.status === "committed" && claim.result) return replay(claim.result);
@@ -4018,7 +5153,9 @@ export async function registerPlayerDeathSave(input: {
       deathSaveDC: resolved.state.dc,
       committed: true,
     };
-    const committedResult = (await query(db().rpc("commit_mesa_death_save_resolution", {
+    const committedResult = await deathSaveInfrastructure.resolutionStore.commitDeathSave<PlayerDeathSaveOutcome>({
+      sessionId: session.id, combatId: combat.id, resolutionId, claimToken: claim.claim_token,
+      rpcArgs: {
       p_session_id: session.id,
       p_combat_id: combat.id,
       p_resolution_id: resolutionId,
@@ -4032,15 +5169,14 @@ export async function registerPlayerDeathSave(input: {
       p_dead_after: resolved.characterDied,
       p_result: outcome,
       p_event_text: `${row.name}: Death Save ${resolved.success ? "sucesso" : "falha"}`,
-    }), "Falha ao confirmar a Death Save")) as PlayerDeathSaveOutcome | null;
+      },
+    });
     if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
     committed = true;
     return { result: committedResult, committed: true };
   } catch (error) {
     if (!committed) {
-      try { await query(db().rpc("release_mesa_attack_resolution", {
-        p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claim.claim_token,
-      }), "Falha ao liberar Death Save"); } catch { /* preserva o erro original */ }
+      try { await deathSaveInfrastructure.resolutionStore.releaseAttack({ sessionId: session.id, combatId: combat.id, resolutionId, claimToken: claim.claim_token }); } catch { /* preserva o erro original */ }
     }
     throw databaseResolutionError(error) ?? error;
   }
@@ -4134,6 +5270,8 @@ export async function applyPlayerHealing(input: {
 
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const healingInfrastructure = await createMesaHostingInfrastructure();
+  const healingRepository = healingInfrastructure.repository;
 
   /* --------------------------- intenção limpa ---------------------------- */
 
@@ -4154,15 +5292,7 @@ export async function applyPlayerHealing(input: {
     return waitForAttackResolution<PlayerHealingOutcome>(session.id, resolutionId, combat.id);
   }
 
-  const claimRows = (await query(
-    db().rpc("claim_mesa_attack_resolution", {
-      p_session_id: session.id,
-      p_combat_id: combat.id,
-      p_resolution_id: resolutionId,
-    }),
-    "Falha ao reservar a resolução da cura",
-  )) as AttackResolutionClaim<PlayerHealingOutcome>[] | null;
-  const claim = claimRows?.[0];
+  const claim = await healingInfrastructure.resolutionStore.claimAttack<PlayerHealingOutcome>({ sessionId: session.id, combatId: combat.id, resolutionId });
   if (!claim) throw new MesaError("Não foi possível reservar a resolução da cura.", 500, "transaction_failed");
   if (!claim.claimed) {
     if (claim.status === "committed" && claim.result) return claim.result;
@@ -4177,10 +5307,7 @@ export async function applyPlayerHealing(input: {
   try {
     /* --------------------------- alvo da Mesa ---------------------------- */
 
-    const rows = (await query(
-      db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
-      "Falha ao consultar os combatentes",
-    )) as CombatantRow[] | null;
+    const rows = await healingRepository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
     const targetRow = rows?.find((row) => row.id === targetRowId);
     if (!targetRow || targetRow.session_id !== session.id) {
       throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
@@ -4232,8 +5359,9 @@ export async function applyPlayerHealing(input: {
     // UMA transação cobre patch (APENAS hp_current), evento e status da
     // resolução. Se qualquer passo falhar, o Postgres desfaz TUDO: HP não
     // muda, o evento não é publicado e a ficha não recebe nada.
-    const committedResult = (await query(
-      db().rpc("commit_mesa_attack_resolution", {
+    const committedResult = await healingInfrastructure.resolutionStore.commitAttack<PlayerHealingOutcome>({
+      sessionId: session.id, combatId: combat.id, resolutionId, claimToken,
+      rpcArgs: {
         p_session_id: session.id,
         p_combat_id: combat.id,
         p_resolution_id: resolutionId,
@@ -4251,24 +5379,15 @@ export async function applyPlayerHealing(input: {
         p_target_patch: patch,
         p_result: outcome,
         p_event_text: eventText,
-      }),
-      "Falha ao confirmar a cura",
-    )) as PlayerHealingOutcome | null;
+      },
+    });
     if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
     committed = true;
     return committedResult;
   } catch (error) {
     if (!committed) {
       try {
-        await query(
-          db().rpc("release_mesa_attack_resolution", {
-            p_session_id: session.id,
-            p_combat_id: combat.id,
-            p_resolution_id: resolutionId,
-            p_claim_token: claimToken,
-          }),
-          "Falha ao liberar a resolução da cura",
-        );
+        await healingInfrastructure.resolutionStore.releaseAttack({ sessionId: session.id, combatId: combat.id, resolutionId, claimToken });
       } catch {
         // O erro original é mais útil; resolução sem commit não aplicou efeitos.
       }
@@ -4288,10 +5407,9 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
 
   await syncActiveNetIceCombatants(session.id, combat.id);
 
-  const rows = (await query(
-    db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
-    "Falha ao consultar combatentes",
-  )) as CombatantRow[];
+  const initiativeInfrastructure = await createMesaHostingInfrastructure();
+  const initiativeRepository = initiativeInfrastructure.repository;
+  const rows = await initiativeRepository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
 
   const rolled: Array<{
     id: string;
@@ -4302,6 +5420,11 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
     isDead: boolean;
     sortOrder: number;
   }> = [];
+
+  const initiativeSheetIds = rows
+    .filter((row) => row.kind === "character" && row.character_id && !(typeof row.initiative === "number" && Number.isFinite(row.initiative)))
+    .map((row) => row.character_id as string);
+  const initiativeSheets = await loadSheets(initiativeSheetIds);
 
   for (const row of rows) {
     // F1.14.2 — iniciativa JÁ registrada (Player Initiative Gateway ou ajuste
@@ -4334,7 +5457,7 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
       continue;
     }
     if (row.kind === "character" && row.character_id) {
-      const sheet = await loadSheet(row.character_id);
+      const sheet = initiativeSheets.get(row.character_id) ?? null;
       if (sheet) {
         // Mesma função usada pela ficha local — o Combat Engine não é duplicado.
         const { result } = rollInitiative(sheet);
@@ -4386,42 +5509,46 @@ export async function rollInitiativeForAll(input: { sessionId: unknown; token: u
     sort_order: index,
   }));
 
-  await query(
-    db().from("mesa_combatants").upsert(updates, { onConflict: "id" }),
-    "Falha ao salvar a iniciativa",
+  await measureMesaDb(
+    (await mesaRepository()).upsertCombatants(updates, "Falha ao salvar a iniciativa"),
+    "salvar a iniciativa",
   );
 
   const alive = ordered.filter((entry) => !entry.isDead);
   const first = alive[0];
   const now = new Date().toISOString();
 
-  await query(
-    db()
-      .from("mesa_combats")
-      .update({
+  const combatWritten = await initiativeRepository.updateCombat(combat.id, session.id, {
         initiative_started: true,
         active_combatant_id: first ? first.id : null,
         turn_started_at: first ? now : null,
         round: 1,
         updated_at: now,
-      })
-      .eq("id", combat.id),
-    "Falha ao abrir o primeiro turno",
-  );
+      });
+  if (combatWritten.length !== 1) throw new MesaError("Falha ao abrir o primeiro turno.", 409, "combat_conflict");
 
   if (first) {
     // Restaura o orçamento DESTE combatente: ações máximas e MOVE × 2 metros.
     const firstRow = rows.find((row) => row.id === first.id);
-    await query(
-      db()
-        .from("mesa_combatants")
-        .update({
+    const firstNetrunner = firstRow ? connectionStateForRow(firstRow) : null;
+    const firstWritten = await initiativeRepository.updateCombatant({
+      id: first.id,
+      sessionId: session.id,
+      combatId: combat.id,
+      patch: {
           actions_remaining: ACTIONS_PER_TURN,
           movement_remaining: firstRow?.movement_max ?? MOVEMENT_PER_TURN,
-        })
-        .eq("id", first.id),
-      "Falha ao iniciar o turno",
-    );
+          ...(firstNetrunner?.isJackedIn ? {
+            netrunner_state: {
+              ...firstNetrunner,
+              ramCurrent: Math.min(firstNetrunner.ramMax, firstNetrunner.ramCurrent + 1),
+              netActionsRemaining: firstNetrunner.netActionsMax,
+              meatspaceActionUsedForNetrunning: false,
+            },
+          } : {}),
+      },
+    });
+    if (firstWritten.length !== 1) throw new MesaError("Falha ao iniciar o turno.", 409, "combat_conflict");
   }
 
   await appendEvent(
@@ -4590,6 +5717,8 @@ export async function registerPlayerInitiative(input: {
 
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const initiativeInfrastructure = await createMesaHostingInfrastructure();
+  const initiativeRepository = initiativeInfrastructure.repository;
 
   /* ------------------------- idempotência durável ------------------------ */
 
@@ -4610,15 +5739,7 @@ export async function registerPlayerInitiative(input: {
     throw new MesaError("A iniciativa já foi rolada.", 409, "initiative_already_rolled");
   }
 
-  const claimRows = (await query(
-    db().rpc("claim_mesa_attack_resolution", {
-      p_session_id: session.id,
-      p_combat_id: combat.id,
-      p_resolution_id: resolutionId,
-    }),
-    "Falha ao reservar a resolução da iniciativa",
-  )) as AttackResolutionClaim<PlayerInitiativeOutcome>[] | null;
-  const claim = claimRows?.[0];
+  const claim = await initiativeInfrastructure.resolutionStore.claimAttack<PlayerInitiativeOutcome>({ sessionId: session.id, combatId: combat.id, resolutionId });
   if (!claim) throw new MesaError("Não foi possível reservar a resolução da iniciativa.", 500, "transaction_failed");
   if (!claim.claimed) {
     if (claim.status === "committed" && claim.result) return { result: claim.result, committed: false };
@@ -4633,10 +5754,7 @@ export async function registerPlayerInitiative(input: {
   try {
     /* ----------------------------- intenção ------------------------------ */
 
-    const rows = (await query(
-      db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
-      "Falha ao consultar os combatentes",
-    )) as CombatantRow[] | null;
+    const rows = await initiativeRepository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
     const actorRow = rows?.find((row) => row.id === actorCombatantId);
     if (!actorRow || actorRow.session_id !== session.id) {
       throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
@@ -4674,17 +5792,8 @@ export async function registerPlayerInitiative(input: {
 
     // Só grava se a coluna AINDA estiver como foi lida: dois registros
     // concorrentes nunca sobrescrevem um ao outro em silêncio.
-    const written = (await query(
-      db()
-        .from("mesa_combatants")
-        .update({ initiative, initiative_detail: initiativeDetail })
-        .eq("id", actorRow.id)
-        .eq("combat_id", combat.id)
-        .is("initiative", null)
-        .select("id"),
-      "Falha ao registrar a iniciativa",
-    )) as Array<{ id: string }> | null;
-    if (!written || written.length !== 1) {
+    const written = await initiativeRepository.updateCombatant({ id: actorRow.id, sessionId: session.id, combatId: combat.id, patch: { initiative, initiative_detail: initiativeDetail }, expected: { initiative: null } });
+    if (written.length !== 1) {
       throw new MesaError(
         "Sua iniciativa mudou durante o registro; recarregue a Mesa e tente de novo.",
         409,
@@ -4694,24 +5803,15 @@ export async function registerPlayerInitiative(input: {
 
     /* ------------------- carimbo da resolução (retry) --------------------- */
 
-    const stamped = (await query(
-      db()
-        .from("mesa_attack_resolutions")
-        .update({
-          status: "committed",
-          result: outcome,
-          committed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("session_id", session.id)
-        .eq("combat_id", combat.id)
-        .eq("resolution_id", resolutionId)
-        .eq("claim_token", claimToken)
-        .eq("status", "processing")
-        .select("id"),
-      "Falha ao confirmar a resolução da iniciativa",
-    )) as Array<{ id: string }> | null;
-    if (!stamped || stamped.length !== 1) {
+    const stamped = await initiativeInfrastructure.resolutionStore.commitInitiative<PlayerInitiativeOutcome>({
+      sessionId: session.id,
+      combatId: combat.id,
+      resolutionId,
+      claimToken,
+      rpcArgs: { p_result: outcome },
+      result: outcome,
+    });
+    if (!stamped) {
       throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
     }
     committed = true;
@@ -4723,15 +5823,7 @@ export async function registerPlayerInitiative(input: {
     // `resolutionId` devolve este resultado em vez de regravar (ou reclamar).
     if (!committed) {
       try {
-        await query(
-          db().rpc("release_mesa_attack_resolution", {
-            p_session_id: session.id,
-            p_combat_id: combat.id,
-            p_resolution_id: resolutionId,
-            p_claim_token: claimToken,
-          }),
-          "Falha ao liberar a resolução da iniciativa",
-        );
+        await initiativeInfrastructure.resolutionStore.releaseAttack({ sessionId: session.id, combatId: combat.id, resolutionId, claimToken });
       } catch {
         // O erro original é mais útil; resolução sem commit não aplicou efeitos.
       }
@@ -4740,12 +5832,205 @@ export async function registerPlayerInitiative(input: {
   }
 }
 
-/** Avança o turno a partir do estado atual do banco. */
+/** Avanço local completo dentro de um contexto transacional compartilhado. */
+async function advanceActiveTurnLocal(
+  context: LocalPostgresTransactionContext,
+  sessionId: string,
+  requestedCombat: CombatRow,
+  options: { removeActiveCombatantId?: string } = {},
+): Promise<void> {
+  const repository = context.repository;
+
+  // Ordem global de locks: sessão → combate → batalha → combatants.
+  await context.query("select id from public.mesa_sessions where id = $1 for update", [sessionId]);
+  await context.query("select id from public.mesa_combats where id = $1 and session_id = $2 for update", [requestedCombat.id, sessionId]);
+  await context.query("select id from public.mesa_battles where session_id = $1 and status = 'active' for update", [sessionId]);
+  await context.query("select id from public.mesa_combatants where combat_id = $1 and session_id = $2 order by sort_order for update", [requestedCombat.id, sessionId]);
+
+  const combat = await repository.findCombatById(requestedCombat.id, sessionId) as unknown as CombatRow | null;
+  if (!combat || combat.status !== "active") throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  if (!combat.initiative_started || !combat.active_combatant_id) {
+    throw new MesaError("Nenhum turno em andamento.", 409, "no_active_turn");
+  }
+  const rows = await repository.listCombatantsByCombat(combat.id, sessionId) as unknown as CombatantRow[];
+
+  for (const row of rows.filter((entry) => entry.kind === "character" && entry.is_dead)) {
+    const state = connectionStateForRow(row);
+    if (!state.isJackedIn && !(state.engagedBlackIceIds ?? []).length) continue;
+    await clearNetIceEngagementWithRepository(repository, sessionId, state.architectureId, row.id);
+    const next = unsafeJackOutState(state);
+    const written = await repository.updateCombatant({
+      id: row.id,
+      sessionId,
+      combatId: combat.id,
+      patch: { netrunner_state: next },
+      expected: { is_dead: true },
+    });
+    if (written.length !== 1) throw new MesaError("O estado do Netrunner mudou durante o turno.", 409, "turn_conflict");
+    await appendEventWithRepository(repository, combat.id, sessionId, {
+      kind: "action",
+      text: `${row.name}: Netrunner derrotado — desconectado da NET`,
+    });
+  }
+
+  const ordered = sortByInitiative(rows.map((row) => ({
+    id: row.id,
+    initiative: row.initiative,
+    isDead: row.is_dead,
+    sortOrder: row.sort_order,
+  })));
+  const order = ordered.map((entry) => entry.id);
+  const alive = new Set(ordered.filter((entry) => !entry.isDead).map((entry) => entry.id));
+  const advance = advanceTurn(order, combat.active_combatant_id, combat.round, (id) => alive.has(id));
+  const now = new Date().toISOString();
+
+  if (advance.kind === "finished") {
+    if (options.removeActiveCombatantId) {
+      await repository.deleteCombatants(
+        { id: options.removeActiveCombatantId, combatId: combat.id, sessionId },
+        "Falha ao remover o combatente ativo",
+      );
+    }
+    await recoverAllNetrunnerRamWithRepository(repository, sessionId, combat.id);
+    const finished = await repository.updateCombat(combat.id, sessionId, {
+      status: "finished",
+      active_combatant_id: null,
+      turn_started_at: null,
+      updated_at: now,
+    });
+    if (finished.length !== 1) throw new MesaError("Falha ao encerrar o combate.", 500, "transaction_failed");
+    await appendEventWithRepository(repository, combat.id, sessionId, { kind: "combat_finished", text: "Combate encerrado" });
+    await completeActiveBattleWithRepository(repository, sessionId);
+    return;
+  }
+
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+  for (const row of rows) {
+    const effects = Array.isArray(row.net_effects) ? row.net_effects : [];
+    const expired = effects.filter((effect) => effect.expiresRound !== null && effect.expiresRound < advance.round);
+    if (!expired.length) continue;
+    const nextEffects = effects.filter((effect) => !expired.includes(effect));
+    const expiredConditions = new Set(expired.flatMap((effect) => effect.conditionIds ?? []));
+    const nextConditions = (row.conditions ?? []).filter((condition) => !expiredConditions.has(condition));
+    const written = await repository.updateCombatant({
+      id: row.id,
+      sessionId,
+      combatId: combat.id,
+      patch: { net_effects: nextEffects, conditions: nextConditions },
+    });
+    if (written.length !== 1) throw new MesaError("Falha ao expirar efeito de Quickhack.", 409, "turn_conflict");
+  }
+
+  if (combat.active_combatant_id) {
+    const previous = rowsById.get(combat.active_combatant_id);
+    if (previous) {
+      await applyQuickhackEndTurnEffectsWithRepository(repository, combat, previous, rows);
+      const written = await repository.updateCombatant({
+        id: previous.id,
+        sessionId,
+        combatId: combat.id,
+        patch: { actions_remaining: 0, movement_remaining: 0 },
+      });
+      if (written.length !== 1) throw new MesaError("Falha ao encerrar o turno.", 409, "turn_conflict");
+    }
+  }
+
+  const nextBudget = rowsById.get(advance.activeCombatantId);
+  if (nextBudget) {
+    const state = connectionStateForRow(nextBudget);
+    if (state.isJackedIn) {
+      const written = await repository.updateCombatant({
+        id: nextBudget.id,
+        sessionId,
+        combatId: combat.id,
+        patch: {
+          netrunner_state: {
+            ...state,
+            ramCurrent: Math.min(state.ramMax, state.ramCurrent + 1),
+            netActionsRemaining: state.netActionsMax,
+            meatspaceActionUsedForNetrunning: false,
+          },
+        },
+      });
+      if (written.length !== 1) throw new MesaError("Falha ao iniciar estado de Netrunner.", 409, "turn_conflict");
+    }
+  }
+
+  const budgetWritten = await repository.updateCombatant({
+    id: advance.activeCombatantId,
+    sessionId,
+    combatId: combat.id,
+    patch: {
+      actions_remaining: nextBudget?.kind === "net_ice" ? 0 : ACTIONS_PER_TURN,
+      movement_remaining: nextBudget?.kind === "net_ice" ? 0 : (nextBudget?.movement_max ?? MOVEMENT_PER_TURN),
+    },
+  });
+  if (budgetWritten.length !== 1) throw new MesaError("Falha ao iniciar o turno.", 409, "turn_conflict");
+
+  if (options.removeActiveCombatantId) {
+    await repository.deleteCombatants(
+      { id: options.removeActiveCombatantId, combatId: combat.id, sessionId },
+      "Falha ao remover o combatente ativo",
+    );
+  }
+
+  const combatWritten = await repository.updateCombat(combat.id, sessionId, {
+    active_combatant_id: advance.activeCombatantId,
+    round: advance.round,
+    turn_started_at: now,
+    updated_at: now,
+  });
+  if (combatWritten.length !== 1) throw new MesaError("Falha ao avançar o turno.", 409, "turn_conflict");
+
+  const next = rowsById.get(advance.activeCombatantId);
+  await appendEventWithRepository(repository, combat.id, sessionId, advance.kind === "round"
+    ? { kind: "round", text: `Rodada ${advance.round} — turno de ${next?.name ?? "?"}` }
+    : { kind: "turn", text: `Turno de ${next?.name ?? "?"}` });
+}
+
+/** Seleciona a infraestrutura sem alterar o caminho Supabase legado. */
 async function advanceActiveTurn(sessionId: string, combat: CombatRow): Promise<void> {
+  const infrastructure = await createMesaHostingInfrastructure();
+  if (infrastructure.mode === "local") {
+    await withLocalPostgresTransaction((context) => advanceActiveTurnLocal(context, sessionId, combat));
+    return;
+  }
+  await advanceActiveTurnSupabase(sessionId, combat);
+}
+
+/** Finaliza o turno local, incluindo o turno autoritativo de Black ICE. */
+async function endTurnLocalTransactional(sessionId: string): Promise<void> {
+  await withLocalPostgresTransaction(async (context) => {
+    const repository = context.repository;
+    await context.query("select id from public.mesa_sessions where id = $1 for update", [sessionId]);
+    await context.query("select id from public.mesa_combats where session_id = $1 for update", [sessionId]);
+    const combat = await repository.findCombatBySession(sessionId) as unknown as CombatRow | null;
+    if (!combat || combat.status !== "active") throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+    if (!combat.initiative_started || !combat.active_combatant_id) throw new MesaError("Nenhum turno em andamento.", 409, "no_active_turn");
+    const active = await repository.findCombatantById(combat.active_combatant_id, { combatId: combat.id, sessionId }) as CombatantRow | null;
+    if (!active) throw new MesaError("Combatente ativo não encontrado.", 409, "turn_conflict");
+    if (active.kind === "net_ice") await executeBlackIceTurnWithRepository(repository, combat, active);
+    await advanceActiveTurnLocal(context, sessionId, combat);
+  });
+}
+
+/** Implementação legada Supabase; o wrapper local fica separado abaixo. */
+async function advanceActiveTurnSupabase(sessionId: string, combat: CombatRow): Promise<void> {
   const rows = (await query(
     db().from("mesa_combatants").select("*").eq("combat_id", combat.id).order("sort_order"),
     "Falha ao consultar combatentes",
   )) as CombatantRow[];
+
+  // A defeated Netrunner cannot remain a hidden NET participant. The
+  // Architecture survives, while the connection and ICE engagement do not.
+  for (const row of rows.filter((entry) => entry.kind === "character" && entry.is_dead)) {
+    const state = connectionStateForRow(row);
+    if (!state.isJackedIn && !(state.engagedBlackIceIds ?? []).length) continue;
+    await clearNetIceEngagement(sessionId, state.architectureId, row.id);
+    const next = unsafeJackOutState(state);
+    await query(db().from("mesa_combatants").update({ netrunner_state: next }).eq("id", row.id).eq("is_dead", true), "Falha ao limpar Netrunner derrotado");
+    await appendEvent(combat.id, { kind: "action", text: `${row.name}: Netrunner derrotado — desconectado da NET` });
+  }
 
   const ordered = sortByInitiative(rows.map((row) => ({
     id: row.id,
@@ -4855,11 +6140,70 @@ async function applyQuickhackEndTurnEffects(combat: CombatRow, row: CombatantRow
   if (written && written.length === 1) await appendEvent(combat.id, { kind: "action", text: `${row.name}: Overheat causa ${periodic.damageAtEndOfTurn} HP` });
 }
 
+/** Efeito periódico preparado para execução dentro do contexto local. */
+async function applyQuickhackEndTurnEffectsWithRepository(
+  repository: MesaRepository,
+  combat: CombatRow,
+  row: CombatantRow,
+  rows: CombatantRow[],
+): Promise<void> {
+  const effects = activeQuickhackEffects(row, combat.round);
+  const periodic = effects.find((effect) => effect.damageAtEndOfTurn && effect.lastDamageRound !== combat.round);
+  if (!periodic || !row.combat_snapshot) return;
+  const participants = rows.map((entry) => combatParticipantFromRow(entry)).filter((entry): entry is CombatParticipant => entry !== null);
+  const state: CombatState = {
+    id: combat.id,
+    status: combat.status,
+    round: combat.round,
+    initiativeStarted: combat.initiative_started,
+    activeParticipantId: combat.active_combatant_id,
+    participants,
+  };
+  const result = execute(state, { type: "damage", actorId: null, targetId: row.id, amount: periodic.damageAtEndOfTurn ?? 0, ignoreArmor: true }, serverRandom);
+  if (!result.ok) return;
+  const patch = engineDamagePatch(result, row.id);
+  const nextEffects = effects.map((effect) => effect.id === periodic.id ? { ...effect, lastDamageRound: combat.round } : effect);
+  const written = await repository.updateCombatant({
+    id: row.id,
+    sessionId: combat.session_id,
+    combatId: combat.id,
+    patch: { ...patch, net_effects: nextEffects },
+    expected: { hp_current: row.hp_current },
+  });
+  if (written.length === 1) {
+    await appendEventWithRepository(repository, combat.id, combat.session_id, {
+      kind: "action",
+      text: `${row.name}: Overheat causa ${periodic.damageAtEndOfTurn} HP`,
+    });
+  }
+}
+
 async function recoverAllNetrunnerRam(combatId: string): Promise<void> {
   const rows = (await query(db().from("mesa_combatants").select("id,netrunner_state").eq("combat_id", combatId), "Falha ao recuperar RAM")) as Array<{ id: string; netrunner_state?: NetrunnerConnectionState | null }> | null;
   for (const row of rows ?? []) {
     const state = normalizeNetrunnerState(row.netrunner_state);
     if (state.ramMax > 0) await query(db().from("mesa_combatants").update({ netrunner_state: { ...state, ramCurrent: state.ramMax } }).eq("id", row.id), "Falha ao persistir recuperação de RAM");
+  }
+}
+
+/** Recupera RAM usando updates escopados no repository do contexto. */
+async function recoverAllNetrunnerRamWithRepository(
+  repository: MesaRepository,
+  sessionId: string,
+  combatId: string,
+): Promise<void> {
+  const rows = await repository.listCombatantsByCombat(combatId, sessionId) as unknown as CombatantRow[];
+  for (const row of rows) {
+    const state = normalizeNetrunnerState(row.netrunner_state);
+    if (state.ramMax <= 0) continue;
+    const written = await repository.updateCombatant({
+      id: row.id,
+      sessionId,
+      combatId,
+      patch: { netrunner_state: { ...state, ramCurrent: state.ramMax } },
+      expected: { netrunner_state: row.netrunner_state ?? null },
+    });
+    if (written.length !== 1) throw new DatabaseQueryError("Falha ao persistir recuperação de RAM: conflito de estado");
   }
 }
 
@@ -4880,15 +6224,10 @@ export async function performAction(input: {
   }
   requireGM({ session, participant });
 
-  const combat = (await query(
-    db().from("mesa_combats").select("*").eq("session_id", session.id).maybeSingle(),
-    "Falha ao consultar o combate",
-  )) as CombatRow | null;
+  const actionRepository = (await createMesaHostingInfrastructure()).repository;
+  const combat = await actionRepository.findCombatBySession(session.id) as CombatRow | null;
 
-  const row = (await query(
-    db().from("mesa_combatants").select("*").eq("id", String(input.combatantId ?? "")).maybeSingle(),
-    "Falha ao consultar o combatente",
-  )) as CombatantRow | null;
+  const row = await actionRepository.findCombatantById(String(input.combatantId ?? ""), { sessionId: session.id }) as CombatantRow | null;
   if (!row || row.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
 
   const actionType = input.actionType;
@@ -4932,21 +6271,24 @@ export async function performAction(input: {
     meters,
   );
 
-  const written = (await query(
-    db()
-      .from("mesa_combatants")
-      .update({
+  const written = await measureMesaDb(
+    (await mesaRepository()).debitCombatantAction({
+      id: row.id,
+      sessionId: session.id,
+      combatId: combat.id,
+      patch: {
         actions_remaining: economy.actionsRemaining,
         movement_remaining: economy.movementRemaining,
-      })
-      .eq("id", row.id)
-      .eq("actions_remaining", row.actions_remaining)
-      .eq("movement_remaining", row.movement_remaining)
-      .eq("is_dead", false)
-      .select("id"),
-    "Falha ao consumir a ação",
-  )) as Array<{ id: string }> | null;
-  if (!written || written.length !== 1) {
+      },
+      expected: {
+        actions_remaining: row.actions_remaining,
+        movement_remaining: row.movement_remaining,
+        is_dead: false,
+      },
+    }),
+    "consumir a ação",
+  );
+  if (written.length !== 1) {
     throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
   }
 
@@ -4956,8 +6298,8 @@ export async function performAction(input: {
 
 async function unsafeJackOutNetConsequences(row: CombatantRow, state: NetrunnerConnectionState, sessionId: string): Promise<{ state: NetrunnerConnectionState; events: string[] }> {
   if (!state.architectureId || !(state.engagedBlackIceIds ?? []).length) return { state, events: [] };
-  const architectureRow = (await query(db().from("mesa_sessions").select("net_architectures").eq("id", sessionId).maybeSingle(), "Falha ao consultar ICE")) as { net_architectures?: unknown } | null;
-  const architecture = normalizeNetArchitectures(architectureRow?.net_architectures).find((entry) => entry.id === state.architectureId);
+  const repository = await mesaRepository();
+  const architecture = normalizeNetArchitectures(await repository.findSessionNetArchitectures(sessionId)).find((entry) => entry.id === state.architectureId);
   if (!architecture) return { state, events: [] };
   let brainDamage = state.brainDamage ?? 0;
   const events: string[] = [];
@@ -5014,19 +6356,21 @@ export async function movePlayerCombatant(input: {
 
   // Também antes do replay: um participante que descubra uma resolutionId
   // alheia não pode receber o resultado gravado de outro combatente.
-  const owner = (await query(db().from("mesa_combatants").select("session_id,participant_id,kind")
-    .eq("id", actorCombatantId).eq("combat_id", combat.id).maybeSingle(),
-  "Falha ao consultar combatente")) as Pick<CombatantRow, "session_id" | "participant_id" | "kind"> | null;
-  if (!owner || owner.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
-  if (participant.role === "player" && owner.participant_id !== participant.id) {
-    throw new MesaError("Você não controla este combatente.", 403, "combatant_not_owned");
-  }
-  if (participant.role === "player" && owner.kind !== "character") {
-    throw new MesaError("Movimento de Player exige personagem.", 400, "not_a_player");
-  }
-  if (participant.role === "gm" && owner.kind !== "enemy" && owner.participant_id !== participant.id) {
-    throw new MesaError("O Mestre só pode mover inimigos ou o próprio personagem.", 403, "player_only");
-  }
+  const moveInfrastructure = await createMesaHostingInfrastructure();
+  const moveRepository = moveInfrastructure.repository;
+  const owner = await moveRepository.findCombatantById(actorCombatantId, { combatId: combat.id, sessionId: session.id }) as Pick<CombatantRow, "session_id" | "participant_id" | "kind"> | null;
+  measureMesaLocal("LOCAL.movement.authorization", () => {
+    if (!owner || owner.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+    if (participant.role === "player" && owner.participant_id !== participant.id) {
+      throw new MesaError("Você não controla este combatente.", 403, "combatant_not_owned");
+    }
+    if (participant.role === "player" && owner.kind !== "character") {
+      throw new MesaError("Movimento de Player exige personagem.", 400, "not_a_player");
+    }
+    if (participant.role === "gm" && owner.kind !== "enemy" && owner.participant_id !== participant.id) {
+      throw new MesaError("O Mestre só pode mover inimigos ou o próprio personagem.", 403, "player_only");
+    }
+  });
 
   type MoveResult = { combatantId: string; distance: number; movementRemaining: number; actionsRemaining: number; position: TacticalPosition };
   const replay = (result: MoveResult) => {
@@ -5040,24 +6384,26 @@ export async function movePlayerCombatant(input: {
   if (previous?.status === "committed" && previous.result) return replay(previous.result);
   if (previous?.status === "failed") throw new MesaError("Esta resolução de movimento falhou.", 409, "resolution_failed");
   if (previous?.status === "processing") {
-    return replay(await waitForAttackResolution<MoveResult>(session.id, resolutionId, combat.id));
+    // Resoluções de movimento antigas em processing podem ter sido aplicadas
+    // pelo caminho não atômico. Não as marcamos como failed nem reaplicamos o
+    // movimento automaticamente sem evidência autoritativa suficiente.
+    return replay(await waitForAttackResolution<MoveResult>(session.id, resolutionId, combat.id, { recoverStale: false }));
   }
 
-  const claimRows = (await query(db().rpc("claim_mesa_attack_resolution", {
-    p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
-  }), "Falha ao reservar movimento")) as AttackResolutionClaim<MoveResult>[] | null;
-  const claim = claimRows?.[0];
+  const claim = await moveInfrastructure.resolutionStore.claimAttack<MoveResult>({
+    sessionId: session.id,
+    combatId: combat.id,
+    resolutionId,
+  });
   if (!claim) throw new MesaError("Não foi possível reservar o movimento.", 500, "transaction_failed");
   if (!claim.claimed) {
     if (claim.status === "committed" && claim.result) return replay(claim.result);
     if (claim.status === "failed") throw new MesaError("Esta resolução de movimento falhou.", 409, "resolution_failed");
-    return replay(await waitForAttackResolution<MoveResult>(session.id, resolutionId, combat.id));
+    return replay(await waitForAttackResolution<MoveResult>(session.id, resolutionId, combat.id, { recoverStale: false }));
   }
 
-  let applied = false;
   try {
-    const row = (await query(db().from("mesa_combatants").select("*")
-      .eq("id", actorCombatantId).eq("combat_id", combat.id).maybeSingle(), "Falha ao consultar combatente")) as CombatantRow | null;
+    const row = await moveRepository.findCombatantById(actorCombatantId, { combatId: combat.id, sessionId: session.id }) as CombatantRow | null;
     if (!row || row.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
     if (participant.role === "player" && row.participant_id !== participant.id) throw new MesaError("Você não controla este combatente.", 403, "combatant_not_owned");
     if (participant.role === "player" && row.kind !== "character") throw new MesaError("Movimento de Player exige personagem.", 400, "not_a_player");
@@ -5066,18 +6412,24 @@ export async function movePlayerCombatant(input: {
     }
     // Uma nova leitura reduz a janela entre claim e validação; o CAS abaixo
     // protege também o orçamento contra dois movimentos simultâneos.
-    const currentCombat = await getActiveCombat(session.id);
+    const [currentCombat, sessionMapResult] = await Promise.all([
+      getActiveCombat(session.id),
+      (async () => {
+        try {
+          return {
+              value: await moveRepository.findSessionById(session.id) as { tactical_map?: unknown } | null,
+            failed: false,
+          };
+        } catch {
+          // Compatibilidade durante o rollout: movimentos antigos continuam usando
+          // o contrato de metros até a migration do mapa chegar ao ambiente.
+          return { value: null, failed: true };
+        }
+      })(),
+    ]);
     const movement = effectiveMovementForRow(row);
-    let sessionMap: { tactical_map?: unknown } | null = null;
-    let sessionMapReadFailed = false;
-    try {
-      sessionMap = (await query(db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(), "Falha ao consultar escala do mapa")) as { tactical_map?: TacticalMap | null } | null;
-    } catch {
-      // Compatibilidade durante o rollout: movimentos antigos continuam usando
-      // o contrato de metros até a migration do mapa chegar ao ambiente.
-      sessionMapReadFailed = true;
-      sessionMap = null;
-    }
+    const sessionMap = sessionMapResult.value;
+    const sessionMapReadFailed = sessionMapResult.failed;
     if (hasPosition && sessionMapReadFailed) {
       throw new MesaError("A geometria tática não está disponível para validar o movimento.", 409, "tactical_geometry_unavailable");
     }
@@ -5098,8 +6450,17 @@ export async function movePlayerCombatant(input: {
       throw new MesaError("Netrunner conectado exige posição de destino para validar o alcance do Access Point.", 400, "target_position_required");
     }
       if (hasPosition && currentNetrunnerState.isJackedIn && currentNetrunnerState.connectionType === "wireless") {
-        const accessPoint = (map.accessPoints ?? []).find((entry) => entry.id === currentNetrunnerState.connectedAccessPointId);
-      if (!accessPoint) throw new MesaError("O Access Point da conexão não está mais disponível.", 409, "access_point_not_found");
+      const accessPoint = (map.accessPoints ?? []).find((entry) => entry.id === currentNetrunnerState.connectedAccessPointId);
+      if (!accessPoint) {
+        const consequences = await unsafeJackOutNetConsequences(row, currentNetrunnerState, session.id);
+        const disconnected = unsafeJackOutState(consequences.state);
+        await clearNetIceEngagement(session.id, currentNetrunnerState.architectureId, row.id);
+        const disconnectedWritten = await moveRepository.updateCombatant({ id: row.id, sessionId: session.id, combatId: combat.id, patch: { netrunner_state: disconnected }, expected: { netrunner_state: row.netrunner_state ?? null } });
+        if (disconnectedWritten.length !== 1) throw new MesaError("Falha ao limpar Access Point inválido.", 409, "action_conflict");
+        for (const event of consequences.events) await appendEvent(combat.id, { kind: "action", text: event });
+        await appendEvent(combat.id, { kind: "action", text: `${row.name}: desconexão NET — Access Point removido` });
+        throw new MesaError("O Access Point da conexão não está mais disponível.", 409, "access_point_not_found");
+      }
       if (accessPoint) {
         const wirelessMovement = stopAtWirelessAccessPointRange({ currentPosition, targetPosition, accessPoint, map });
         if (wirelessMovement.crossed) {
@@ -5143,51 +6504,63 @@ export async function movePlayerCombatant(input: {
       const consequences = await unsafeJackOutNetConsequences(row, currentNetrunnerState, session.id);
       unsafeEvents = consequences.events;
       nextNetrunnerState = unsafeJackOutState(consequences.state);
+      await clearNetIceEngagement(session.id, currentNetrunnerState.architectureId, row.id);
     }
 
     const economy = applyAction({
       actionsMax: row.actions_max, actionsRemaining: row.actions_remaining,
       movementMax: movement.max, movementRemaining: movement.remaining,
     }, "move", distance);
-    const written = (await query(db().from("mesa_combatants")
-      .update({ movement_remaining: economy.movementRemaining, ...(hasPosition ? { position: targetPosition } : {}), ...(nextNetrunnerState ? { netrunner_state: nextNetrunnerState } : {}) })
-      .eq("id", row.id).eq("combat_id", combat.id)
-      .eq("movement_remaining", row.movement_remaining)
-      .eq("actions_remaining", row.actions_remaining)
-      .eq("is_dead", false)
-      .select("id"), "Falha ao registrar movimento")) as Array<{ id: string }> | null;
-    if (written?.length !== 1) throw new MesaError("O estado de movimento mudou; atualize a Mesa.", 409, "movement_conflict");
-    applied = true;
     const result: MoveResult = {
       combatantId: row.id, distance, movementRemaining: economy.movementRemaining,
       actionsRemaining: economy.actionsRemaining,
       position: targetPosition,
     };
-    const stamped = (await query(db().from("mesa_attack_resolutions").update({
-      status: "committed", result, committed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    }).eq("session_id", session.id).eq("combat_id", combat.id).eq("resolution_id", resolutionId)
-      .eq("claim_token", claim.claim_token).eq("status", "processing").select("id"),
-    "Falha ao confirmar movimento")) as Array<{ id: string }> | null;
-    if (stamped?.length !== 1) throw new MesaError("A resolução não foi confirmada.", 500, "transaction_failed");
+    const atomic = await measureMesaDb(
+      moveInfrastructure.resolutionStore.commitMove<MoveResult>({
+        sessionId: session.id,
+        combatId: combat.id,
+        resolutionId,
+        claimToken: claim.claim_token,
+        rpcArgs: {
+          p_session_id: session.id,
+          p_combat_id: combat.id,
+          p_resolution_id: resolutionId,
+          p_claim_token: claim.claim_token,
+          p_actor_id: row.id,
+          p_movement_before: row.movement_remaining,
+          p_movement_after: economy.movementRemaining,
+          p_actions_before: row.actions_remaining,
+          p_actions_after: economy.actionsRemaining,
+          p_position: hasPosition ? targetPosition : null,
+          p_netrunner_state: nextNetrunnerState ?? null,
+          p_result: result,
+        },
+      }),
+      "confirmar movimento atomicamente",
+    );
+    if (!atomic?.result || (atomic.status !== "committed" && atomic.status !== "already_committed")) {
+      throw new MesaError("A resolução não foi confirmada.", 500, "transaction_failed");
+    }
     // O evento é apresentação. Depois do commit ele não pode transformar um
     // movimento já aplicado em erro para o jogador nem impedir a publicação.
-      try {
-        await appendEvent(combat.id, { kind: "action", text: `${row.name}: Movimento (${distance}m)${nextNetrunnerState ? " — Unsafe Jack Out" : ""}` });
-        for (const event of unsafeEvents) await appendEvent(combat.id, { kind: "action", text: event });
+    try {
+      await appendEvent(combat.id, { kind: "action", text: `${row.name}: Movimento (${distance}m)${nextNetrunnerState ? " — Unsafe Jack Out" : ""}` });
+      for (const event of unsafeEvents) await appendEvent(combat.id, { kind: "action", text: event });
     } catch { /* O orçamento/resultado já foram gravados; o estado será publicado. */ }
-    return { result, committed: true };
+    return { result: atomic.result, committed: atomic.status === "committed" };
   } catch (error) {
-    // Depois do CAS NÃO liberar o claim: um retry não pode aplicar de novo caso
-    // o carimbo tenha falhado. Requer recuperação manual/transação para fechar
-    // completamente essa janela (GAP documentado).
-    if (!applied) {
-      try {
-        await query(db().rpc("release_mesa_attack_resolution", {
-          p_session_id: session.id, p_combat_id: combat.id,
-          p_resolution_id: resolutionId, p_claim_token: claim.claim_token,
-        }), "Falha ao liberar resolução de movimento");
-      } catch { /* Mantém o erro original. */ }
-    }
+    // A RPC é atômica: em caso de erro, o CAS também sofreu rollback. Se a
+    // resposta se perdeu depois do commit, o release não remove a resolução
+    // porque ela já não está em processing; o retry fará replay.
+    try {
+      await moveInfrastructure.resolutionStore.releaseAttack({
+        sessionId: session.id,
+        combatId: combat.id,
+        resolutionId,
+        claimToken: claim.claim_token,
+      });
+    } catch { /* Mantém o erro original. */ }
     throw databaseResolutionError(error) ?? error;
   }
 }
@@ -5207,21 +6580,20 @@ export async function reloadIntegrated(input: {
 
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const reloadInfrastructure = await createMesaHostingInfrastructure();
+  const reloadRepository = reloadInfrastructure.repository;
 
   const previous = await storedReloadResolution(session.id, resolutionId, combat.id);
   if (previous?.status === "committed" && previous.result) return { result: previous.result, committed: false };
   if (previous?.status === "failed") throw new MesaError("A resolução deste reload falhou antes do commit; não será reexecutada.", 409, "resolution_failed");
   if (previous?.status === "processing") return { result: await waitForReloadResolution(session.id, resolutionId, previous.combat_id), committed: false };
 
-  const rows = (await query(
-    db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
-    "Falha ao consultar os combatentes",
-  )) as CombatantRow[];
+  const rows = await reloadRepository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
   // O combatente é derivado da participação autenticada; nunca do body.
   const requestedActorId = typeof input.actorCombatantId === "string" ? input.actorCombatantId.trim() : "";
   const actorRow = participant.role === "gm" && requestedActorId
     ? rows.find((row) => row.id === requestedActorId)
-    : rows.find((row) => row.participant_id === participant.id && row.kind === "character");
+    : selectParticipantCharacter(rows, participant, combat.active_combatant_id);
   if (!actorRow) throw new MesaError("Ator não encontrado.", 404, "actor_not_found");
   if (actorRow.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
   if (participant.role === "player" && actorRow.kind !== "character") {
@@ -5281,15 +6653,7 @@ export async function reloadIntegrated(input: {
     consumed: ammoAfter - ammoBefore,
   };
 
-  const claimRows = (await query(
-    db().rpc("claim_mesa_reload_resolution", {
-      p_session_id: session.id,
-      p_combat_id: combat.id,
-      p_resolution_id: resolutionId,
-    }),
-    "Falha ao reservar a resolução do reload",
-  )) as ReloadResolutionClaim[] | null;
-  const claim = claimRows?.[0];
+  const claim = await reloadInfrastructure.resolutionStore.claimReload<ReloadResponse>({ sessionId: session.id, combatId: combat.id, resolutionId });
   if (!claim) throw new MesaError("Não foi possível reservar a resolução do reload.", 500, "transaction_failed");
   if (!claim.claimed) {
     if (claim.status === "committed" && claim.result) return { result: claim.result, committed: false };
@@ -5298,8 +6662,12 @@ export async function reloadIntegrated(input: {
   }
 
   try {
-    const committedResult = (await query(
-      db().rpc("commit_mesa_reload_resolution", {
+    const committedResult = await reloadInfrastructure.resolutionStore.commitReload<ReloadResponse>({
+      sessionId: session.id,
+      combatId: combat.id,
+      resolutionId,
+      claimToken: claim.claim_token,
+      rpcArgs: {
         p_session_id: session.id,
         p_combat_id: combat.id,
         p_resolution_id: resolutionId,
@@ -5315,22 +6683,13 @@ export async function reloadIntegrated(input: {
         p_supplies_after: suppliesAfter,
         p_result: result,
         p_event_text: `${actorRow.name}: recarregou ${weapon.name}`,
-      }),
-      "Falha ao confirmar a resolução do reload",
-    )) as ReloadResponse | null;
+      },
+    });
     if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
     return { result: committedResult, committed: true };
   } catch (error) {
     try {
-      await query(
-        db().rpc("release_mesa_reload_resolution", {
-          p_session_id: session.id,
-          p_combat_id: combat.id,
-          p_resolution_id: resolutionId,
-          p_claim_token: claim.claim_token,
-        }),
-        "Falha ao liberar a resolução do reload",
-      );
+      await reloadInfrastructure.resolutionStore.releaseReload({ sessionId: session.id, combatId: combat.id, resolutionId, claimToken: claim.claim_token });
     } catch {
       // Preserva o erro original; nenhum efeito parcial é aceito pela RPC.
     }
@@ -5373,16 +6732,10 @@ export async function attackIntegrated(input: {
 
   const combat = activeCombat;
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const attackInfrastructure = await createMesaHostingInfrastructure();
+  const attackRepository = attackInfrastructure.repository;
 
-  const claimRows = (await query(
-    db().rpc("claim_mesa_attack_resolution", {
-      p_session_id: session.id,
-      p_combat_id: combat.id,
-      p_resolution_id: resolutionId,
-    }),
-    "Falha ao reservar a resolução do ataque",
-  )) as AttackResolutionClaim<IntegratedAttackResponse>[] | null;
-  const claim = claimRows?.[0];
+  const claim = await attackInfrastructure.resolutionStore.claimAttack<IntegratedAttackResponse>({ sessionId: session.id, combatId: combat.id, resolutionId });
   if (!claim) throw new MesaError("Não foi possível reservar a resolução do ataque.", 500, "transaction_failed");
   if (!claim.claimed) {
     if (claim.status === "committed" && claim.result) return { result: claim.result, committed: false };
@@ -5394,16 +6747,24 @@ export async function attackIntegrated(input: {
 
   try {
 
-  const actorRowId = typeof input.actorId === "string" ? input.actorId : "";
-  const targetRowId = typeof input.targetId === "string" ? input.targetId : "";
-  const coverAttack = input.targetType === "cover";
-  const rows = (await query(
-    db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
-    "Falha ao consultar os combatentes",
-  )) as CombatantRow[];
-  const actorRow = rows.find((row) => row.id === actorRowId);
-  const targetRow = rows.find((row) => row.id === targetRowId);
-  if (!actorRow) throw new MesaError("Ator não encontrado.", 404, "actor_not_found");
+   const actorRowId = typeof input.actorId === "string" ? input.actorId : "";
+   const targetRowId = typeof input.targetId === "string" ? input.targetId : "";
+   const coverAttack = input.targetType === "cover";
+    const rowsPromise = attackRepository.listCombatantsByCombat(combat.id, session.id);
+   let rowsResult: unknown;
+   let currentMapRowResult: unknown = null;
+   if (coverAttack) {
+     rowsResult = await rowsPromise;
+   } else {
+     [rowsResult, currentMapRowResult] = await Promise.all([
+       rowsPromise,
+        attackRepository.findSessionById(session.id),
+     ]);
+   }
+    const rows = rowsResult as unknown as CombatantRow[];
+   const actorRow = rows.find((row) => row.id === actorRowId);
+   const targetRow = rows.find((row) => row.id === targetRowId);
+   if (!actorRow) throw new MesaError("Ator não encontrado.", 404, "actor_not_found");
   if (coverAttack) {
     const obstacleId = typeof input.obstacleId === "string" ? input.obstacleId.trim() : "";
     if (!obstacleId) throw new MesaError("Cover não informada.", 400, "cover_not_found");
@@ -5412,9 +6773,12 @@ export async function attackIntegrated(input: {
     committed = coverOutcome.committed;
     return coverOutcome;
   }
-  if (!targetRow) throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
-  validateCombatAttackTarget(combat, targetRow);
-  authorizeCombatAttackActor({ session, participant }, actorRow);
+   measureMesaLocal("LOCAL.attack.authorization", () => {
+     if (!targetRow) throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
+     validateCombatAttackTarget(combat, targetRow);
+     authorizeCombatAttackActor({ session, participant }, actorRow);
+   });
+   if (!targetRow) throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
 
   const participants = rows.map((row) => ({ row, participant: combatParticipantFromRow(row) }));
   if (participants.some(({ participant: snapshot }) => !snapshot)) {
@@ -5428,6 +6792,9 @@ export async function attackIntegrated(input: {
   // snapshot; esta guarda mantém a autoridade do estado reconstruído caso a
   // linha seja alterada durante a leitura.
   if (target.combat.isDead) throw new MesaError("Alvo derrotado.", 400, "target_defeated");
+  if (actorRow.id === targetRow.id && puppetControlsAction(actorRow, combat.round)) {
+    throw new MesaError("Puppet não pode ordenar dano deliberado contra o próprio personagem.", 403, "puppet_self_harm_forbidden");
+  }
 
   const rawMode = input.attackMode;
   if (rawMode !== "normal" && rawMode !== "aimed") {
@@ -5536,10 +6903,7 @@ export async function attackIntegrated(input: {
   if (!actorPosition || !targetPosition) {
     throw new MesaError("Não foi possível determinar a posição tática do ataque.", 409, "tactical_position_missing");
   }
-  const currentMapRow = (await query(
-    db().from("mesa_sessions").select("tactical_map").eq("id", session.id).maybeSingle(),
-    "Falha ao consultar a geometria tática",
-  )) as { tactical_map?: unknown } | null;
+   const currentMapRow = currentMapRowResult as { tactical_map?: unknown } | null;
   const currentTacticalMap = sanitizeTacticalMap(currentMapRow?.tactical_map);
   if (participant.role === "player" && !isTacticalTargetVisibleToPlayer(actorPosition, targetPosition, currentTacticalMap)) {
     throw new MesaError("Alvo não está visível para este Player.", 404, "target_not_visible");
@@ -5689,10 +7053,14 @@ export async function attackIntegrated(input: {
     weaponRange: response.weaponRange,
     weaponDamage: response.weaponDamage,
     damageResult: response.damageResult,
-  });
+  }) + (puppetControlsAction(actorRow, combat.round) ? " · Puppet controla a Action" : "");
 
-  const committedResult = (await query(
-    db().rpc("commit_mesa_attack_resolution", {
+  const committedResult = await attackInfrastructure.resolutionStore.commitAttack<IntegratedAttackResponse>({
+    sessionId: session.id,
+    combatId: combat.id,
+    resolutionId,
+    claimToken,
+    rpcArgs: {
       p_session_id: session.id,
       p_combat_id: combat.id,
       p_resolution_id: resolutionId,
@@ -5708,24 +7076,15 @@ export async function attackIntegrated(input: {
       p_target_patch: targetPatch,
       p_result: response,
        p_event_text: attackEventText,
-    }),
-    "Falha ao confirmar a resolução do ataque",
-  )) as IntegratedAttackResponse | null;
+    },
+  });
   if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
   committed = true;
   return { result: committedResult, committed: true };
   } catch (error) {
     if (!committed) {
       try {
-        await query(
-          db().rpc("release_mesa_attack_resolution", {
-            p_session_id: session.id,
-            p_combat_id: combat.id,
-            p_resolution_id: resolutionId,
-            p_claim_token: claimToken,
-          }),
-          "Falha ao liberar a resolução do ataque",
-        );
+        await attackInfrastructure.resolutionStore.releaseAttack({ sessionId: session.id, combatId: combat.id, resolutionId, claimToken });
       } catch {
         // O erro original é mais útil; a resolução sem commit não aplicou efeitos.
       }
@@ -5746,10 +7105,9 @@ async function attackTacticalCover(input: {
   obstacleId: string;
   claimToken: string;
 }): Promise<IntegratedAttackOutcome> {
-  const currentMapRow = (await query(
-    db().from("mesa_sessions").select("tactical_map").eq("id", input.session.id).maybeSingle(),
-    "Falha ao consultar a Cover",
-  )) as { tactical_map?: unknown } | null;
+  const infrastructure = await createMesaHostingInfrastructure();
+  const repository = infrastructure.repository;
+  const currentMapRow = await repository.findSessionById(input.session.id) as { tactical_map?: unknown } | null;
   const map = sanitizeTacticalMap(currentMapRow?.tactical_map);
   const obstacle = [...(map.geometry?.walls ?? []), ...(map.geometry?.doors ?? [])].find((entry) => entry.id === input.obstacleId);
   if (!obstacle || obstacle.destroyed === true) throw new MesaError("Cover não encontrada ou já destruída.", 404, "cover_not_found");
@@ -5834,7 +7192,13 @@ async function attackTacticalCover(input: {
     result.attackResult.hit ? "ACERTOU" : "ERROU",
     result.attackResult.hit ? (hpAfter === 0 ? "Cover destruída" : `Cover: ${hpBefore} → ${hpAfter} HP`) : "",
   ].filter(Boolean).join(" · ");
-  const committed = (await query(db().rpc("commit_mesa_attack_cover_resolution", { p_session_id: input.session.id, p_combat_id: input.combat.id, p_resolution_id: input.inputResolutionId, p_claim_token: input.claimToken, p_actor_id: actor.id, p_actions_before: input.actorRow.actions_remaining, p_actions_after: economy.actionsRemaining, p_ammo_before: input.actorRow.combat_ammo ?? null, p_ammo_after: ammoChange?.weaponId ? { ...(input.actorRow.combat_ammo ?? {}), [ammoChange.weaponId]: ammoChange.after } : input.actorRow.combat_ammo ?? null, p_obstacle_id: input.obstacleId, p_hp_before: hpBefore, p_hp_after: hpAfter, p_destroyed: hpAfter === 0, p_result: { ...response, actionAfter: economy.actionsRemaining }, p_event_text: eventText }), "Falha ao confirmar dano da Cover")) as IntegratedAttackResponse | null;
+  const committed = await infrastructure.resolutionStore.commitCoverDamage<IntegratedAttackResponse>({
+    sessionId: input.session.id,
+    combatId: input.combat.id,
+    resolutionId: input.inputResolutionId,
+    claimToken: input.claimToken,
+    rpcArgs: { p_session_id: input.session.id, p_combat_id: input.combat.id, p_resolution_id: input.inputResolutionId, p_claim_token: input.claimToken, p_actor_id: actor.id, p_actions_before: input.actorRow.actions_remaining, p_actions_after: economy.actionsRemaining, p_ammo_before: input.actorRow.combat_ammo ?? null, p_ammo_after: ammoChange?.weaponId ? { ...(input.actorRow.combat_ammo ?? {}), [ammoChange.weaponId]: ammoChange.after } : input.actorRow.combat_ammo ?? null, p_obstacle_id: input.obstacleId, p_hp_before: hpBefore, p_hp_after: hpAfter, p_destroyed: hpAfter === 0, p_result: { ...response, actionAfter: economy.actionsRemaining }, p_event_text: eventText },
+  });
   if (!committed) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
   return { result: committed, committed: true };
 }
@@ -5888,10 +7252,7 @@ export async function registerRoll(input: {
     ? "other"
     : MESA_ROLL_ACTION[roll.type];
 
-  const combatants = (await query(
-    db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
-    "Falha ao consultar os combatentes",
-  )) as CombatantRow[];
+  const combatants = await (await mesaRepository()).listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
 
   // Quem esta rolagem representa: o combatente VINCULADO ao participante ou,
   // quando veio chave, a linha do inimigo vinda do encontro.
@@ -5929,16 +7290,21 @@ export async function registerRoll(input: {
 
     if (result.ok) {
       const next = applyAction(economy, actionType, 0);
-      const written = (await query(
-        db().from("mesa_combatants").update({ actions_remaining: next.actionsRemaining })
-          .eq("id", target.id)
-          .eq("actions_remaining", target.actions_remaining)
-          .eq("movement_remaining", target.movement_remaining)
-          .eq("is_dead", false)
-          .select("id"),
-        "Falha ao consumir a ação",
-      )) as Array<{ id: string }> | null;
-      if (!written || written.length !== 1) throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
+      const written = await measureMesaDb(
+        (await mesaRepository()).debitCombatantAction({
+          id: target.id,
+          sessionId: session.id,
+          combatId: combat.id,
+          patch: { actions_remaining: next.actionsRemaining },
+          expected: {
+            actions_remaining: target.actions_remaining,
+            movement_remaining: target.movement_remaining,
+            is_dead: false,
+          },
+        }),
+        "consumir a ação",
+      );
+      if (written.length !== 1) throw new MesaError("O estado do turno mudou; atualize a Mesa.", 409, "action_conflict");
       debited = true;
     } else {
       denial = result.reason;
@@ -5952,11 +7318,9 @@ export async function registerRoll(input: {
     : formatRollEvent(actor, roll, note);
   const eventResolutionId = resolutionId ? `player-roll:${resolutionId}` : undefined;
   if (eventResolutionId) {
-    const existing = (await query(
-      db().from("mesa_combats").select("event_log").eq("id", combat.id).maybeSingle(),
-      "Falha ao consultar o histórico do combate",
-    )) as { event_log: MesaEvent[] | null } | null;
-    const prior = (Array.isArray(existing?.event_log) ? existing.event_log : [])
+    const existing = await (await mesaRepository()).findCombatEventLog(combat.id, session.id);
+    const prior = existing
+      .map((event) => event as MesaEvent)
       .find((event) => event.resolutionId === eventResolutionId);
     if (prior) {
       if (prior.text !== eventText) throw new MesaError("Esta resolução de rolagem pertence a outra intenção.", 409, "resolution_conflict");
@@ -5987,6 +7351,12 @@ export async function endTurn(input: { sessionId: unknown; token: unknown }): Pr
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireGM({ session, participant });
 
+  const infrastructure = await createMesaHostingInfrastructure();
+  if (infrastructure.mode === "local") {
+    await endTurnLocalTransactional(session.id);
+    return;
+  }
+
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
   if (!combat.initiative_started || !combat.active_combatant_id) {
@@ -6009,6 +7379,30 @@ export async function endCombat(input: { sessionId: unknown; token: unknown }): 
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireGM({ session, participant });
 
+  if ((await createMesaHostingInfrastructure()).mode === "local") {
+    await withLocalPostgresTransaction(async (context) => {
+      const repository = context.repository;
+      // Ordem de lock compartilhada com o avanço de turno evita que um
+      // encerramento concorra com uma resolução ou com o fechamento automático.
+      await context.query("select id from public.mesa_sessions where id = $1 for update", [session.id]);
+      await context.query("select id from public.mesa_combats where session_id = $1 for update", [session.id]);
+      await context.query("select id from public.mesa_battles where session_id = $1 and status = 'active' for update", [session.id]);
+      const combat = await repository.findCombatBySession(session.id) as unknown as CombatRow | null;
+      if (!combat || combat.status !== "active") throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+      await recoverAllNetrunnerRamWithRepository(repository, session.id, combat.id);
+      const updated = await repository.updateCombat(combat.id, session.id, {
+        status: "finished",
+        active_combatant_id: null,
+        turn_started_at: null,
+        updated_at: new Date().toISOString(),
+      });
+      if (updated.length !== 1) throw new MesaError("Falha ao encerrar o combate.", 409, "combat_conflict");
+      await appendEventWithRepository(repository, combat.id, session.id, { kind: "combat_finished", text: "Combate encerrado pelo Mestre" });
+      await completeActiveBattleWithRepository(repository, session.id);
+    });
+    return;
+  }
+
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
 
@@ -6030,12 +7424,38 @@ export async function finishSession(input: { sessionId: unknown; token: unknown 
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireGM({ session, participant });
 
+  if ((await createMesaHostingInfrastructure()).mode === "local") {
+    await withLocalPostgresTransaction(async (context) => {
+      const repository = context.repository;
+      await context.query("select id from public.mesa_sessions where id = $1 for update", [session.id]);
+      await context.query("select id from public.mesa_combats where session_id = $1 for update", [session.id]);
+      await context.query("select id from public.mesa_battles where session_id = $1 and status = 'active' for update", [session.id]);
+      const combat = await repository.findCombatBySession(session.id) as CombatRow | null;
+      if (combat?.status === "active") {
+        await recoverAllNetrunnerRamWithRepository(repository, session.id, combat.id);
+        const updated = await repository.updateCombat(combat.id, session.id, {
+          status: "finished",
+          active_combatant_id: null,
+          turn_started_at: null,
+          updated_at: new Date().toISOString(),
+        });
+        if (updated.length !== 1) throw new MesaError("Falha ao encerrar o combate.", 409, "combat_conflict");
+        await appendEventWithRepository(repository, combat.id, session.id, { kind: "combat_finished", text: "Combate encerrado com o fechamento da mesa" });
+      }
+      await completeActiveBattleWithRepository(repository, session.id);
+      const updatedSession = await repository.updateSession(session.id, { status: "finished", updated_at: new Date().toISOString() });
+      if (updatedSession.length !== 1) throw new MesaError("Falha ao encerrar a sessão.", 409, "session_conflict");
+    });
+    return;
+  }
+
   const combat = await getActiveCombat(session.id);
   if (combat) {
     await query(
       db().from("mesa_combats").update({ status: "finished", active_combatant_id: null, turn_started_at: null }).eq("id", combat.id),
       "Falha ao encerrar o combate",
     );
+    await appendEvent(combat.id, { kind: "combat_finished", text: "Combate encerrado com o fechamento da mesa" });
   }
   // Sessão encerrada com luta rolando: a partida também fecha (histórico).
   await completeActiveBattle(session.id);
@@ -6058,6 +7478,11 @@ export async function finishSession(input: { sessionId: unknown; token: unknown 
 export async function listBattles(input: { sessionId: unknown; token: unknown }): Promise<MesaBattle[]> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireGM({ session, participant });
+
+  if ((await createMesaHostingInfrastructure()).mode === "local") {
+    const rows = await (await mesaRepository()).listBattles(session.id, 50) as BattleRow[];
+    return rows.map(toBattle);
+  }
 
   if (battleSupport === "no") throw new MesaError(BATTLE_MIGRATION, 503, "migration_pending");
   try {
@@ -6106,7 +7531,8 @@ export async function leaveSession(input: { sessionId: unknown; token: unknown }
     );
   }
 
-  await query(db().from("mesa_participants").delete().eq("id", participant.id), "Falha ao sair da mesa");
+  const repository = await mesaRepository();
+  await repository.deleteParticipant(participant.id, session.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -6136,16 +7562,7 @@ async function storedItemConsumeResolution<T = ConsumeItemResponse>(
   resolutionId: string,
   combatId: string,
 ) {
-  return (await query(
-    db()
-      .from("mesa_item_consume_resolutions")
-      .select("*")
-      .eq("session_id", sessionId)
-      .eq("combat_id", combatId)
-      .eq("resolution_id", resolutionId)
-      .maybeSingle(),
-    "Falha ao consultar a resolução do consumo",
-  )) as { status: string; result: T } | null;
+  return await (await createMesaHostingInfrastructure()).resolutionStore.findItemConsume<T>({ sessionId, combatId, resolutionId });
 }
 
 async function waitForItemConsumeResolution<T = ConsumeItemResponse>(
@@ -6196,6 +7613,8 @@ export async function consumeItemIntegrated(input: {
 
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const itemInfrastructure = await createMesaHostingInfrastructure();
+  const itemRepository = itemInfrastructure.repository;
 
   const previous = await storedItemConsumeResolution<ConsumeItemResponse>(session.id, resolutionId, combat.id);
   if (previous?.status === "committed" && previous.result) return { result: previous.result, committed: false };
@@ -6206,10 +7625,7 @@ export async function consumeItemIntegrated(input: {
     return { result: await waitForItemConsumeResolution<ConsumeItemResponse>(session.id, resolutionId, combat.id), committed: false };
   }
 
-  const rows = (await query(
-    db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
-    "Falha ao consultar os combatentes",
-  )) as CombatantRow[];
+  const rows = await itemRepository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
   const actorRow = rows.find((row) => row.id === combatantId);
   if (!actorRow) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
   if (actorRow.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
@@ -6262,13 +7678,7 @@ export async function consumeItemIntegrated(input: {
     actionsAfter,
   };
 
-  const claimRows = (await query(
-    db().rpc("claim_mesa_item_consume_resolution", {
-      p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
-    }),
-    "Falha ao reservar a resolução do consumo",
-  )) as Array<{ claimed: boolean; status: string; claim_token: string; result: ConsumeItemResponse }> | null;
-  const claim = claimRows?.[0];
+  const claim = await itemInfrastructure.resolutionStore.claimItemConsume<ConsumeItemResponse>({ sessionId: session.id, combatId: combat.id, resolutionId });
   if (!claim) throw new MesaError("Não foi possível reservar a resolução do consumo.", 500, "transaction_failed");
   if (!claim.claimed) {
     if (claim.status === "committed" && claim.result) return { result: claim.result, committed: false };
@@ -6278,8 +7688,9 @@ export async function consumeItemIntegrated(input: {
   const claimToken = claim.claim_token;
   let committed = false;
   try {
-    const committedResult = (await query(
-      db().rpc("commit_mesa_item_consume_resolution", {
+    const committedResult = await itemInfrastructure.resolutionStore.commitItemConsume<ConsumeItemResponse>({
+      sessionId: session.id, combatId: combat.id, resolutionId, claimToken,
+      rpcArgs: {
         p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
         p_claim_token: claimToken, p_actor_id: actorRow.id,
         p_actions_before: actorRow.actions_remaining, p_actions_after: actionsAfter,
@@ -6287,21 +7698,15 @@ export async function consumeItemIntegrated(input: {
         p_item_name: entry.item, p_amount: amount,
         p_result: result,
         p_event_text: `${actorRow.name}: consumiu ${amount}× ${entry.item} (${quantityAfter} restante)`,
-      }),
-      "Falha ao confirmar a resolução do consumo",
-    )) as ConsumeItemResponse | null;
+      },
+    });
     if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
     committed = true;
     return { result: committedResult, committed: true };
   } catch (error) {
     if (!committed) {
       try {
-        await query(
-          db().rpc("release_mesa_item_consume_resolution", {
-            p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claimToken,
-          }),
-          "Falha ao liberar a resolução do consumo",
-        );
+        await itemInfrastructure.resolutionStore.releaseItemConsume({ sessionId: session.id, combatId: combat.id, resolutionId, claimToken });
       } catch {}
     }
     if (error instanceof Error) {
@@ -6401,6 +7806,8 @@ export async function applyItemHealIntegrated(input: {
 
   const combat = await getActiveCombat(session.id);
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  const itemHealInfrastructure = await createMesaHostingInfrastructure();
+  const itemHealRepository = itemHealInfrastructure.repository;
 
   const previous = await storedItemConsumeResolution<UseItemHealResponse>(session.id, resolutionId, combat.id);
   if (previous?.status === "committed" && previous.result) return { result: previous.result, committed: false };
@@ -6414,10 +7821,7 @@ export async function applyItemHealIntegrated(input: {
     };
   }
 
-  const rows = (await query(
-    db().from("mesa_combatants").select("*").eq("combat_id", combat.id),
-    "Falha ao consultar os combatentes",
-  )) as CombatantRow[];
+  const rows = await itemHealRepository.listCombatantsByCombat(combat.id, session.id) as unknown as CombatantRow[];
   const actorRow = rows.find((row) => row.id === combatantId);
   if (!actorRow) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
   if (actorRow.session_id !== session.id) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
@@ -6488,13 +7892,7 @@ export async function applyItemHealIntegrated(input: {
   };
 
   /* ------------------------ 12. claim + commit único ---------------------- */
-  const claimRows = (await query(
-    db().rpc("claim_mesa_item_consume_resolution", {
-      p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
-    }),
-    "Falha ao reservar a resolução do uso de item",
-  )) as Array<{ claimed: boolean; status: string; claim_token: string; result: UseItemHealResponse }> | null;
-  const claim = claimRows?.[0];
+  const claim = await itemHealInfrastructure.resolutionStore.claimItemConsume<UseItemHealResponse>({ sessionId: session.id, combatId: combat.id, resolutionId });
   if (!claim) throw new MesaError("Não foi possível reservar a resolução do uso de item.", 500, "transaction_failed");
   if (!claim.claimed) {
     if (claim.status === "committed" && claim.result) return { result: claim.result, committed: false };
@@ -6507,8 +7905,9 @@ export async function applyItemHealIntegrated(input: {
   const claimToken = claim.claim_token;
   let committed = false;
   try {
-    const committedResult = (await query(
-      db().rpc("commit_mesa_item_heal_resolution", {
+    const committedResult = await itemHealInfrastructure.resolutionStore.commitItemHeal<UseItemHealResponse>({
+      sessionId: session.id, combatId: combat.id, resolutionId, claimToken,
+      rpcArgs: {
         p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId,
         p_claim_token: claimToken, p_actor_id: actorRow.id,
         p_actions_before: actorRow.actions_remaining, p_actions_after: actionsAfter,
@@ -6517,21 +7916,15 @@ export async function applyItemHealIntegrated(input: {
         p_item_name: entry.item, p_amount: healAmount,
         p_result: result,
         p_event_text: `${actorRow.name}: usou ${entry.item} → +${restored} HP (${hpAfter}/${hpMax}); ${quantityAfter} restante`,
-      }),
-      "Falha ao confirmar a resolução do uso de item",
-    )) as UseItemHealResponse | null;
+      },
+    });
     if (!committedResult) throw new MesaError("A resolução não retornou resultado persistido.", 500, "transaction_failed");
     committed = true;
     return { result: committedResult, committed: true };
   } catch (error) {
     if (!committed) {
       try {
-        await query(
-          db().rpc("release_mesa_item_consume_resolution", {
-            p_session_id: session.id, p_combat_id: combat.id, p_resolution_id: resolutionId, p_claim_token: claimToken,
-          }),
-          "Falha ao liberar a resolução do uso de item",
-        );
+        await itemHealInfrastructure.resolutionStore.releaseItemConsume({ sessionId: session.id, combatId: combat.id, resolutionId, claimToken });
       } catch {}
     }
     if (error instanceof Error) {

@@ -42,7 +42,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { resolveActiveMesa } from "@/lib/mesa/activeMesa";
-import { createMesa, joinMesa, leaveMesa, MesaApiError } from "@/lib/mesa/client";
+import { closeMesa, createMesa, joinMesa, leaveMesa, MesaApiError } from "@/lib/mesa/client";
 import { defaultMesaDisplayName } from "@/lib/mesa/displayName";
 import { JOIN_CODE_PLACEHOLDER, normalizeJoinCode } from "@/lib/mesa/joinCode";
 import {
@@ -185,12 +185,16 @@ export default function MesaEntry() {
   }
 
   /** Um dos dois caminhos de saída da mesa: o próprio jogador pede. */
-  async function handleLeave(mesa: { sessionId: string; joinCode: string }) {
-    if (!window.confirm(`Sair da mesa ${mesa.joinCode}? Para voltar você vai precisar do código.`)) return;
+  async function handleLeave(mesa: { sessionId: string; joinCode: string; role: "gm" | "player" }) {
+    const message = mesa.role === "gm"
+      ? `Encerrar a mesa ${mesa.joinCode}? O estado será salvo e ficará disponível apenas para histórico.`
+      : `Sair da mesa ${mesa.joinCode}? Para voltar você vai precisar do código.`;
+    if (!window.confirm(message)) return;
     setError(null);
     setBusy(true);
     try {
-      await leaveMesa(mesa.sessionId, mesa.joinCode);
+      if (mesa.role === "gm") await closeMesa(mesa.sessionId, mesa.joinCode);
+      else await leaveMesa(mesa.sessionId, mesa.joinCode);
     } catch (caught) {
       setError(caught instanceof MesaApiError ? caught.message : "Não foi possível sair da mesa.");
     } finally {

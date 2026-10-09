@@ -4,6 +4,7 @@
  */
 import { errorResponse, ok, tokenFrom } from "@/lib/mesa/http";
 import { authenticate, finishSession, getMesaState } from "@/lib/mesa/store";
+import { publishMesaState } from "@/lib/mesa/realtimeServer";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,7 @@ export async function DELETE(request: Request, context: Context): Promise<Respon
   try {
     const { id } = await context.params;
     await finishSession({ sessionId: id, token: tokenFrom(request) });
+    await publishMesaState(id);
     return ok();
   } catch (error) {
     return errorResponse(error);

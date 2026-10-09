@@ -9,7 +9,7 @@
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-import { mesaChannelName } from "@/lib/mesa/realtimeServer";
+import { mesaChannelName } from "@/lib/mesa/realtimeChannel";
 import type { MesaState } from "@/lib/mesa/types";
 
 export type MesaSnapshot = Omit<MesaState, "viewer">;
@@ -18,7 +18,7 @@ export interface MesaSubscription {
   close: () => void;
 }
 
-export type MesaInvalidation = { sessionId?: string };
+export type MesaInvalidation = { sessionId?: string; publishedAt?: number };
 
 interface CachedPublicClient {
   url: string;
@@ -68,11 +68,11 @@ export function subscribeMesaState(
     const channel = client
       .channel(mesaChannelName(sessionId))
       .on("broadcast", { event: "state" }, (message) => {
-        const payload = (message ?? {}) as { state?: MesaSnapshot; invalidate?: boolean; sessionId?: string };
+        const payload = (message ?? {}) as { state?: MesaSnapshot; invalidate?: boolean; sessionId?: string; at?: number };
         // Nunca aceitar snapshot vindo do canal compartilhado. Além de evitar
         // vazamento de uma projeção de outro Player, isso impede que um cliente
         // publique um estado forjado para a UI de outro navegador.
-        if (payload.invalidate === true) onInvalidate?.({ sessionId: payload.sessionId });
+        if (payload.invalidate === true) onInvalidate?.({ sessionId: payload.sessionId, publishedAt: payload.at });
       })
       .subscribe((status) => {
         onStatus?.(String(status));

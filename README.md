@@ -30,6 +30,86 @@ Detalhes:
 
 Além do modo local (ficha, criação, combate e rolagens funcionando **sem servidor**), o app permite jogar em grupo: um GM cria uma **mesa**, os jogadores entram por um código de 5 caracteres e o **combate é compartilhado** em tempo real.
 
+### Self-host local no Windows/WSL2 via LAN ou Radmin VPN
+
+Há dois modos explícitos e sem fallback: `MESA_HOSTING_MODE=supabase` mantém o
+backend remoto; `MESA_HOSTING_MODE=local` usa PostgreSQL local e não chama
+Supabase nos fluxos locais suportados. O procedimento de instalação com Node,
+PostgreSQL, migrations, backup e firewall está em
+[`docs/self-host-windows.md`](docs/self-host-windows.md). O instalador
+reprodutível fica em `installer/windows/`.
+
+O host local ainda é HTTP (sem TLS embutido), e a VPN não substitui
+autenticação, autorização ou firewall.
+
+No computador hospedador:
+
+```powershell
+npm install
+npm run build
+npm run start:lan
+```
+
+O comando acima escuta em `0.0.0.0:3000`. Para restringir o processo ao IP
+virtual do Radmin, use o IP mostrado pelo Radmin no Windows:
+
+```powershell
+npm run start -- --hostname <IP_RADMIN_DO_MESTRE> --port 3000
+```
+
+O Mestre pode testar localmente em `http://localhost:3000`. Os jogadores devem
+usar `http://<IP_RADMIN_DO_MESTRE>:3000`, nunca o IP interno do WSL por
+presunção.
+
+#### WSL2 e Radmin
+
+Este projeto pode executar dentro do WSL2, mas o adaptador Radmin pertence ao
+Windows. O IP de `wsl hostname -I` não é o IP Radmin. Primeiro teste o acesso
+ao serviço pelo Windows. Se o WSL estiver em NAT (e não em *mirrored
+networking*), o Windows pode precisar de um encaminhamento **no próprio host**
+entre o IP Radmin e o IP atual do WSL; isso não é port forwarding do roteador:
+
+```powershell
+wsl hostname -I
+netsh interface portproxy add v4tov4 listenaddress=<IP_RADMIN_DO_MESTRE> listenport=3000 connectaddress=<IP_WSL> connectport=3000
+```
+
+Remova-o quando necessário:
+
+```powershell
+netsh interface portproxy delete v4tov4 listenaddress=<IP_RADMIN_DO_MESTRE> listenport=3000
+```
+
+O IP do WSL pode mudar após reiniciar; não fixe esse valor sem verificar. Uma
+alternativa é habilitar o *mirrored networking* do WSL2 e repetir o teste, sem
+assumir que ele está habilitado.
+
+#### Windows Defender Firewall
+
+Não desative o firewall e não configure encaminhamento no roteador. Crie uma
+regra TCP restrita ao adaptador Radmin e, idealmente, aos IPs dos jogadores:
+
+```powershell
+New-NetFirewallRule -DisplayName "Cyberpunk RED Mesa - Radmin" `
+  -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3000 `
+  -InterfaceAlias "Radmin VPN" -RemoteAddress <IP_DOS_JOGADORES> -Profile Any
+```
+
+Substitua `<IP_DOS_JOGADORES>` por uma lista autorizada separada por vírgula.
+Se o Windows não aceitar a restrição de interface no ambiente, mantenha a
+regra limitada aos endereços Radmin e confirme a regra efetiva com:
+
+```powershell
+Get-NetFirewallRule -DisplayName "Cyberpunk RED Mesa - Radmin" | Get-NetFirewallPortFilter
+```
+
+As variáveis server-side continuam somente no processo Node:
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` e, opcionalmente,
+`DISCORD_BOT_TOKEN`. Para Realtime, o build também precisa de
+`NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY`; sem elas, o app
+usa polling de segurança em vez de Realtime. Nunca coloque a service role key
+em uma variável `NEXT_PUBLIC_*`.
+
 ### Configuração
 
 1. Rode no SQL Editor do Supabase (junto com a migração do Discord) os arquivos `supabase/migrations/20260926000000_mesa_sessions.sql`, `supabase/migrations/20260927000000_mesa_combatant_source_key.sql`, `supabase/migrations/20260927000001_mesa_battles.sql` e `supabase/migrations/20260930000000_mesa_combatant_supplies.sql` — as tabelas `mesa_sessions`, `mesa_participants`, `mesa_characters`, `mesa_combats`, `mesa_combatants` e `mesa_battles` (RLS habilitado sem policies: só o servidor acessa, via service role) e as colunas `mesa_combatants.source_key` (identifica **qual inimigo do encontro** é cada linha da mesa; sem ela o app funciona, só não espelha a vida dos inimigos) e `mesa_combatants.supplies` (a **mochila do inimigo** — pente, reserva e cura; sem ela a linha da mesa não mostra munição nem item de cura). A tabela `mesa_battles` guarda o **histórico de partidas** e torna cada encontro de uso único (sem ela o combate continua funcionando, só não há histórico nem bloqueio de encontro repetido). As duas colunas são opcionais: o servidor detecta a ausência, regrava sem elas e o combate começa do mesmo jeito.

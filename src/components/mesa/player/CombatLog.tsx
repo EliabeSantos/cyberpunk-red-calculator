@@ -8,7 +8,7 @@
  * mostrava, agora dentro da tela do Player.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { MesaEvent } from "@/lib/mesa/types";
 import RollAuditDetails from "@/components/mesa/RollAuditDetails";
@@ -25,12 +25,31 @@ function formatTime(at: string): string {
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString();
 }
 
+function netEventLabel(text: string): string | null {
+  const value = text.toLowerCase();
+  if (value.includes("quickhack")) return "QUICKHACK";
+  if (value.includes("pathfinder") || value.includes("backdoor") || value.includes("control") || value.includes("zap") || value.includes("slide")) return "NET ACTION";
+  if (value.includes("black ice") || value.includes("ice")) return "BLACK ICE";
+  if (value.includes("jack in") || value.includes("jack out")) return "CONNECTION";
+  if (value.includes("floor") || value.includes("node") || value.includes("discov")) return "NET";
+  return null;
+}
+
 export default function CombatLog({ events }: Props) {
   const [expanded, setExpanded] = useState(false);
 
-  const recentRolls = events.filter((event) => event.kind === "roll").slice(-RECENT_ROLLS).reverse();
-  const reversed = [...events].reverse();
-  const visible = expanded ? reversed : reversed.slice(0, VISIBLE_LOG);
+  const recentRolls = useMemo(
+    () => events.filter((event) => event.kind === "roll").slice(-RECENT_ROLLS).reverse(),
+    [events],
+  );
+  const visible = useMemo(() => {
+    const reversed = [...events].reverse();
+    return expanded ? reversed : reversed.slice(0, VISIBLE_LOG);
+  }, [events, expanded]);
+  const visibleWithLabels = useMemo(
+    () => visible.map((event) => ({ event, label: netEventLabel(event.text) })),
+    [visible],
+  );
 
   return (
     <section className="player-mesa-panel player-mesa-log">
@@ -57,11 +76,12 @@ export default function CombatLog({ events }: Props) {
         <p className="mesa-hint">Nenhum evento ainda. O registro começa quando o combate abrir.</p>
       ) : (
         <ul className="player-mesa-events-list">
-          {visible.map((event, index) => (
-            <li key={`${event.at}-${index}`}>
-              <time dateTime={event.at}>{formatTime(event.at)}</time>
-             <span>
-               {event.text}
+            {visibleWithLabels.map(({ event, label }, index) => (
+             <li className={label ? "is-net-event" : ""} key={`${event.at}-${index}`}>
+               <time dateTime={event.at}>{formatTime(event.at)}</time>
+              <span>
+                 {label && <b className="mesa-event-kind">{label}</b>}
+                {event.text}
                <RollAuditDetails event={event} />
              </span>
             </li>

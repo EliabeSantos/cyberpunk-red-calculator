@@ -1,11 +1,12 @@
 import { rollDice, type DiceResult } from "@/lib/dice";
 import type { Character, RollHistoryEntry } from "@/types/character";
+import { createId } from "@/lib/id";
 
 export type HumanityLossResult = { cyberwareId: string; cyberwareName: string; expression?: string; rolls: number[]; humanityLost: number; humanityBefore: number; humanityAfter: number };
 
 export function applyHumanityLoss(character: Character, amount: number, reason: string, metadata: Partial<RollHistoryEntry> = {}): { character: Character; humanityBefore: number; humanityAfter: number } {
   const humanityBefore = character.humanity.current; const humanityAfter = Math.max(0, humanityBefore - Math.max(0, amount));
-  const entry: RollHistoryEntry = { id: crypto.randomUUID(), type: "humanity_loss", label: reason, characterId: character.id, expression: metadata.expression ?? "fixed", rolls: metadata.rolls ?? [], total: amount, timestamp: new Date().toISOString(), cyberwareId: metadata.cyberwareId, cyberwareName: metadata.cyberwareName, humanityBefore, humanityAfter };
+  const entry: RollHistoryEntry = { id: createId(), type: "humanity_loss", label: reason, characterId: character.id, expression: metadata.expression ?? "fixed", rolls: metadata.rolls ?? [], total: amount, timestamp: new Date().toISOString(), cyberwareId: metadata.cyberwareId, cyberwareName: metadata.cyberwareName, humanityBefore, humanityAfter };
   return { humanityBefore, humanityAfter, character: { ...character, humanity: { ...character.humanity, current: humanityAfter }, rollHistory: [entry, ...character.rollHistory] } };
 }
 
@@ -33,7 +34,7 @@ export function adjustHumanity(
   const humanityAfter = newHumanity;
 
   const entry: RollHistoryEntry = {
-    id: crypto.randomUUID(),
+    id: createId(),
     type: "humanity_loss", // reutiliza o tipo existente; o label indica que foi ajuste
     label: `Ajuste de Humanity: ${reason}`,
     characterId: character.id,

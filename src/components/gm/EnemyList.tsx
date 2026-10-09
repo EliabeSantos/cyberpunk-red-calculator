@@ -1,5 +1,8 @@
 "use client";
 
+/* Initial data hydration is an intentional external localStorage sync. */
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useState, useEffect } from "react";
 import type { Enemy } from "@/types/enemy";
 import { loadEnemies, removeEnemy, importCatalogEnemies } from "@/lib/gmStorage";

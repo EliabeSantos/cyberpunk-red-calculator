@@ -96,8 +96,13 @@ export function normalizeSupplyInventory(items: unknown): EnemySupply[] {
     if (itemId.length === 0) continue;
 
     const existing = merged.get(itemId);
-    if (existing) existing.quantity += quantity;
-    else merged.set(itemId, { itemId, item: name, quantity });
+    const category = entry.category === "chipware" ? "chipware" as const : undefined;
+    if (existing) {
+      existing.quantity += quantity;
+      if (category) existing.category = category;
+    } else {
+      merged.set(itemId, { itemId, item: name, quantity, ...(category ? { category } : {}) });
+    }
   }
 
   return Array.from(merged.values());

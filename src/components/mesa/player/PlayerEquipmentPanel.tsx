@@ -9,6 +9,7 @@
  */
 
 import { useRef, useState } from "react";
+import { createId } from "@/lib/id";
 
 import { reloadMesa } from "@/lib/mesa/client";
 import { evaluateMesaAction } from "@/lib/mesa/actionGate";
@@ -48,7 +49,7 @@ export default function PlayerEquipmentPanel({ state, me, busy, run, weapons }: 
     try {
       await run(
         async () => {
-          await reloadMesa({ sessionId: state.session.id, weaponId, resolutionId: crypto.randomUUID() });
+          await reloadMesa({ sessionId: state.session.id, weaponId, resolutionId: createId() });
           setReloadFeedback({ kind: "success", message: "Recarga concluída. Estado da Mesa atualizado." });
         },
         {

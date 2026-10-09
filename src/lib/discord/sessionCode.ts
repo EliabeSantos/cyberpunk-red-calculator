@@ -9,6 +9,8 @@
 /** 3–48 caracteres: letras minúsculas, números e hífen (começa com letra/número). */
 const SESSION_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{2,47}$/;
 
+import { createId } from "@/lib/id";
+
 /** Normaliza um código de mesa; retorna `null` quando inválido. */
 export function normalizeSessionCode(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
@@ -18,6 +20,6 @@ export function normalizeSessionCode(raw: unknown): string | null {
 
 /** Gera um código curto para uma nova mesa (ex.: `mesa-3f9a12c4`). */
 export function generateSessionCode(): string {
-  const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+  const suffix = createId().replace(/-/g, "").slice(0, 8);
   return `mesa-${suffix}`;
 }

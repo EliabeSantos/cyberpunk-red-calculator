@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import EnemyList from "@/components/gm/EnemyList";
 import type { Enemy, EnemySupply } from "@/types/enemy";
-import type { EnemyRollContext } from "@/lib/enemyRolls";
+import { getAvailableEnemyAttacks, rollEnemyDamage, type EnemyAttackRollResult, type EnemyDamageRollResult, type EnemyRollContext, type EnemySkillCheckResult } from "@/lib/enemyRolls";
 import { applyReload, getSupplyHealAmount, isHealingSupply, planReload } from "@/data/enemySupplies";
 import { mergeCatalogSupplies } from "@/data/gm-enemies";
 import { publishMesaGmAttack, publishMesaGmDamage, publishMesaGmSkill } from "@/lib/mesa/gmRollPublish";
@@ -231,9 +231,9 @@ function EnemyDiceView({
   enemy: Enemy;
   onClose: () => void;
 }) {
-  const [lastAttackResult, setLastAttackResult] = useState<any>(null);
-  const [lastSkillResult, setLastSkillResult] = useState<any>(null);
-  const [lastDamageResult, setLastDamageResult] = useState<any>(null);
+  const [lastAttackResult, setLastAttackResult] = useState<EnemyAttackRollResult | null>(null);
+  const [lastSkillResult, setLastSkillResult] = useState<EnemySkillCheckResult | null>(null);
+  const [lastDamageResult, setLastDamageResult] = useState<EnemyDamageRollResult | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<string>("");
   const [modifier, setModifier] = useState(0);
 
@@ -323,7 +323,6 @@ function EnemyDiceView({
 
   const rollDamage = async () => {
     if (!lastAttackResult?.damageDice) return;
-    const { rollEnemyDamage } = await import("@/lib/enemyRolls");
     const result = rollEnemyDamage(enemy, lastAttackResult.damageDice, lastAttackResult.label, lastAttackResult.weaponId);
     
     if ("result" in result) {
@@ -338,7 +337,6 @@ function EnemyDiceView({
     }
   };
 
-  const { getAvailableEnemyAttacks } = require("@/lib/enemyRolls");
   const attacks = getAvailableEnemyAttacks(enemy) as Array<{ id: string; label: string; detail: string }>;
   /** Alguma arma daqui tem pente (corpo a corpo não tem munição nenhuma). */
   const hasMagazine = enemy.weapons.some((weapon) => typeof weapon.magazine === "number");
@@ -426,13 +424,13 @@ function EnemyDiceView({
                 {lastAttackResult.stat.id} {lastAttackResult.stat.value} + {lastAttackResult.skill.name} {lastAttackResult.skill.value} + 1d10
               </div>
               <div className="enemy-roll-dice">
-                {lastAttackResult.diceRolls.map((r: any, idx: number) => (
+                {lastAttackResult.diceRolls.map((r, idx) => (
                   <span key={idx} className={`enemy-die ${r.type}`}>[{r.value}]</span>
                 ))}
               </div>
               {lastAttackResult.modifiers.length > 0 && (
                 <div className="enemy-roll-modifiers">
-                  {lastAttackResult.modifiers.map((m: any) => (
+                  {lastAttackResult.modifiers.map((m) => (
                     <span key={m.source}>{m.source} {m.value >= 0 ? "+" : ""}{m.value}</span>
                   ))}
                 </div>
@@ -558,7 +556,7 @@ function EnemyDiceView({
                 {lastSkillResult.statId} {lastSkillResult.statBase} + {lastSkillResult.skillName} {lastSkillResult.skillLevel} + 1d10
               </div>
               <div className="enemy-roll-dice">
-                {lastSkillResult.diceRolls.map((r: any, idx: number) => (
+                {lastSkillResult.diceRolls.map((r, idx) => (
                   <span key={idx} className={`enemy-die ${r.type}`}>[{r.value}]</span>
                 ))}
               </div>

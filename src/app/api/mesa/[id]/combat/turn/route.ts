@@ -6,7 +6,7 @@
  */
 import { errorResponse, ok, tokenFrom } from "@/lib/mesa/http";
 import { endTurn } from "@/lib/mesa/store";
-import { publishMesaState } from "@/lib/mesa/realtimeServer";
+import { createMesaHostingInfrastructure } from "@/lib/mesa/hostingInfrastructure";
 
 export const runtime = "nodejs";
 
@@ -18,7 +18,7 @@ export async function POST(request: Request, context: Context): Promise<Response
   try {
     const { id } = await context.params;
     await endTurn({ sessionId: id, token: tokenFrom(request) });
-    await publishMesaState(id);
+    await (await createMesaHostingInfrastructure()).eventTransport.publishInvalidation(id);
     return ok();
   } catch (error) {
     return errorResponse(error);

@@ -14,6 +14,7 @@
  */
 import { errorResponse, ok, readJson, tokenFrom } from "@/lib/mesa/http";
 import { endCombat, startCombat } from "@/lib/mesa/store";
+import { createMesaHostingInfrastructure } from "@/lib/mesa/hostingInfrastructure";
 import { publishMesaState } from "@/lib/mesa/realtimeServer";
 
 export const runtime = "nodejs";
@@ -34,7 +35,8 @@ export async function POST(request: Request, context: Context): Promise<Response
       restart: body.restart,
       gmParticipation: body.gmParticipation,
     });
-    await publishMesaState(id);
+    const infrastructure = await createMesaHostingInfrastructure();
+    await infrastructure.eventTransport.publishInvalidation(id);
     return ok();
   } catch (error) {
     return errorResponse(error);
@@ -45,6 +47,8 @@ export async function DELETE(request: Request, context: Context): Promise<Respon
   try {
     const { id } = await context.params;
     await endCombat({ sessionId: id, token: tokenFrom(request) });
+    // Encerramento ainda está no caminho Supabase e permanece fora da
+    // migração F1.66.25; sua publicação segue a implementação existente.
     await publishMesaState(id);
     return ok();
   } catch (error) {

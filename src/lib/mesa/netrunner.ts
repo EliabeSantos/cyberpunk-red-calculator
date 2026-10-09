@@ -73,6 +73,7 @@ export const DISCONNECTED_NETRUNNER_STATE: NetrunnerConnectionState = {
   cyberdeckSlots: 0,
   maxQuickhackSlots: 4,
   equippedQuickhackIds: [],
+  cyberdeckStatus: "functional",
 };
 
 export function isSupportedConnectionType(
@@ -136,6 +137,7 @@ export function connectedNetrunnerState(
     cyberdeckSlots: getCyberdeckSlots(interfaceRank),
     maxQuickhackSlots: 4,
     equippedQuickhackIds,
+    cyberdeckStatus: "functional",
   };
 }
 
@@ -157,6 +159,7 @@ export function safeJackOutState(previous?: NetrunnerConnectionState): Netrunner
     cyberdeckSlots: previous.cyberdeckSlots,
     maxQuickhackSlots: 4,
     equippedQuickhackIds: [...previous.equippedQuickhackIds],
+    cyberdeckStatus: previous.cyberdeckStatus ?? "functional",
     programs: previous.programs ? previous.programs.map((program) => ({ ...program })) : [],
     brainDamage: previous.brainDamage ?? 0,
   } : { ...DISCONNECTED_NETRUNNER_STATE };

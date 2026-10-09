@@ -47,7 +47,7 @@ import type { AttackType } from "@/types/attack";
 
 /**
  * `EncounterParticipant.id` continua opcional no tipo original porque fichas
- * antigas não tinham (o `id` nasce no `crypto.randomUUID()` de
+ * antigas não tinham (o `id` nasce no utilitário `createId()` de
  * `ensureEncounterIds`, `src/lib/gmStorage.ts:385`).
  *
  * O adapter **exige a entidade já normalizada** — ele não gera chave nenhuma:

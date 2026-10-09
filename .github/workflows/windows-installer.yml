@@ -1,0 +1,56 @@
+name: Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "installer/windows/**"
+      - "scripts/windows/**"
+      - "scripts/local-start.mjs"
+      - "scripts/migrate-local.mjs"
+      - "supabase/migrations/**"
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/windows-installer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use pinned Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build and compile installer
+        shell: pwsh
+        run: .\scripts\windows\build-installer.ps1
+
+      - name: Check artifact contents
+        shell: pwsh
+        run: |
+          $artifact = "installer\windows\output\CyberpunkRedCalculator-Setup.exe"
+          if (-not (Test-Path $artifact)) { throw "Installer artifact was not created: $artifact" }
+          $size = (Get-Item $artifact).Length
+          if ($size -lt 1MB) { throw "Installer artifact is unexpectedly small: $size bytes" }
+          Write-Host "Created $artifact ($size bytes)"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CyberpunkRedCalculator-Windows-${{ github.sha }}
+          path: installer/windows/output/CyberpunkRedCalculator-Setup.exe
+          if-no-files-found: error

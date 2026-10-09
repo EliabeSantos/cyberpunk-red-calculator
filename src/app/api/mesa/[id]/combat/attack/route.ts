@@ -1,6 +1,7 @@
 import { errorResponse, ok, readJson, tokenFrom } from "@/lib/mesa/http";
 import { publishMesaState } from "@/lib/mesa/realtimeServer";
 import { attackIntegrated } from "@/lib/mesa/store";
+import { markMesaPostCommitStage } from "@/lib/mesa/telemetryServer";
 
 export const runtime = "nodejs";
 
@@ -27,7 +28,9 @@ export async function POST(request: Request, context: Context): Promise<Response
       targetType: body.targetType,
       obstacleId: body.obstacleId,
     });
+    const postCommitStartedAt = performance.now();
     if (outcome.committed) await publishMesaState(id);
+    markMesaPostCommitStage(performance.now() - postCommitStartedAt);
     return ok(outcome.result);
   } catch (error) {
     return errorResponse(error);

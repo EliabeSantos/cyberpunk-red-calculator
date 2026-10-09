@@ -19,6 +19,8 @@
 
 # production
 /build
+/installer/windows/stage/
+/installer/windows/output/
 
 # misc
 .DS_Store

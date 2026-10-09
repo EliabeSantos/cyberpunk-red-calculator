@@ -1,5 +1,10 @@
 "use client";
 
+/* The effect hydrates localStorage-backed encounter data after mount. */
+/* eslint-disable react-hooks/set-state-in-effect */
+
+import { createId } from "@/lib/id";
+
 import { useState, useEffect, useCallback } from "react";
 import {
   saveEncounter,
@@ -539,7 +544,7 @@ export default function EncountersPageClient() {
   const handleAddCondition = (participantIndex: number) => {
     if (!encounter || conditionName.trim() === "") return;
     const next = addParticipantCondition(encounter, participantIndex, {
-      id: crypto.randomUUID(),
+      id: createId(),
       name: conditionName.trim(),
     });
     setEncounter(next);

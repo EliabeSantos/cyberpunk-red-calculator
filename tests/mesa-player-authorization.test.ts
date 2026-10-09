@@ -5,6 +5,7 @@ import {
   authenticate,
   authorizeCombatAttackActor,
   MesaError,
+  requireGM,
   type Actor,
 } from "../src/lib/mesa/store.ts";
 
@@ -48,6 +49,23 @@ test("request sem token é rejeitada antes de consultar a Mesa", async () => {
     () => authenticate("session-a", null),
     (caught: unknown) => caught instanceof MesaError && caught.status === 401 && caught.code === "missing_token",
   );
+});
+
+test("somente o participante apontado por gm_id é Mestre da Mesa", () => {
+  requireGM(actor("gm", "gm-1"));
+
+  const forgedRole = actor("gm", "participant-from-another-mesa");
+  forgedRole.session.gmId = "gm-1";
+  const error = errorOf(() => requireGM(forgedRole));
+  assert.equal(error.status, 403);
+  assert.equal(error.code, "gm_only");
+
+  const crossMesa = actor("gm", "gm-1", "session-b");
+  crossMesa.session.gmId = "gm-1";
+  crossMesa.participant.sessionId = "session-a";
+  const crossMesaError = errorOf(() => requireGM(crossMesa));
+  assert.equal(crossMesaError.status, 403);
+  assert.equal(crossMesaError.code, "gm_only");
 });
 
 test("GM mantém a política atual para combatants da própria Mesa", () => {

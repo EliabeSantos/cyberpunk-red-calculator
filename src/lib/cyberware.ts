@@ -4,6 +4,7 @@ import { applyHumanityLoss, rollHumanityLoss, type HumanityLossResult } from "@/
 import { calculateMaximumHumanityFromCyberware } from "@/lib/calculations";
 import { resolveInstalledCyberwareItem } from "@/lib/cyberwareEffects";
 import type { Character, CyberwareItem, InventoryItem, Weapon } from "@/types/character";
+import { createId } from "@/lib/id";
 
 export type CyberwareInstallationResult = { character: Character; humanityLoss: HumanityLossResult | null };
 
@@ -30,11 +31,11 @@ export function installCyberware(character: Character, inventoryItem: InventoryI
   // Arma integrada: o cyberware vira um ataque utilizável enquanto estiver instalado.
   const integrated = catalogItem ? getIntegratedWeaponProfile(catalogItem) : undefined;
   const weapon: Weapon | undefined = catalogItem && integrated
-    ? { id: crypto.randomUUID(), catalogItemId: catalogItem.id, name: integrated.name, damage: integrated.damage, rateOfFire: integrated.rateOfFire, skill: integrated.skillId, attackType: integrated.type }
+    ? { id: createId(), catalogItemId: catalogItem.id, name: integrated.name, damage: integrated.damage, rateOfFire: integrated.rateOfFire, skill: integrated.skillId, attackType: integrated.type }
     : undefined;
 
   const cyberware: CyberwareItem = {
-    id: crypto.randomUUID(),
+    id: createId(),
     catalogItemId: catalogItem?.id ?? inventoryItem.catalogItemId,
     name: inventoryItem.name,
     humanityLoss: source.humanityLoss === undefined ? undefined : String(source.humanityLoss),
@@ -76,7 +77,7 @@ export function removeCyberware(character: Character, cyberwareId: string): Char
 
   // Adiciona o cyberware removido ao inventário
   const inventoryItem: InventoryItem = {
-    id: crypto.randomUUID(),
+    id: createId(),
     catalogItemId,
     name: removedCyberware.name,
     quantity: 1,

@@ -7,10 +7,12 @@
 
 import { DatabaseNotConfiguredError, DatabaseQueryError } from "@/lib/supabaseAdmin";
 import { MesaError, messageForError } from "@/lib/mesa/store";
+import { beginMesaGatewayTelemetry, finishMesaGatewayTelemetry } from "@/lib/mesa/telemetryServer";
 
 export const TOKEN_HEADER = "x-mesa-token";
 
 export function tokenFrom(request: Request): string | undefined {
+  beginMesaGatewayTelemetry(request);
   return request.headers.get(TOKEN_HEADER) ?? undefined;
 }
 
@@ -30,6 +32,7 @@ export async function readJson(request: Request): Promise<Record<string, unknown
 
 /** Converte qualquer erro em Response JSON com status adequado. */
 export function errorResponse(error: unknown): Response {
+  finishMesaGatewayTelemetry(false, error instanceof MesaError ? "expected_rejection" : "infrastructure_error");
   if (error instanceof MesaError) {
     return Response.json({ ok: false, error: error.message, code: error.code }, { status: error.status });
   }
@@ -43,5 +46,6 @@ export function errorResponse(error: unknown): Response {
 }
 
 export function ok(payload: Record<string, unknown> = {}, status = 200): Response {
+  finishMesaGatewayTelemetry(true, "success");
   return Response.json({ ok: true, ...payload }, { status });
 }

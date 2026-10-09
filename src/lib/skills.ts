@@ -5,6 +5,7 @@ import { getCyberwarePhysicalModifiers, getCyberwareSkillModifierFor } from "@/l
 import type { Character, Skill, RollHistoryEntry } from "@/types/character";
 import type { SkillCheckActionContext } from "@/lib/combat/contract";
 import type { RandomSource } from "@/lib/combat/contract";
+import { createId } from "@/lib/id";
 
 /** Registro de check de perícia no histórico */
 interface SkillCheckHistoryEntry {
@@ -150,7 +151,7 @@ export function rollSkillCheck(
 
   // Rolagem de 1d10 com exploding dice (crítico em 10, falha crítica em 1)
   interface RollDetail { value: number; type: "normal" | "crit" | "fumble" | "crit_add" | "fumble_sub"; }
-  let allRolls: RollDetail[] = [];
+  const allRolls: RollDetail[] = [];
   let diceTotal = 0;
   let isCritical = false;
   let isFumble = false;
@@ -230,7 +231,7 @@ export function rollSkillCheck(
 
   // Registra no histórico de rolagens
   const historyEntry: RollHistoryEntry = {
-    id: crypto.randomUUID(),
+    id: createId(),
     type: "skill_check",
     label: skill.name,
     characterId: character.id,

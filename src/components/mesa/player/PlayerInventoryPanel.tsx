@@ -1,5 +1,7 @@
 "use client";
 
+import { createId } from "@/lib/id";
+
 /**
  * F1.13.1/F1.13.2 — mochila autoritativa do Player durante a Mesa.
  *
@@ -72,7 +74,7 @@ export default function PlayerInventoryPanel({ state, me, busy, run, supplies }:
             sessionId: state.session.id,
             actorCombatantId: me.id,
             itemId,
-            resolutionId: crypto.randomUUID(),
+            resolutionId: createId(),
           });
           setFeedback({
             kind: "ok",

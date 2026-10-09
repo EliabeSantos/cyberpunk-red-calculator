@@ -181,6 +181,8 @@ export interface NetrunnerConnectionState {
   equippedQuickhackIds: string[];
   programs?: NetProgram[];
   brainDamage?: number;
+  /** Minimal authoritative equipment condition; no Cyberdeck HP is modeled. */
+  cyberdeckStatus?: "functional" | "destroyed";
 }
 
 export interface MesaQuickhackEffect {
@@ -208,6 +210,7 @@ export type TacticalPoint = TacticalPosition;
 
 import type { TacticalCoverThickness } from "@/lib/mesa/tacticalCoverCatalog";
 import { TACTICAL_COVER_MATERIALS as OFFICIAL_TACTICAL_COVER_MATERIALS } from "@/lib/mesa/tacticalCoverCatalog";
+import type { HackableDeviceState, HackableObjectType } from "@/lib/mesa/hackableObjects";
 
 export const TACTICAL_COVER_MATERIALS = OFFICIAL_TACTICAL_COVER_MATERIALS;
 export const TACTICAL_LEGACY_COVER_MATERIALS = ["brick", "custom"] as const;
@@ -255,15 +258,36 @@ export interface TacticalGeometry {
   doors: TacticalDoor[];
 }
 
-export type TacticalHackableObjectType = "camera" | "terminal" | "door_panel" | "console" | "access_panel" | "generic";
+export type TacticalHackableObjectType = HackableObjectType;
 
-/** Representação física pública; a autoridade continua no Control Node/NET. */
+/** Estado autoritativo de câmera (F1.63); `online` é o implícito. */
+export type TacticalHackableDeviceState = HackableDeviceState;
+
+/**
+ * Representação física/visual do Hackable Object no Tactical Map (F1.62/F1.63).
+ *
+ * O objeto NÃO guarda estado lógico do Control Node: `controlNodeId` aponta
+ * para a autoridade (Control Node da Architecture). Quando o tipo é `door`,
+ * `geometryDoorId` aponta para a única porta física em
+ * `TacticalGeometry.doors`, dona do estado `open`/`closed`. Quando o tipo é
+ * `camera`, `deviceState` é a ÚNICA cópia do estado `online`/`disabled` (a
+ * câmera não é geometria e não vira parede, porta, colisão, movimento,
+ * cobertura, distância ou alcance). `name` e `controlNodeId` têm alias
+ * legados (`label`, `linkedControlNodeId`) aceitos somente na leitura do mapa
+ * persistido.
+ */
 export interface TacticalHackableObject {
+  /** Identidade estável; nunca derivada do tipo, do nome ou da posição. */
   id: string;
   type: TacticalHackableObjectType;
+  name?: string;
   position: TacticalPoint;
-  label?: string;
-  linkedControlNodeId?: string;
+  /** Autoridade lógica; ausente quando o objeto ainda não foi vinculado. */
+  controlNodeId?: string;
+  /** Referência à porta física existente; somente para `type === "door"`. */
+  geometryDoorId?: string;
+  /** Estado do dispositivo; somente para `type === "camera"`. */
+  deviceState?: TacticalHackableDeviceState;
   interactionRadius?: number;
   active: boolean;
 }
@@ -323,7 +347,7 @@ export interface MesaSupplies {
   /** Capacidade do pente. */
   magazine?: number;
   /** Reserva na mochila: munição para recarregar e itens de cura. */
-  inventory?: Array<{ item: string; quantity: number; itemId?: string }>;
+  inventory?: Array<{ item: string; quantity: number; itemId?: string; category?: "chipware" }>;
 }
 
 export interface MesaCombatant {

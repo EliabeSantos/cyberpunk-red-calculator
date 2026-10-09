@@ -2,6 +2,7 @@ import { rollDice } from "@/lib/dice";
 import type { Character, RollHistoryEntry } from "@/types/character";
 import { quickhackDefinitions } from "@/data/quickhacks";
 import type { Quickhack, QuickhackCategory } from "@/data/quickhacks";
+import { createId } from "@/lib/id";
 
 export type { Quickhack, QuickhackCategory } from "@/data/quickhacks";
 
@@ -67,7 +68,7 @@ export function rollQuickhack(
   };
 
   const historyEntry: RollHistoryEntry = {
-    id: crypto.randomUUID(),
+    id: createId(),
     type: "skill_check",
     label: `Quickhack: ${quickhackDefinitions[quickhackId].name}`,
     characterId: character.id,

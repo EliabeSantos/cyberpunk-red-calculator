@@ -70,7 +70,9 @@ function resetEnemy(hp = 20): void {
   tables.mesa_sessions.push({
     id: SESSION_ID,
     name: "Mesa Engine",
-    gm_id: "gm",
+    // A Mesa válida aponta gm_id para o id persistido do participante GM.
+    // Identidades incompatíveis continuam cobertas pelos testes de autorização.
+    gm_id: "gm-participant",
     status: "active",
     join_code: "ENGIN",
     created_at: "2026-10-04T00:00:00.000Z",

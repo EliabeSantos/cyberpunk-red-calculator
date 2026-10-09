@@ -2,17 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { createId } from "@/lib/id";
 import { moveMesa, positionCombatant, saveTacticalMap, MesaApiError } from "@/lib/mesa/client";
 import { addTacticalDoor, addTacticalWall, coverHPAfterProfileChange, DEFAULT_TACTICAL_GRID_SIZE_METERS, deriveTacticalCoverProfile, isMeleeAttackType, removeTacticalGeometrySegment, resolveMeleeRange, snapTacticalPosition, stripDerivedTacticalCoverValues, tacticalCoverObstacleId, tacticalCoverTargetId, tacticalGridSpacingPixels, tacticalMovementFeedback, tacticalMovementRadiusPixels, tacticalPositionsOverlap, tacticalWeaponRangeFeedback, toggleTacticalDoor, updateTacticalGeometrySegment, updateTacticalObstacleCover } from "@/lib/mesa/tacticalMap";
 import { tacticalTargetSelectable } from "@/lib/mesa/playerScreen";
+import { HACKABLE_OBJECT_TYPES, hackableObjectCameraState, hackableObjectTypeLabel } from "@/lib/mesa/hackableObjects";
 import { calculateTacticalCover, DEFAULT_TACTICAL_OBSTACLE_THICKNESS, tacticalObstacleArea, validateMovementPath, type TacticalMovementPathResult } from "@/lib/mesa/tacticalGeometry";
 import { TACTICAL_COVER_MATERIALS } from "@/lib/mesa/types";
 import { TACTICAL_COVER_THICKNESSES } from "@/lib/mesa/tacticalCoverCatalog";
-import type { MesaState, TacticalCoverMaterial, TacticalCoverThickness, TacticalGeometry, TacticalHackableObject, TacticalHackableObjectType, TacticalMap, TacticalPosition } from "@/lib/mesa/types";
+import type { MesaState, TacticalAccessPoint, TacticalCoverMaterial, TacticalCoverThickness, TacticalGeometry, TacticalHackableDeviceState, TacticalHackableObject, TacticalHackableObjectType, TacticalMap, TacticalPosition } from "@/lib/mesa/types";
 import type { CombatWeapon } from "@/lib/combat/contract";
 import type { AttackType } from "@/types/attack";
 import { tacticalDistance } from "@/lib/mesa/tacticalMap";
-import { isRangedAttackType } from "@/lib/attacks";
+import { markMesaVisualConfirmation } from "@/lib/mesa/telemetry";
+
+/* These effects reconcile local drag/edit state with Realtime snapshots and
+ * ResizeObserver/DOM portal state; refs remain imperative pointer-handler state. */
+/* eslint-disable react-hooks/set-state-in-effect, react-hooks/refs */
 
 interface Props {
   state: MesaState;
@@ -25,6 +31,8 @@ interface Props {
   selectedSkillId?: string;
   selectedHackableObjectId?: string | null;
   onSelectHackableObject?: (objectId: string | null) => void;
+  selectedAccessPointId?: string | null;
+  onSelectAccessPoint?: (accessPointId: string | null) => void;
   gmMapToolsVisible?: boolean;
 }
 type MoveStatus = "dragging" | "processing" | "confirmed" | "rejected";
@@ -45,19 +53,36 @@ interface LocalMove {
 const DEFAULT_MAP: TacticalMap = { imageUrl: "", enabled: false, width: 1000, height: 600, pixelsPerMeter: 50, grid: { enabled: false, size: DEFAULT_TACTICAL_GRID_SIZE_METERS, snap: false } };
 const ENEMY_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23301f35'/%3E%3Cpath d='M18 78 28 35 50 18l22 17 10 43H18Z' fill='%23ff695c'/%3E%3Ccircle cx='39' cy='48' r='6' fill='%230b1114'/%3E%3Ccircle cx='61' cy='48' r='6' fill='%230b1114'/%3E%3Cpath d='M35 68h30' stroke='%230b1114' stroke-width='6'/%3E%3C/svg%3E";
 
+/** Rótulos vêm do catálogo tipado; aqui ficam apenas os ícones da UI. */
 function hackableLabel(type: TacticalHackableObjectType): string {
-  return { camera: "Câmera", terminal: "Terminal", door_panel: "Painel", console: "Console", access_panel: "Acesso", generic: "Interface" }[type];
+  return hackableObjectTypeLabel(type);
 }
 
+const HACKABLE_ICONS: Record<TacticalHackableObjectType, string> = {
+  door: "▯",
+  camera: "◎",
+  terminal: "▣",
+  console: "▤",
+  access_panel: "◈",
+  security_system: "⌾",
+  generic: "⌁",
+};
+
 function hackableIcon(type: TacticalHackableObjectType): string {
-  return { camera: "◎", terminal: "▣", door_panel: "⌗", console: "▤", access_panel: "◈", generic: "⌁" }[type];
+  return HACKABLE_ICONS[type];
 }
 
 function validPosition(position: TacticalPosition): TacticalPosition {
   return { x: Math.max(0, Math.min(1, position.x)), y: Math.max(0, Math.min(1, position.y)) };
 }
 
-export default function TacticalView({ state, onNotice, selectedTargetId, onSelectTarget, controlledCombatantId, selectedWeapon, selectedAttackType, selectedSkillId, selectedHackableObjectId, onSelectHackableObject, gmMapToolsVisible = true }: Props) {
+function geometryDependency(geometry: TacticalGeometry): string {
+  return [...geometry.walls, ...geometry.doors]
+    .map((entry) => [entry.id, entry.type, entry.start.x, entry.start.y, entry.end.x, entry.end.y, entry.thickness, "state" in entry ? entry.state : "", entry.destroyed].join(":"))
+    .join("|");
+}
+
+export default function TacticalView({ state, onNotice, selectedTargetId, onSelectTarget, controlledCombatantId, selectedWeapon, selectedAttackType, selectedSkillId, selectedHackableObjectId, onSelectHackableObject, selectedAccessPointId, onSelectAccessPoint, gmMapToolsVisible = true }: Props) {
   const map = state.session.tacticalMap ?? DEFAULT_MAP;
   const isGM = state.viewer.role === "gm";
   const combatActive = state.combat?.status === "active";
@@ -184,7 +209,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
     pointerStartRef.current = { x: event.clientX, y: event.clientY };
     draggedPastThresholdRef.current = false;
     const authoritative = combatant.position ?? { x: combatant.kind === "enemy" ? 0.78 : 0.22, y: 0.5 };
-    const resolutionId = crypto.randomUUID();
+    const resolutionId = createId();
     draggingRef.current = id;
     setDragging(id);
     setLocalMoves((current) => ({ ...current, [id]: {
@@ -250,6 +275,9 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
         : await positionCombatant(state.session.id, id, target).then(() => ({ position: target }));
       const confirmed = result.position ?? target;
       setLocalMoves((current) => current[id] ? { ...current, [id]: { ...current[id], position: confirmed, authoritative: confirmed, status: "confirmed" } } : current);
+      if (combatActive && initiativeStarted && "committed" in result && result.committed) {
+        markMesaVisualConfirmation({ sessionId: state.session.id, resolutionId: move.resolutionId });
+      }
       onNotice(combatActive ? "Movimento confirmado." : "Posição salva.", "ok");
     } catch (error) {
       setLocalMoves((current) => current[id] ? { ...current, [id]: { ...current[id], position: current[id].authoritative, status: "rejected" } } : current);
@@ -288,6 +316,15 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
   function selectHackableObject(id: string | null) {
     setSelectedObjectId(id);
     onSelectHackableObject?.(id);
+    if (id) {
+      onSelectAccessPoint?.(null);
+    }
+  }
+
+  function selectAccessPoint(accessPoint: TacticalAccessPoint) {
+    if (geometryEditing) return;
+    onSelectAccessPoint?.(accessPoint.id);
+    onSelectHackableObject?.(null);
   }
 
   function persistHackableObjects(next: TacticalMap) {
@@ -296,7 +333,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
   }
 
   function addHackableObject(type: TacticalHackableObjectType) {
-    const object: TacticalHackableObject = { id: crypto.randomUUID(), type, position: { x: 0.5, y: 0.5 }, label: hackableLabel(type), active: true };
+  const object: TacticalHackableObject = { id: createId(), type, position: { x: 0.5, y: 0.5 }, name: hackableObjectTypeLabel(type), active: true };
     const next = { ...mapDraft, hackableObjects: [...(mapDraft.hackableObjects ?? []), object] };
     setMapDraft(next);
     selectHackableObject(object.id);
@@ -396,7 +433,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
     setGeometryInteraction(null);
     if (interaction.kind === "draw") {
       if (Math.hypot(interaction.current.x - interaction.start.x, interaction.current.y - interaction.start.y) < 0.01) return;
-      const id = crypto.randomUUID();
+      const id = createId();
       const previous = geometryBeforeInteractionRef.current;
       const next = interaction.current && geometryMode === "door"
         ? addTacticalDoor(previous, { id, type: "door", start: interaction.start, end: interaction.current, thickness: DEFAULT_TACTICAL_OBSTACLE_THICKNESS, state: "closed" })
@@ -419,6 +456,10 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
 
   const mapStyle = useMemo(() => ({ aspectRatio: `${map.height > 0 ? map.width : 1000} / ${map.height > 0 ? map.height : 600}` }), [map.height, map.width]);
   const geometry = (isGM ? mapDraft.geometry : map.geometry) ?? { walls: [], doors: [] };
+  // Snapshots de HP/turno recriam objetos de estado, mas não alteram esta
+  // dependência física. O LOS/Cover pesado só deve recalcular quando a
+  // geometria ou as posições do par mudarem.
+  const geometryKey = geometryDependency(geometry);
   function movementPathFeedback(origin: TacticalPosition, destination: TacticalPosition): TacticalMovementPathResult {
     if (!combatActive || !initiativeStarted) return { valid: true };
     return validateMovementPath(origin, destination, geometry);
@@ -449,23 +490,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
     updateLocalGeometry(next);
     void persistGeometry(next, previous);
   }
-  const attackFeedback = useMemo(() => {
-    if (!combatActive || (!selectedWeapon && !selectedAttackType) || !selectedTargetId) return null;
-    const attacker = isGM
-      ? state.combatants.find((entry) => entry.id === controlledCombatantId)
-      : state.combatants.find((entry) => entry.participantId === state.viewer.participantId && entry.kind === "character");
-    const target = state.combatants.find((entry) => entry.id === selectedTargetId);
-    if (!attacker || !target || attacker.id === target.id) return null;
-    const distance = tacticalDistance(positionFor(attacker), positionFor(target), map);
-    const resolvedAttackType = selectedAttackType ?? selectedWeapon?.attackType;
-     if (!resolvedAttackType || isMeleeAttackType(resolvedAttackType, selectedSkillId ?? selectedWeapon?.skill)) {
-       const meleeRange = resolveMeleeRange(positionFor(attacker), positionFor(target), map);
-       return { attacker, target, distance, ...meleeRange, withinRange: meleeRange.inRange, rangeMeters: null, melee: true as const };
-     }
-     const result = tacticalWeaponRangeFeedback(positionFor(attacker), positionFor(target), map, selectedWeapon);
-     return { attacker, target, ...result, melee: false as const };
-  }, [combatActive, controlledCombatantId, isGM, map, selectedAttackType, selectedSkillId, selectedTargetId, selectedWeapon, state.combatants, state.viewer.participantId, localMoves]);
-  const losPair = useMemo(() => {
+  const tacticalPair = useMemo(() => {
     if (!combatActive || !selectedTargetId) return null;
     const attacker = isGM
       ? state.combatants.find((entry) => entry.id === controlledCombatantId)
@@ -474,11 +499,33 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
     if (!attacker || !target || attacker.id === target.id) return null;
     return { attacker, target };
   }, [combatActive, controlledCombatantId, isGM, selectedTargetId, state.combatants, state.viewer.participantId]);
-  const losFeedback = useMemo(() => {
-    if (!losPair) return null;
-    const cover = calculateTacticalCover(positionFor(losPair.attacker), positionFor(losPair.target), geometry);
+  const tacticalAttackerPosition = tacticalPair ? positionFor(tacticalPair.attacker) : null;
+  const tacticalTargetPosition = tacticalPair ? positionFor(tacticalPair.target) : null;
+  const attackFeedback = useMemo(() => {
+    if (!combatActive || (!selectedWeapon && !selectedAttackType) || !selectedTargetId) return null;
+    const attacker = tacticalPair?.attacker;
+    const target = tacticalPair?.target;
+    if (!attacker || !target || attacker.id === target.id) return null;
+    const attackerPosition = tacticalAttackerPosition;
+    const targetPosition = tacticalTargetPosition;
+    if (!attackerPosition || !targetPosition) return null;
+    const distance = tacticalDistance(attackerPosition, targetPosition, map);
+    const resolvedAttackType = selectedAttackType ?? selectedWeapon?.attackType;
+     if (!resolvedAttackType || isMeleeAttackType(resolvedAttackType, selectedSkillId ?? selectedWeapon?.skill)) {
+        const meleeRange = resolveMeleeRange(attackerPosition, targetPosition, map);
+       return { attacker, target, distance, ...meleeRange, withinRange: meleeRange.inRange, rangeMeters: null, melee: true as const };
+     }
+      const result = tacticalWeaponRangeFeedback(attackerPosition, targetPosition, map, selectedWeapon);
+      return { attacker, target, ...result, melee: false as const };
+   }, [combatActive, map.grid?.size, map.height, map.pixelsPerMeter, map.width, selectedAttackType, selectedSkillId, selectedTargetId, selectedWeapon, tacticalAttackerPosition?.x, tacticalAttackerPosition?.y, tacticalTargetPosition?.x, tacticalTargetPosition?.y, tacticalPair?.attacker.id, tacticalPair?.target.id]);
+   const losPair = tacticalPair;
+   const losAttackerPosition = losPair ? positionFor(losPair.attacker) : null;
+   const losTargetPosition = losPair ? positionFor(losPair.target) : null;
+   const losFeedback = useMemo(() => {
+     if (!losPair || !losAttackerPosition || !losTargetPosition) return null;
+    const cover = calculateTacticalCover(losAttackerPosition, losTargetPosition, geometry);
     return { visible: cover.lineOfSight === "clear", blockerId: cover.blockerId, blockerType: cover.blockerType, cover, attacker: losPair.attacker, target: losPair.target };
-  }, [geometry, localMoves, losPair]);
+   }, [geometryKey, losAttackerPosition?.x, losAttackerPosition?.y, losTargetPosition?.x, losTargetPosition?.y, losPair?.attacker.id, losPair?.target.id]);
 
   return (
     <section className="player-mesa-tactical" aria-label="Mapa tático">
@@ -530,15 +577,38 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
             </section> : <div className="tactical-geometry-empty"><b>Nenhum obstáculo selecionado</b><span>Use Selecionar e toque em uma parede ou porta para configurar a Cover.</span></div>}
              <div className="tactical-hackable-tools" aria-label="Objetos hackeáveis">
                <span className="tactical-geometry-tools-label">Objeto hackeável</span>
-               {(["camera", "terminal", "door_panel", "console", "access_panel", "generic"] as TacticalHackableObjectType[]).map((type) => <button key={type} type="button" className="tactical-geometry-tool" onClick={() => addHackableObject(type)}><i aria-hidden="true">{hackableIcon(type)}</i>{hackableLabel(type)}</button>)}
+               {HACKABLE_OBJECT_TYPES.map((type) => <button key={type} type="button" className="tactical-geometry-tool" onClick={() => addHackableObject(type)}><i aria-hidden="true">{hackableIcon(type)}</i>{hackableLabel(type)}</button>)}
              </div>
-             {selectedObjectId && (() => { const object = (mapDraft.hackableObjects ?? []).find((entry) => entry.id === selectedObjectId); if (!object) return null; return <section className="tactical-hackable-editor" aria-label="Editor de objeto hackeável">
-               <label>Tipo<select value={object.type} onChange={(event) => { const next = { ...mapDraft, hackableObjects: (mapDraft.hackableObjects ?? []).map((entry) => entry.id === object.id ? { ...entry, type: event.target.value as TacticalHackableObjectType } : entry) }; setMapDraft(next); persistHackableObjects(next); }}><option value="camera">Câmera</option><option value="terminal">Terminal</option><option value="door_panel">Painel de porta</option><option value="console">Console</option><option value="access_panel">Painel de acesso</option><option value="generic">Genérico</option></select></label>
-               <label>Label<input value={object.label ?? ""} onChange={(event) => updateSelectedHackableObject({ label: event.target.value })} onBlur={() => persistHackableObjects(mapDraft)} /></label>
-               <label className="tactical-grid-toggle"><input type="checkbox" checked={object.active} onChange={(event) => { const next = { ...mapDraft, hackableObjects: (mapDraft.hackableObjects ?? []).map((entry) => entry.id === object.id ? { ...entry, active: event.target.checked } : entry) }; setMapDraft(next); persistHackableObjects(next); }} /> Ativo</label>
-               <label>Control Node ID<input value={object.linkedControlNodeId ?? ""} placeholder="opcional" onChange={(event) => updateSelectedHackableObject({ linkedControlNodeId: event.target.value || undefined })} onBlur={() => persistHackableObjects(mapDraft)} /></label>
-               <button type="button" className="mesa-ghost" onClick={() => { const next = { ...mapDraft, hackableObjects: (mapDraft.hackableObjects ?? []).filter((entry) => entry.id !== object.id) }; setMapDraft(next); selectHackableObject(null); persistHackableObjects(next); }}>Excluir objeto</button>
-             </section>; })()}
+             {selectedObjectId && (() => {
+               const object = (mapDraft.hackableObjects ?? []).find((entry) => entry.id === selectedObjectId);
+               if (!object) return null;
+               const controlNodes = (state.netArchitectures ?? []).flatMap((architecture) => architecture.floors.flatMap((floor) => floor.nodes.filter((node) => node.type === "control_node").map((node) => ({ id: node.id, label: `${node.name ?? node.id} · ${architecture.name}` }))));
+               const doors = mapDraft.geometry?.doors ?? [];
+               const selectedControlNode = object.controlNodeId ?? "";
+               const selectedDoor = object.geometryDoorId ?? "";
+               const linkedDoor = doors.find((door) => door.id === selectedDoor) ?? null;
+               const setObject = (patch: Partial<TacticalHackableObject>) => { const next = { ...mapDraft, hackableObjects: (mapDraft.hackableObjects ?? []).map((entry) => entry.id === object.id ? { ...entry, ...patch } : entry) }; setMapDraft(next); persistHackableObjects(next); };
+               return (
+                 <section className="tactical-hackable-editor" aria-label="Editor de objeto hackeável">
+                   <label>Tipo<select value={object.type} onChange={(event) => setObject({ type: event.target.value as TacticalHackableObjectType })}>{HACKABLE_OBJECT_TYPES.map((type) => <option key={type} value={type}>{hackableLabel(type)}</option>)}</select></label>
+                   <label>Nome<input value={object.name ?? ""} onChange={(event) => updateSelectedHackableObject({ name: event.target.value })} onBlur={() => persistHackableObjects(mapDraft)} /></label>
+                   <label className="tactical-grid-toggle"><input type="checkbox" checked={object.active} onChange={(event) => setObject({ active: event.target.checked })} /> Ativo</label>
+                   <label>Control Node<select value={selectedControlNode} onChange={(event) => updateSelectedHackableObject({ controlNodeId: event.target.value || undefined })} onBlur={() => persistHackableObjects(mapDraft)}><option value="">Nenhum</option>{controlNodes.map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}{selectedControlNode && !controlNodes.some((node) => node.id === selectedControlNode) ? <option value={selectedControlNode}>{selectedControlNode}</option> : null}</select></label>
+                   {object.type === "door" && (
+                     <label>Porta (geometria)<select value={selectedDoor} onChange={(event) => setObject({ geometryDoorId: event.target.value || undefined })}><option value="">Nenhuma</option>{doors.map((door) => <option key={door.id} value={door.id}>{door.id} · {door.state === "open" ? "aberta" : "fechada"}</option>)}{selectedDoor && !doors.some((door) => door.id === selectedDoor) ? <option value={selectedDoor}>{selectedDoor}</option> : null}</select></label>
+                   )}
+                   {object.type === "door" && linkedDoor && (
+                     <button type="button" className="mesa-ghost" onClick={() => { const next = { ...mapDraft, geometry: { walls: mapDraft.geometry?.walls ?? [], doors: doors.map((entry) => entry.id === linkedDoor.id ? { ...entry, state: entry.state === "open" ? "closed" as const : "open" as const } : entry) } }; setMapDraft(next); persistHackableObjects(next); }}>
+                       {linkedDoor.state === "open" ? "Fechar porta" : "Abrir porta"}
+                     </button>
+                   )}
+                   {object.type === "camera" && (
+                     <label>Estado inicial<select value={hackableObjectCameraState(object, mapDraft) ?? "online"} onChange={(event) => setObject({ deviceState: event.target.value as TacticalHackableDeviceState })}><option value="online">Online</option><option value="disabled">Desativada</option></select></label>
+                   )}
+                   <button type="button" className="mesa-ghost" onClick={() => { const next = { ...mapDraft, hackableObjects: (mapDraft.hackableObjects ?? []).filter((entry) => entry.id !== object.id) }; setMapDraft(next); selectHackableObject(null); persistHackableObjects(next); }}>Excluir objeto</button>
+                 </section>
+               );
+             })()}
              </div>}
            </div>}
            </>, mapToolsHost)}
@@ -605,7 +675,8 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
               return <polygon className={geometryMode === "door" ? "tactical-door tactical-geometry-preview" : "tactical-wall tactical-geometry-preview"} points={preview.corners.map((point) => `${point.x},${point.y}`).join(" ")} />;
             })()}
          </svg>
-            {(isGM ? (mapDraft.hackableObjects ?? []) : (map.hackableObjects ?? [])).filter((object) => object.active || isGM).map((object) => <button key={object.id} type="button" className={`tactical-hackable-object ${object.id === selectedObjectId ? "is-selected" : ""} ${object.active ? "" : "is-disabled"}`} style={{ left: `${object.position.x * 100}%`, top: `${object.position.y * 100}%` }} onPointerDown={(event) => startHackableObjectDrag(object, event)} onClick={(event) => { event.stopPropagation(); selectHackableObject(object.id); }} aria-pressed={object.id === selectedObjectId} aria-label={`${hackableLabel(object.type)} ${object.label ?? ""}`}><span className="tactical-hackable-icon" aria-hidden="true">{hackableIcon(object.type)}</span><span>{object.label ?? hackableLabel(object.type)}</span></button>)}
+             {(isGM ? (mapDraft.hackableObjects ?? []) : (map.hackableObjects ?? [])).filter((object) => object.active || isGM).map((object) => <button key={object.id} type="button" className={`tactical-hackable-object ${object.id === selectedObjectId ? "is-selected" : ""} ${object.active ? "" : "is-disabled"} ${object.type === "camera" && hackableObjectCameraState(object) === "disabled" ? "is-camera-offline" : ""}`} style={{ left: `${object.position.x * 100}%`, top: `${object.position.y * 100}%` }} onPointerDown={(event) => startHackableObjectDrag(object, event)} onClick={(event) => { event.stopPropagation(); selectHackableObject(object.id); }} aria-pressed={object.id === selectedObjectId} aria-label={`${hackableLabel(object.type)} ${object.name ?? ""}`}><span className="tactical-hackable-icon" aria-hidden="true">{hackableIcon(object.type)}</span><span>{object.name ?? hackableLabel(object.type)}</span></button>)}
+             {(map.accessPoints ?? []).map((accessPoint) => <button key={`access-point:${accessPoint.id}`} type="button" className={`tactical-access-point ${selectedAccessPointId === accessPoint.id ? "is-selected" : ""} ${accessPoint.active ? "" : "is-disabled"}`} style={{ left: `${accessPoint.position.x * 100}%`, top: `${accessPoint.position.y * 100}%` }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectAccessPoint(accessPoint); }} aria-pressed={selectedAccessPointId === accessPoint.id} aria-label={`Access Point ${accessPoint.id}`}><span aria-hidden="true">⌁</span><small>{accessPoint.id}</small></button>)}
            {dragging && combatActive && initiativeStarted && localMoves[dragging] && (() => {
             const move = localMoves[dragging];
             const invalid = !move.withinMovement || !move.pathValid;
@@ -665,7 +736,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
               {!move.pathValid && <strong>{move.blockedBy ? `CAMINHO BLOQUEADO — ${move.blockedBy.type === "door" ? "porta fechada" : "parede"} no caminho` : "CAMINHO BLOQUEADO — geometria inválida"}</strong>}
              </div>;
           })()}
-          <button
+              <button
             type="button"
             className="tactical-info-toggle"
             aria-pressed={showTacticalInfo}
@@ -675,7 +746,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
           >
             {showTacticalInfo ? "Ocultar info" : "Mostrar info"}
           </button>
-             {state.combatants.map((combatant) => { const position = positionFor(combatant); const movable = canDrag(combatant); const remote = !localMoves[combatant.id] && !movable; const move = localMoves[combatant.id]; const status = move?.status; const selected = selectedTargetId === combatant.id; const movementInvalid = move && (!move.withinMovement || !move.pathValid); return <button key={combatant.id} type="button" className={`tactical-token ${combatant.kind === "enemy" ? "is-enemy" : "is-player"} ${combatant.id === state.combat?.activeCombatantId ? "is-active" : ""} ${selected ? "is-target-selected" : ""} ${movable ? "is-movable" : ""} ${remote ? "is-remote" : ""} ${status ? `is-${status}` : ""} ${movementInvalid ? "is-out-of-range" : ""}`} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}%` }} onPointerDown={(event) => startDrag(combatant.id, event)} onPointerUp={(event) => handleTokenPointerUp(combatant.id, event)} onPointerCancel={() => cancelDrag(combatant.id)} onClick={(event) => { if (geometryEditing) return; if (suppressClickRef.current) { suppressClickRef.current = false; return; } if (canSelectTarget(combatant) && selectedTargetId !== combatant.id) { event.preventDefault(); onSelectTarget(combatant.id); } }} aria-pressed={selected} aria-label={`${combatant.name}${canSelectTarget(combatant) ? ", selecionar alvo" : movable ? ", arraste para mover" : ""}`}><img src={combatant.kind === "enemy" ? ENEMY_AVATAR : (combatant.avatarUrl || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='38' r='24' fill='%237ee7d7'/%3E%3Cpath d='M15 95c2-28 17-40 35-40s33 12 35 40' fill='%237ee7d7'/%3E%3C/svg%3E")} alt="" draggable={false} /><span>{combatant.name}</span></button>; })}
+          {state.combatants.map((combatant) => { const position = positionFor(combatant); const movable = canDrag(combatant); const remote = !localMoves[combatant.id] && !movable; const move = localMoves[combatant.id]; const status = move?.status; const selected = selectedTargetId === combatant.id; const movementInvalid = move && (!move.withinMovement || !move.pathValid); return <button key={combatant.id} data-testid={`mesa-tactical-token-${combatant.id}`} type="button" className={`tactical-token ${combatant.kind === "enemy" ? "is-enemy" : "is-player"} ${combatant.id === state.combat?.activeCombatantId ? "is-active" : ""} ${selected ? "is-target-selected" : ""} ${movable ? "is-movable" : ""} ${remote ? "is-remote" : ""} ${status ? `is-${status}` : ""} ${movementInvalid ? "is-out-of-range" : ""}`} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}%` }} onPointerDown={(event) => startDrag(combatant.id, event)} onPointerUp={(event) => handleTokenPointerUp(combatant.id, event)} onPointerCancel={() => cancelDrag(combatant.id)} onClick={(event) => { if (geometryEditing) return; if (suppressClickRef.current) { suppressClickRef.current = false; return; } if (canSelectTarget(combatant) && selectedTargetId !== combatant.id) { event.preventDefault(); onSelectTarget(combatant.id); } }} aria-pressed={selected} aria-label={`${combatant.name}${canSelectTarget(combatant) ? ", selecionar alvo" : movable ? ", arraste para mover" : ""}`}><img src={combatant.kind === "enemy" ? ENEMY_AVATAR : (combatant.avatarUrl || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='38' r='24' fill='%237ee7d7'/%3E%3Cpath d='M15 95c2-28 17-40 35-40s33 12 35 40' fill='%237ee7d7'/%3E%3C/svg%3E")} alt="" draggable={false} /><span>{combatant.name}</span></button>; })}
       </div>
       <div className="tactical-legend"><span><i className="player-dot" /> Players</span><span><i className="enemy-dot" /> Enemies</span>{dragging && <em>Movendo...</em>}</div>
     </section>

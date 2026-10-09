@@ -2,6 +2,7 @@ import { normalizeSkillId } from "@/data/skills";
 import type { AttributeName } from "@/types/character";
 import type { HitLocation } from "@/types/combat";
 import type { CriticalInjury } from "@/data/criticalInjuries";
+import { createId } from "@/lib/id";
 
 export const enemyStatNames = ["INT", "REF", "DEX", "TECH", "COOL", "WILL", "LUCK", "MOVE", "BODY", "EMP"] as const;
 export type EnemyAttributeName = (typeof enemyStatNames)[number];
@@ -46,6 +47,8 @@ export interface EnemyWeapon {
 export interface EnemySupply {
   item: string;
   quantity: number;
+  /** Explicit category used by server-side Quickhacks such as Shard Ejection. */
+  category?: "chipware";
   /**
    * F1.13.2 — identidade estável do item (catálogo do jogador ou slug
    * determinístico). Ausente em dados antigos: use `resolveSupplyItemId`.
@@ -124,7 +127,7 @@ function calculateEnemyMaxHP(stats: EnemyStats): number {
   return stats.BODY + stats.WILL;
 }
 
-export function createEmptyEnemy(id = crypto.randomUUID()): Enemy {
+export function createEmptyEnemy(id = createId()): Enemy {
   const now = new Date().toISOString();
   const stats = { ...defaultEnemyStats };
   const maxHP = calculateEnemyMaxHP(stats);

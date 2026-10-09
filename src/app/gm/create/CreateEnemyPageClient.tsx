@@ -466,7 +466,7 @@ export default function CreateEnemyPageClient() {
             </div>
           </div>
           {Object.keys(enemy.skills).length === 0 ? (
-            <p className="gm-empty-state">Nenhuma perícia adicionada. Use "Perícia rápida" para adicionar uma perícia comum ou "Personalizada" para criar uma nova.</p>
+            <p className="gm-empty-state">Nenhuma perícia adicionada. Use &quot;Perícia rápida&quot; para adicionar uma perícia comum ou &quot;Personalizada&quot; para criar uma nova.</p>
           ) : (
             <div className="gm-skills-list">
               {Object.entries(enemy.skills).map(([id, skill]) => (
@@ -485,7 +485,7 @@ export default function CreateEnemyPageClient() {
                       <label>Atributo</label>
                       <select
                         value={skill.stat}
-                        onChange={(e) => updateSkill(id, "stat", e.target.value as Enemy["stats"] extends Record<infer K, any> ? K : never)}
+                         onChange={(e) => updateSkill(id, "stat", e.target.value as EnemySkill["stat"])}
                       >
                         {enemyStatNames.map((stat) => (
                           <option key={stat} value={stat}>{stat}</option>

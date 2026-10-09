@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { fetchMesaState, MesaApiError } from "@/lib/mesa/client";
 import { subscribeMesaState, type MesaSnapshot } from "@/lib/mesa/realtime";
+import { markMesaRefresh, markMesaRealtimeDelivery } from "@/lib/mesa/telemetry";
 import type { MesaState } from "@/lib/mesa/types";
 
 const POLL_INTERVAL_MS = 4000;
@@ -30,6 +31,9 @@ export interface MesaStateResult {
   /** `true` quando o Realtime está entregando; `false` = modo polling. */
   realtime: boolean;
   refresh: () => Promise<void>;
+  /** Incrementa quando um GET autenticado aplica um snapshot. */
+  refreshVersion: number;
+  getRefreshVersion: () => number;
 }
 
 /** Aceita somente snapshots da sessão atual e nunca recua a versão conhecida. */
@@ -44,15 +48,23 @@ export function shouldAcceptMesaSnapshot(
   return true;
 }
 
+/** Só há necessidade de reconciliação explícita quando nenhum snapshot chegou. */
+export function shouldReconcileAfterAction(versionBefore: number, versionAfter: number): boolean {
+  return versionBefore === versionAfter;
+}
+
 export function useMesaState(sessionId: string | null): MesaStateResult {
   const [state, setState] = useState<MesaState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [realtime, setRealtime] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
 
   const realtimeActiveRef = useRef(false);
   const latestVersionRef = useRef<string | null>(null);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const refreshVersionRef = useRef(0);
 
   const acceptsSnapshot = useCallback((snapshot: MesaSnapshot, expectedSessionId: string): boolean => {
     if (!shouldAcceptMesaSnapshot(snapshot, expectedSessionId, latestVersionRef.current)) return false;
@@ -78,16 +90,33 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
 
   const refresh = useCallback(async () => {
     if (!sessionId) return;
+    if (refreshPromiseRef.current) return refreshPromiseRef.current;
+    const startedAt = performance.now();
+    markMesaRefresh({ sessionId, stage: "T9" });
+    const operation = (async () => {
+      try {
+        const next = await fetchMesaState(sessionId);
+        markMesaRefresh({ sessionId, stage: "T10", durationMs: performance.now() - startedAt });
+        if (acceptsSnapshot(next, sessionId)) {
+          setState(next);
+          refreshVersionRef.current += 1;
+          setRefreshVersion(refreshVersionRef.current);
+          markMesaRefresh({ sessionId, stage: "T12", stateVersion: next.stateVersion });
+        }
+        setError(null);
+        setErrorCode(null);
+      } catch (caught) {
+        setError(caught instanceof MesaApiError ? caught.message : "Falha ao atualizar a mesa.");
+        setErrorCode(caught instanceof MesaApiError ? caught.code : "unknown");
+      } finally {
+        setLoading(false);
+      }
+    })();
+    refreshPromiseRef.current = operation;
     try {
-      const next = await fetchMesaState(sessionId);
-      if (acceptsSnapshot(next, sessionId)) setState(next);
-      setError(null);
-      setErrorCode(null);
-    } catch (caught) {
-      setError(caught instanceof MesaApiError ? caught.message : "Falha ao atualizar a mesa.");
-      setErrorCode(caught instanceof MesaApiError ? caught.code : "unknown");
+      await operation;
     } finally {
-      setLoading(false);
+      refreshPromiseRef.current = null;
     }
   }, [sessionId, acceptsSnapshot]);
 
@@ -129,6 +158,8 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
         if (disposed) return;
         if (!acceptsSnapshot(next, sessionId)) return;
         setState(next);
+        refreshVersionRef.current += 1;
+        setRefreshVersion(refreshVersionRef.current);
         setError(null);
         setErrorCode(null);
       } catch (caught) {
@@ -165,12 +196,14 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
             startPolling();
           }
          },
-         () => {
+         (invalidation) => {
            if (disposed) return;
            realtimeActiveRef.current = true;
            setRealtime(true);
            stopPolling();
-           void refresh();
+           markMesaRealtimeDelivery(sessionId, invalidation.publishedAt);
+            // O callback não aplica dados do canal; somente dispara o GET autenticado.
+            void refresh();
          },
        );
 
@@ -194,8 +227,15 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
     };
   }, [sessionId, acceptsSnapshot, applySnapshot, refresh]);
 
+  // Marca o primeiro ponto pós-render observável no cliente. Isso mede o
+  // caminho até o commit do hook, não uma pintura específica de cada pixel.
+  useEffect(() => {
+    if (state?.session.id === sessionId) markMesaRefresh({ sessionId, stage: "T13" });
+  }, [sessionId, state]);
+
   // Enquanto uma nova sessão carrega, nunca exponha o snapshot da sessão
   // anterior como se fosse o atual.
   const visibleState = state?.session.id === sessionId ? state : null;
-  return { state: visibleState, loading, error, errorCode, realtime, refresh };
+  const getRefreshVersion = useCallback(() => refreshVersionRef.current, []);
+  return { state: visibleState, loading, error, errorCode, realtime, refresh, refreshVersion, getRefreshVersion };
 }

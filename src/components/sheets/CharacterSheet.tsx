@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { createId } from "@/lib/id";
 
 import {
   canUpgradeSkill,
@@ -59,6 +60,7 @@ import { bodyCriticalInjuries, headCriticalInjuries } from "@/data/criticalInjur
 import type { CriticalInjury } from "@/data/criticalInjuries";
 import { getSellPrice, sellInventoryItem } from "@/lib/store";
 import { getCatalogItem } from "@/data/items";
+import FloatingUpdateCard, { type FloatingUpdate } from "@/components/FloatingUpdateCard";
 import { getCombatAwarenessTotal, getMakerSpecialtyPoints, getMedicineSpecialtyPoints, getNetActionsPerTurn, getRoleAbilityIPCost, spendIPOnRoleAbility } from "@/lib/roles";
 import { roleDefinitions } from "@/data/roles";
 import type { RoleAbilityData, RoleAbilityId } from "@/data/roles";
@@ -171,6 +173,7 @@ export default function CharacterSheet({
   const [cyberwareNotice, setCyberwareNotice] = useState("");
   const [lastQuickhack, setLastQuickhack] = useState<QuickhackRollResult | null>(null);
   const [lastInitiative, setLastInitiative] = useState<InitiativeRollResult | null>(null);
+  const [floatingUpdates, setFloatingUpdates] = useState<FloatingUpdate[]>([]);
   /**
    * F1.14.2 — erro do registro de iniciativa na Mesa. O valor exibido nunca é
    * este: ele vem do estado da Mesa (`character.combat.initiative`).
@@ -196,6 +199,12 @@ export default function CharacterSheet({
   const [humanityAdjustOpen, setHumanityAdjustOpen] = useState(false);
   const [humanityAdjustValue, setHumanityAdjustValue] = useState("");
   const [humanityAdjustReason, setHumanityAdjustReason] = useState("");
+
+  function pushFloatingUpdate(message: string, kind: FloatingUpdate["kind"] = "ok") {
+    const id = createId();
+    setFloatingUpdates((current) => [...current.slice(-3), { id, message, kind }]);
+    window.setTimeout(() => setFloatingUpdates((current) => current.filter((entry) => entry.id !== id)), 5000);
+  }
   const [expandedRoleAbility, setExpandedRoleAbility] = useState<RoleAbilityId | null>(null);
   const [lastDeathSave, setLastDeathSave] = useState<import("@/lib/damage").DeathSaveResult | null>(null);
   const [rollingDeathSave, setRollingDeathSave] = useState(false);
@@ -342,6 +351,7 @@ export default function CharacterSheet({
     // Show immediate visual feedback with the dice roll
     setRollingQuickhack({ id: quickhackId, roll: resolution.result.roll.rolls[0] });
     setLastQuickhack(resolution.result);
+    pushFloatingUpdate(resolution.result.success ? "ACERTO" : "ERRO", "result");
     onUpdate(resolution.character);
     // Clear the rolling indicator after a brief moment
     setTimeout(() => setRollingQuickhack(null), 1500);
@@ -391,7 +401,7 @@ export default function CharacterSheet({
   }
 
   /** Usa um Special Move: os requisitos já estão validados; o ataque entra no fluxo normal da ficha. */
-  function useSpecialMove(move: SpecialMove) {
+  function executeSpecialMove(move: SpecialMove) {
     if (move.kind !== "passive") {
       const refusal = localCombatMutationRefusal(sheetMesaMode, "attack-result");
       if (refusal) {
@@ -852,6 +862,7 @@ export default function CharacterSheet({
         onClick={() => setNavDrawerOpen(false)}
         aria-hidden="true"
       />
+      <FloatingUpdateCard updates={floatingUpdates} />
       <header className="sheet-hero">
         <div className="sheet-photo">
           {character.identity.photoUrl ? (
@@ -1228,7 +1239,7 @@ export default function CharacterSheet({
                       {lastEvasion.stat.id} {lastEvasion.stat.value} + Evasion {lastEvasion.skill.value} + 1d10
                     </span>
                     <div className="evasion-result-dice">
-                      {lastEvasion.diceRolls?.map((r: any, idx: number) => (
+                      {lastEvasion.diceRolls?.map((r, idx) => (
                         <React.Fragment key={idx}>
                           {r.type === "crit" && <strong className="die-crit">[{r.value}]</strong>}
                           {r.type === "crit_add" && <strong className="die-crit">+[{r.value}]</strong>}
@@ -1262,6 +1273,7 @@ export default function CharacterSheet({
                         setLastDamage(null);
                         setLastMesaWeaponDamage(null);
                         setLastMesaDamage(null);
+                        pushFloatingUpdate(result.hit ? "ACERTO" : "ERRO", "result");
                       },
                       onWeaponDamage: setLastMesaWeaponDamage,
                       onDamageResult: setLastMesaDamage,
@@ -1370,7 +1382,7 @@ export default function CharacterSheet({
 
                       {/* Dice Results */}
                       <div className="attack-dice-row">
-                        {attack.diceRolls?.map((r: any, idx: number) => (
+                        {attack.diceRolls?.map((r, idx) => (
                           <span
                             key={idx}
                             className={`attack-die ${r.type === 'crit' || r.type === 'crit_add' ? 'crit' : ''} ${r.type === 'fumble' || r.type === 'fumble_sub' ? 'fumble' : ''}`}
@@ -1630,7 +1642,7 @@ export default function CharacterSheet({
                         </label>
                       )}
                       {unlocked && move.kind !== "passive" && (
-                        <button type="button" className="smc-use" disabled={!available} onClick={() => useSpecialMove(move)}>
+                        <button type="button" className="smc-use" disabled={!available} onClick={() => executeSpecialMove(move)}>
                           {available ? "Usar" : "Indisponível"}
                         </button>
                       )}

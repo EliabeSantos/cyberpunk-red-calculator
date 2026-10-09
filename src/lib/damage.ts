@@ -10,6 +10,7 @@
  */
 import { armorSlotForLocation, type HitLocation } from "@/types/combat";
 import { rollDice } from "@/lib/dice";
+import { createId } from "@/lib/id";
 import { calculateWoundThreshold, getSkillBase, getCriticalInjuryModifiers, getWoundPenalty } from "@/lib/calculations";
 import { getCyberwareBodySP } from "@/lib/cyberwareEffects";
 import { rollCriticalInjury, checkCriticalInjuryFromDamage } from "@/data/criticalInjuries";
@@ -64,7 +65,7 @@ export function rollDamageForLastAttack(character: Character, rng?: RandomSource
   if (!character.lastAttack) return { error: "Nenhum ataque válido foi realizado." };
   const result = rollDamage(character.lastAttack, rng);
   if ("error" in result) return result;
-  const entry: RollHistoryEntry = { id: crypto.randomUUID(), type: "damage", label: result.attackName, characterId: character.id, expression: result.damageDice, rolls: result.roll.rolls, total: result.total, timestamp: new Date().toISOString(), attackId: result.attackId, weaponId: result.weaponId };
+  const entry: RollHistoryEntry = { id: createId(), type: "damage", label: result.attackName, characterId: character.id, expression: result.damageDice, rolls: result.roll.rolls, total: result.total, timestamp: new Date().toISOString(), attackId: result.attackId, weaponId: result.weaponId };
   return { character: { ...character, lastDamage: result, rollHistory: [entry, ...character.rollHistory] }, result };
 }
 
@@ -116,7 +117,7 @@ export function applyReceivedDamage(
   }
 
   const entry: RollHistoryEntry = {
-    id: crypto.randomUUID(),
+    id: createId(),
     type: "received_damage",
     label: "Dano recebido",
     characterId: character.id,
@@ -232,7 +233,7 @@ export function applyAttackDamage(
   }
 
   const entry: RollHistoryEntry = {
-    id: crypto.randomUUID(),
+    id: createId(),
     type: "received_damage",
     label: `Dano de ${damageRoll.attackName}`,
     characterId: character.id,
@@ -342,7 +343,7 @@ export function rollDeathSave(character: Character, rng?: RandomSource): { chara
   const newDC = resolved.state.dc;
 
   const entry: RollHistoryEntry = {
-    id: crypto.randomUUID(),
+    id: createId(),
     type: "free_roll",
     label: success ? "Death Save (sucesso)" : "Death Save (falha)",
     characterId: character.id,
@@ -459,7 +460,7 @@ export function rollFirstAid(
   }
 
   const entry: RollHistoryEntry = {
-    id: crypto.randomUUID(),
+    id: createId(),
     type: "skill_check",
     label: success ? "First Aid (sucesso)" : "First Aid (falha)",
     characterId: character.id,

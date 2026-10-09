@@ -1,6 +1,7 @@
 import { roleDefinitions } from "@/data/roles";
 import type { Character } from "@/types/character";
 import type { RoleAbilityId, RoleAbilityState, RoleId } from "@/types/roles";
+import { createId } from "@/lib/id";
 
 export function getRoleAbilityIPCost(nextRank: number): number { return nextRank >= 1 && nextRank <= 10 ? nextRank * 60 : 0; }
 /** F1.51 RAW: Rank 1–3 = 2, 4–6 = 3, 7–9 = 4, 10 = 5. */
@@ -69,7 +70,7 @@ export function resolveBackupArrival(): { arrivalMinutes: number } { return { ar
 export function addFamilyVehicle(character: Character, name: string): Character | null {
   const rank = character.roleAbilities.find((ability) => ability.abilityId === "moto")?.rank ?? 0;
   if (!getNomadVehicleOptions(rank).includes(name)) return null;
-  return { ...character, familyVehicles: [...character.familyVehicles, { id: crypto.randomUUID(), name, upgrades: [] }] };
+  return { ...character, familyVehicles: [...character.familyVehicles, { id: createId(), name, upgrades: [] }] };
 }
 export function upgradeFamilyVehicle(character: Character, vehicleId: string, upgrade: string): Character | null {
   if (!character.roleAbilities.some((ability) => ability.abilityId === "moto")) return null;

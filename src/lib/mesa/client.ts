@@ -23,6 +23,8 @@ import {
   rememberMembership,
   removeMembership,
 } from "@/lib/mesa/membershipStore";
+import { finishMesaTelemetry, markMesaTelemetry, startMesaTelemetry } from "@/lib/mesa/telemetry";
+import { createId } from "@/lib/id";
 
 const TOKEN_HEADER = "x-mesa-token";
 
@@ -51,14 +53,29 @@ async function api<T>(
   path: string,
   options: { method?: string; body?: unknown } = {},
 ): Promise<T> {
-  const response = await fetch(path, {
-    method: options.method ?? "GET",
-    headers: {
-      "content-type": "application/json",
-      [TOKEN_HEADER]: getPlayerToken(),
-    },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  const body = options.body as Record<string, unknown> | undefined;
+  const action = actionName(path, body);
+  const sessionId = path.match(/\/api\/mesa\/([^/]+)/)?.[1];
+  const resolutionId = typeof body?.resolutionId === "string" ? body.resolutionId : undefined;
+  const traceId = startMesaTelemetry({ action, sessionId, resolutionId });
+  const requestStartedAt = performance.now();
+  markMesaTelemetry(traceId, { action, stage: "T1" });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: options.method ?? "GET",
+      headers: {
+        "content-type": "application/json",
+        [TOKEN_HEADER]: getPlayerToken(),
+        "x-mesa-telemetry-id": traceId,
+      },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+  } catch (error) {
+    markMesaTelemetry(traceId, { action, stage: "T7", durationMs: performance.now() - requestStartedAt, success: false });
+    finishMesaTelemetry(traceId, false);
+    throw error;
+  }
 
   let payload: { ok?: boolean; error?: string; code?: string } = {};
   try {
@@ -68,13 +85,33 @@ async function api<T>(
   }
 
   if (!response.ok || payload.ok === false) {
+    markMesaTelemetry(traceId, { action, stage: "T7", durationMs: performance.now() - requestStartedAt, success: false });
+    finishMesaTelemetry(traceId, false);
     throw new MesaApiError(
       payload.error ?? `Falha na requisição (${response.status}).`,
       response.status,
       payload.code ?? "unknown",
     );
   }
+  markMesaTelemetry(traceId, { action, stage: "T7", durationMs: performance.now() - requestStartedAt, success: true });
+  finishMesaTelemetry(traceId, true);
   return payload as T;
+}
+
+function actionName(path: string, body?: Record<string, unknown>): string {
+  if (path.includes("/combat/attack")) return "attack";
+  if (path.includes("/combat/move")) return "movement";
+  if (path.includes("/combat/player-damage") || path.includes("/combat/damage")) return "damage";
+  if (path.includes("/combat/player-heal") || path.includes("/combat/item-heal")) return "healing";
+  if (path.includes("/combat/initiative")) return "initiative";
+  if (path.includes("/combat/turn")) return "turn";
+  if (path.includes("/combat/net/device")) return "door";
+  if (path.includes("/combat/net/action")) {
+    return typeof body?.action === "string" ? body.action : "control";
+  }
+  if (path.includes("/combat/net/quickhack")) return "quickhack";
+  if (path.includes("/combat/net/connection")) return body?.action === "safe_jack_out" ? "jack_out" : "jack_in";
+  return "mesa";
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +175,16 @@ export async function leaveMesa(sessionId: string, joinCode: string): Promise<vo
   } catch (caught) {
     if (caught instanceof MesaApiError && caught.status >= 400 && caught.status < 500) throw caught;
   }
+  removeMembership(joinCode);
+}
+
+/**
+ * Encerra a mesa como Mestre e só então remove o vínculo deste navegador.
+ * A ordem é intencional: se o fechamento falhar, a mesa continua acessível e
+ * o vínculo local não é apagado antes da persistência do histórico.
+ */
+export async function closeMesa(sessionId: string, joinCode: string): Promise<void> {
+  await finishSession(sessionId);
   removeMembership(joinCode);
 }
 
@@ -220,7 +267,7 @@ export async function moveMesa(input: {
   const { sessionId, ...intent } = input;
   return api(`/api/mesa/${sessionId}/combat/move`, {
     method: "POST",
-    body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() },
+    body: { ...intent, resolutionId: intent.resolutionId ?? createId() },
   });
 }
 
@@ -236,8 +283,15 @@ export async function equipMesaQuickhacks(sessionId: string, combatantId: string
   await api(`/api/mesa/${sessionId}/combat/net/loadout`, { method: "PATCH", body: { combatantId, quickhackIds } });
 }
 
+export async function setMesaCyberdeckStatus(sessionId: string, combatantId: string, status: "functional" | "destroyed"): Promise<void> {
+  await api(`/api/mesa/${encodeURIComponent(sessionId)}/combat/net/cyberdeck`, {
+    method: "PATCH",
+    body: { combatantId, status },
+  });
+}
+
 export async function executeMesaQuickhack(input: { sessionId: string; quickhackId: string; targetCombatantId: string; resolutionId?: string }): Promise<unknown> {
-  return api(`/api/mesa/${input.sessionId}/combat/net/quickhack`, { method: "POST", body: { ...input, resolutionId: input.resolutionId ?? crypto.randomUUID() } });
+  return api(`/api/mesa/${input.sessionId}/combat/net/quickhack`, { method: "POST", body: { ...input, resolutionId: input.resolutionId ?? createId() } });
 }
 
 export async function updateMesaNetArchitectures(sessionId: string, architectures: NetArchitecture[]): Promise<void> {
@@ -246,7 +300,16 @@ export async function updateMesaNetArchitectures(sessionId: string, architecture
 
 export async function executeMesaNetAction(input: { sessionId: string; action: "pathfinder" | "backdoor" | "control" | "zap" | "slide"; targetId?: string; resolutionId?: string }): Promise<unknown> {
   const { sessionId, ...intent } = input;
-  return api(`/api/mesa/${sessionId}/combat/net/action`, { method: "POST", body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() } });
+  return api(`/api/mesa/${sessionId}/combat/net/action`, { method: "POST", body: { ...intent, resolutionId: intent.resolutionId ?? createId() } });
+}
+
+/**
+ * F1.62 — intenção de efeito de dispositivo (ABRIR/FECHAR). O cliente manda
+ * apenas `objectId` + `action`; tipo, Control Node e estado são resolvidos e
+ * persistidos pelo servidor, que devolve o estado autoritativo.
+ */
+export async function controlMesaDevice(input: { sessionId: string; objectId: string; action: "open" | "close" | "enable" | "disable" }): Promise<unknown> {
+  return api(`/api/mesa/${input.sessionId}/combat/net/device`, { method: "POST", body: { objectId: input.objectId, action: input.action } });
 }
 
 export async function saveTacticalMap(sessionId: string, map: TacticalMap): Promise<void> {
@@ -299,7 +362,7 @@ export async function attackMesa(input: {
   return api(`/api/mesa/${input.sessionId}/combat/attack`, {
     method: "POST",
     body: {
-      resolutionId: input.resolutionId ?? crypto.randomUUID(),
+      resolutionId: input.resolutionId ?? createId(),
       actorId: input.actorId,
       targetId: input.targetId,
       weaponId: input.weaponId,
@@ -331,7 +394,7 @@ export async function reloadMesa(input: {
   return api(`/api/mesa/${input.sessionId}/combat/reload`, {
     method: "POST",
     body: {
-      resolutionId: input.resolutionId ?? crypto.randomUUID(),
+      resolutionId: input.resolutionId ?? createId(),
       weaponId: input.weaponId,
       ...(input.actorCombatantId ? { actorCombatantId: input.actorCombatantId } : {}),
     },
@@ -357,7 +420,7 @@ export async function consumeMesaItem(input: {
   return api(`/api/mesa/${input.sessionId}/combat/item-consume`, {
     method: "POST",
     body: {
-      resolutionId: input.resolutionId ?? crypto.randomUUID(),
+      resolutionId: input.resolutionId ?? createId(),
       actorCombatantId: input.actorCombatantId,
       itemId: input.itemId,
       amount: input.amount,
@@ -407,7 +470,7 @@ export async function applyMesaHealingItem(input: {
   return api(`/api/mesa/${input.sessionId}/combat/item-heal`, {
     method: "POST",
     body: {
-      resolutionId: input.resolutionId ?? crypto.randomUUID(),
+      resolutionId: input.resolutionId ?? createId(),
       actorCombatantId: input.actorCombatantId,
       itemId: input.itemId,
     },
@@ -438,7 +501,7 @@ export async function rollMesaDeathSave(input: {
   return api(`/api/mesa/${input.sessionId}/combat/death-save`, {
     method: "POST",
     body: {
-      resolutionId: input.resolutionId ?? crypto.randomUUID(),
+      resolutionId: input.resolutionId ?? createId(),
       actorCombatantId: input.actorCombatantId,
     },
   });
@@ -456,7 +519,7 @@ export async function sendMesaRoll(
   sessionId: string,
   roll: MesaRollSummary,
   key?: string | null,
-  resolutionId = crypto.randomUUID(),
+  resolutionId = createId(),
 ): Promise<void> {
   await api(`/api/mesa/${sessionId}/combat/roll`, {
     method: "POST",
@@ -583,7 +646,7 @@ export async function applyPlayerDamage(
 ): Promise<PlayerDamageOutcome> {
   return api(`/api/mesa/${sessionId}/combat/player-damage`, {
     method: "POST",
-    body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() },
+    body: { ...intent, resolutionId: intent.resolutionId ?? createId() },
   });
 }
 
@@ -622,7 +685,7 @@ export async function applyPlayerHealing(
 ): Promise<PlayerHealingOutcome> {
   return api(`/api/mesa/${sessionId}/combat/player-heal`, {
     method: "POST",
-    body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() },
+    body: { ...intent, resolutionId: intent.resolutionId ?? createId() },
   });
 }
 
@@ -665,7 +728,7 @@ export async function registerMesaInitiative(input: {
   const { sessionId, ...intent } = input;
   return api(`/api/mesa/${sessionId}/combat/initiative`, {
     method: "POST",
-    body: { ...intent, resolutionId: intent.resolutionId ?? crypto.randomUUID() },
+    body: { ...intent, resolutionId: intent.resolutionId ?? createId() },
   });
 }
 

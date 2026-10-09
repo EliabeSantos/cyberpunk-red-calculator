@@ -8,7 +8,7 @@
  */
 import { errorResponse, ok, readJson, tokenFrom } from "@/lib/mesa/http";
 import { addEnemies, removeCombatant, updateCombatant } from "@/lib/mesa/store";
-import { publishMesaState } from "@/lib/mesa/realtimeServer";
+import { createMesaHostingInfrastructure } from "@/lib/mesa/hostingInfrastructure";
 
 export const runtime = "nodejs";
 
@@ -21,7 +21,7 @@ export async function POST(request: Request, context: Context): Promise<Response
     const { id } = await context.params;
     const body = await readJson(request);
     await addEnemies({ sessionId: id, token: tokenFrom(request), enemies: body.enemies });
-    await publishMesaState(id);
+    await (await createMesaHostingInfrastructure()).eventTransport.publishInvalidation(id);
     return ok();
   } catch (error) {
     return errorResponse(error);
@@ -33,7 +33,7 @@ export async function PATCH(request: Request, context: Context): Promise<Respons
     const { id } = await context.params;
     const body = await readJson(request);
     await updateCombatant({ sessionId: id, token: tokenFrom(request), combatantId: body.combatantId, patch: body.patch });
-    await publishMesaState(id);
+    await (await createMesaHostingInfrastructure()).eventTransport.publishInvalidation(id);
     return ok();
   } catch (error) {
     return errorResponse(error);
@@ -45,7 +45,7 @@ export async function DELETE(request: Request, context: Context): Promise<Respon
     const { id } = await context.params;
     const combatantId = new URL(request.url).searchParams.get("combatantId");
     await removeCombatant({ sessionId: id, token: tokenFrom(request), combatantId });
-    await publishMesaState(id);
+    await (await createMesaHostingInfrastructure()).eventTransport.publishInvalidation(id);
     return ok();
   } catch (error) {
     return errorResponse(error);

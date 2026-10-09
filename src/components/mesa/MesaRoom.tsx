@@ -1,5 +1,7 @@
 "use client";
 
+import { createId } from "@/lib/id";
+
 /**
  * Sala da Mesa — lobby e combate compartilhado, renderizada como PAINEL por
  * cima da tela principal (não é mais uma rota própria).
@@ -24,7 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import MesaCharacterLink from "@/components/mesa/MesaCharacterLink";
 import MesaCombatPanel from "@/components/mesa/MesaCombatPanel";
-import { joinMesa, leaveMesa, MesaApiError } from "@/lib/mesa/client";
+import { closeMesa, joinMesa, leaveMesa, MesaApiError } from "@/lib/mesa/client";
 import { normalizeJoinCode } from "@/lib/mesa/joinCode";
 import { playerMesaHref } from "@/lib/mesa/mesaRoute";
 import {
@@ -36,6 +38,7 @@ import {
 import type { MesaState } from "@/lib/mesa/types";
 import { useAutoLinkCharacter } from "@/lib/mesa/useAutoLinkCharacter";
 import { useMesaState } from "@/lib/mesa/useMesaState";
+import FloatingUpdateCard, { type FloatingUpdate } from "@/components/FloatingUpdateCard";
 
 interface Props {
   joinCode: string;
@@ -57,14 +60,15 @@ export default function MesaRoom({ joinCode, onClose }: Props) {
 
   const [displayName, setDisplayName] = useState("");
   const [joining, setJoining] = useState(false);
-  const [notice, setNotice] = useState<{ message: string; kind: "error" | "ok" } | null>(null);
+  const [notice, setNotice] = useState<FloatingUpdate[]>([]);
 
   const sessionId = membership?.sessionId ?? null;
   const { state, loading, error, errorCode, realtime, refresh } = useMesaState(sessionId);
 
   const onNotice = useCallback((message: string, kind: "error" | "ok") => {
-    setNotice({ message, kind });
-    window.setTimeout(() => setNotice(null), 5000);
+    const id = createId();
+    setNotice((current) => [...current.slice(-3), { id, message, kind }]);
+    window.setTimeout(() => setNotice((current) => current.filter((entry) => entry.id !== id)), 5000);
   }, []);
 
   const onChanged = useCallback(async () => {
@@ -189,7 +193,7 @@ interface ViewProps {
   state: MesaState;
   joinCode: string;
   realtime: boolean;
-  notice: { message: string; kind: "error" | "ok" } | null;
+  notice: FloatingUpdate[];
   onNotice: (message: string, kind: "error" | "ok") => void;
   onChanged: () => Promise<void>;
   onRefresh: () => Promise<void>;
@@ -217,10 +221,14 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
    * Mestre encerrar a sessão). Sai no servidor e apaga a assinatura local.
    */
   async function handleLeave() {
-    if (!window.confirm("Sair da mesa? Para voltar você vai precisar do código de novo.")) return;
+    const message = isGM && !sessionFinished
+      ? "Encerrar a mesa? O estado será salvo no banco e a sessão ficará disponível apenas para histórico."
+      : "Sair da mesa? Para voltar você vai precisar do código de novo.";
+    if (!window.confirm(message)) return;
     setLeaving(true);
     try {
-      await leaveMesa(sessionId, joinCode);
+      if (isGM) await closeMesa(sessionId, joinCode);
+      else await leaveMesa(sessionId, joinCode);
       onClose?.();
     } catch (caught) {
       onNotice(caught instanceof MesaApiError ? caught.message : "Não foi possível sair da mesa.", "error");
@@ -263,7 +271,7 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
         Convite: <code>{inviteLink}</code>
       </p>
 
-      {notice && <p className={`mesa-notice ${notice.kind}`}>{notice.message}</p>}
+      <FloatingUpdateCard updates={notice} />
 
       <section className="mesa-panel">
         <h2 className="mesa-panel-title">Jogadores</h2>

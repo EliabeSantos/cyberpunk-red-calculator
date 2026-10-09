@@ -23,7 +23,7 @@ set search_path = public
 as $$
 declare
   resolution public.mesa_attack_resolutions%rowtype;
-  tactical_map jsonb;
+  v_tactical_map jsonb;
   changed integer;
   index integer;
   item jsonb;
@@ -48,34 +48,34 @@ begin
   if changed <> 1 then raise exception using errcode = 'P0001', message = 'action_conflict'; end if;
   changed := 0;
 
-  select s.tactical_map into tactical_map
+  select s.tactical_map into v_tactical_map
   from public.mesa_sessions s where s.id = p_session_id for update;
-  if tactical_map is null then raise exception using errcode = 'P0001', message = 'cover_not_found'; end if;
-  for index in 0..coalesce(jsonb_array_length(tactical_map #> '{geometry,walls}') - 1, -1) loop
-    item := tactical_map #> array['geometry','walls',index::text];
+  if v_tactical_map is null then raise exception using errcode = 'P0001', message = 'cover_not_found'; end if;
+  for index in 0..coalesce(jsonb_array_length(v_tactical_map #> '{geometry,walls}') - 1, -1) loop
+    item := v_tactical_map #> array['geometry','walls',index::text];
     if item->>'id' = p_obstacle_id then
       if (item->>'coverHP')::integer is distinct from p_hp_before then raise exception using errcode = 'P0001', message = 'cover_hp_conflict'; end if;
       path := array['geometry','walls',index::text,'coverHP'];
-      tactical_map := jsonb_set(tactical_map, path, to_jsonb(p_hp_after), true);
-      tactical_map := jsonb_set(tactical_map, array['geometry','walls',index::text,'destroyed'], to_jsonb(p_destroyed), true);
+      v_tactical_map := jsonb_set(v_tactical_map, path, to_jsonb(p_hp_after), true);
+      v_tactical_map := jsonb_set(v_tactical_map, array['geometry','walls',index::text,'destroyed'], to_jsonb(p_destroyed), true);
       changed := 1;
       exit;
     end if;
   end loop;
   if changed is distinct from 1 then
-    for index in 0..coalesce(jsonb_array_length(tactical_map #> '{geometry,doors}') - 1, -1) loop
-      item := tactical_map #> array['geometry','doors',index::text];
+    for index in 0..coalesce(jsonb_array_length(v_tactical_map #> '{geometry,doors}') - 1, -1) loop
+      item := v_tactical_map #> array['geometry','doors',index::text];
       if item->>'id' = p_obstacle_id then
         if item->>'state' <> 'closed' or (item->>'coverHP')::integer is distinct from p_hp_before then raise exception using errcode = 'P0001', message = 'cover_hp_conflict'; end if;
-        tactical_map := jsonb_set(tactical_map, array['geometry','doors',index::text,'coverHP'], to_jsonb(p_hp_after), true);
-        tactical_map := jsonb_set(tactical_map, array['geometry','doors',index::text,'destroyed'], to_jsonb(p_destroyed), true);
+        v_tactical_map := jsonb_set(v_tactical_map, array['geometry','doors',index::text,'coverHP'], to_jsonb(p_hp_after), true);
+        v_tactical_map := jsonb_set(v_tactical_map, array['geometry','doors',index::text,'destroyed'], to_jsonb(p_destroyed), true);
         changed := 1;
         exit;
       end if;
     end loop;
   end if;
   if changed is distinct from 1 then raise exception using errcode = 'P0001', message = 'cover_not_found'; end if;
-  update public.mesa_sessions set tactical_map = tactical_map, updated_at = now() where id = p_session_id;
+  update public.mesa_sessions set tactical_map = v_tactical_map, updated_at = now() where id = p_session_id;
   update public.mesa_combats set event_log = (
     select coalesce(jsonb_agg(value order by ord), '[]'::jsonb)
     from jsonb_array_elements(event_log || jsonb_build_array(jsonb_build_object('at', now(), 'kind', 'action', 'text', p_event_text))) with ordinality entries(value, ord)

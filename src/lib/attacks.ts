@@ -4,6 +4,7 @@ import type { RandomSource } from "@/lib/combat/contract";
 import { getCatalogItem } from "@/data/items";
 import { findAmmoIndexByNames, getAmmoKind } from "@/data/enemySupplies";
 import { getCyberwareAttackModifiers, getCyberwareEvasionModifiers, getCyberwarePhysicalModifiers, getCyberwareUnarmedDamageModifiers, hasInstalledCyberarm, isSmartWeapon } from "@/lib/cyberwareEffects";
+import { createId } from "@/lib/id";
 import type {
   AttackContext,
   AttackRollResult,
@@ -229,7 +230,7 @@ export function rollAttack(
 
   // Rolagem de 1d10 com exploding dice (crítico em 10, falha crítica em 1)
   interface RollDetail { value: number; type: "normal" | "crit" | "fumble" | "crit_add" | "fumble_sub"; }
-  let allRolls: RollDetail[] = [];
+  const allRolls: RollDetail[] = [];
   let diceTotal = 0;
   let isCritical = false;
   let isFumble = false;
@@ -278,7 +279,7 @@ export function rollAttack(
   const total = statValue + skill.level + diceTotal + injuryModifierSum;
 
   const result: AttackRollResult = {
-    attackId: crypto.randomUUID(),
+    attackId: createId(),
     attackType,
     label,
     roll: { expression: "1d10", rolls: allRolls.map(r => r.value), total: diceTotal },
@@ -296,7 +297,7 @@ export function rollAttack(
     diceTotal,
   };
   const entry: RollHistoryEntry = {
-    id: crypto.randomUUID(),
+    id: createId(),
     type: "attack",
     label,
     characterId: character.id,
@@ -343,7 +344,7 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
   
   // Rolagem de 1d10 com exploding dice (crítico em 10, falha crítica em 1)
   interface RollDetail { value: number; type: "normal" | "crit" | "fumble" | "crit_add" | "fumble_sub"; }
-  let allRolls: RollDetail[] = [];
+  const allRolls: RollDetail[] = [];
   let diceTotal = 0;
   let isCritical = false;
   let isFumble = false;
@@ -400,7 +401,7 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
   const total = baseSkill + diceTotal + allModifiers.reduce((sum, item) => sum + item.value, 0) + injuryModifierTotal;
   
   const result = { 
-    evasionId: crypto.randomUUID(), 
+    evasionId: createId(),
     roll: { expression: "1d10", rolls: allRolls.map(r => r.value), total: diceTotal }, 
     stat: { id: skill.stat, value: character.stats[skill.stat] }, 
     skill: { id: "evasion" as const, value: skill.level }, 
@@ -415,7 +416,7 @@ export function rollEvasion(character: Character, modifiers: import("@/types/att
   };
   
   const entry: RollHistoryEntry = { 
-    id: crypto.randomUUID(), 
+    id: createId(),
     type: "evasion", 
     label: "Evasion", 
     characterId: character.id, 

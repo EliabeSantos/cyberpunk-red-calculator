@@ -6,12 +6,19 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "start:lan": "next start --hostname 0.0.0.0 --port 3000",
+    "migrate:local": "node scripts/migrate-local.mjs",
+    "start:local": "node scripts/local-start.mjs",
+    "backup:local": "node scripts/backup-local.mjs",
+    "restore:local": "node scripts/restore-local.mjs",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --experimental-loader ./tests/ts-loader.mjs --test tests/*.test.ts"
+    "test": "node --import ./tests/test-env.mjs --experimental-strip-types --experimental-loader ./tests/ts-loader.mjs --test tests/*.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.1",
+    "ably": "^2.29.0",
     "next": "16.3.5",
+    "pg": "^8.23.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "server-only": "^0.0.1"
@@ -19,6 +26,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

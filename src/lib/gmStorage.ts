@@ -8,6 +8,8 @@ import { getEnemyImplants } from "@/data/enemyImplants";
 import { getEnemySupplies } from "@/data/enemySupplies";
 import type { EncounterBattle, EncounterData, EncounterParticipant } from "@/types/encounter";
 import { getParticipantAmmoState } from "@/lib/combat/participantSupplies";
+import { createId } from "@/lib/id";
+import { gmEnemyCatalog } from "@/data/gm-enemies";
 
 /* -------------------------------------------------------------------------- *
  * F1.2 — RE-EXPORTS DE COMPATIBILIDADE.
@@ -180,8 +182,6 @@ export function enableGMAccessForDevelopment(): void {
 // Útil para pré-carregar inimigos sem precisar criá-los um por um.
 
 export function importCatalogEnemies(): Enemy[] {
-  // Lazy import para evitar circular dependencies
-  const { gmEnemyCatalog } = require("@/data/gm-enemies");
   const enemies = gmEnemyCatalog as Enemy[];
   const existing = loadEnemies();
   const existingIds = new Set(existing.map((e) => e.id));
@@ -309,7 +309,7 @@ export function ensureEncounterIds(encounter: EncounterData): EncounterData {
   const participants = encounter.participants.map((participant) => {
     if (typeof participant.id === "string" && participant.id.length > 0) return participant;
     changed = true;
-    return { ...participant, id: crypto.randomUUID() };
+    return { ...participant, id: createId() };
   });
   return changed ? { ...encounter, participants } : encounter;
 }
@@ -357,7 +357,7 @@ export function createEncounterFromFaction(
 
   if (factionEnemies.length === 0) {
     return {
-      id: crypto.randomUUID(),
+      id: createId(),
       name,
       faction,
       enemyCount,
@@ -397,7 +397,7 @@ export function createEncounterFromFaction(
             ? 2
             : 1;
     participants.push({
-      id: crypto.randomUUID(),
+      id: createId(),
       enemyId: source.id,
       name: source.identity.name || `${source.identity.archetype} #${i + 1}`,
       archetype: source.identity.archetype || "Desconhecido",
@@ -440,7 +440,7 @@ export function createEncounterFromFaction(
   }
 
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     name,
     faction,
     enemyCount,

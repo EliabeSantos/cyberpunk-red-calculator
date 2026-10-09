@@ -4,6 +4,7 @@ import { getCriticalInjuryModifiers, getWoundPenalty } from "@/lib/calculations"
 import { getCyberwareInitiativeModifiers } from "@/lib/cyberwareEffects";
 import type { AttackModifier, RollDetail } from "@/types/attack";
 import type { Character, RollHistoryEntry } from "@/types/character";
+import { createId } from "@/lib/id";
 
 /** Modificadores de Iniciativa que não são a base REF: cyberware, lesões e lesão grave.
  * A base continua sendo só `REF` (fórmula da ficha — ver pergunta em aberto no PENDENCIAS.md). */
@@ -76,7 +77,7 @@ export function rollInitiative(character: Character, rng?: RandomSource): { char
   const expression = formatExpression(refBonus, modifiers, rollValue);
 
   const result: InitiativeRollResult = {
-    initiativeId: crypto.randomUUID(),
+    initiativeId: createId(),
     diceRoll: rollValue,
     diceTotal,
     refBonus,
@@ -87,7 +88,7 @@ export function rollInitiative(character: Character, rng?: RandomSource): { char
   };
 
   const entry: RollHistoryEntry = {
-    id: crypto.randomUUID(),
+    id: createId(),
     type: "free_roll",
     label: "Iniciativa",
     characterId: character.id,

@@ -1,5 +1,7 @@
 "use client";
 
+import { createId } from "@/lib/id";
+
 /**
  * F1.12.3 — o que o Player PODE FAZER agora: atacar e usar as ações de turno.
  *
@@ -110,7 +112,7 @@ export default function PlayerActionsPanel({
         const coverObstacleId = tacticalCoverObstacleId(selectedTargetId);
            const result = await attackMesa({
           sessionId: state.session.id,
-          resolutionId: crypto.randomUUID(),
+          resolutionId: createId(),
           actorId: me.id,
           targetId: coverObstacleId ? "" : selectedTargetId,
           ...(coverObstacleId ? { targetType: "cover" as const, obstacleId: coverObstacleId } : {}),

@@ -6,6 +6,7 @@ import { rollDice } from "@/lib/dice";
 import type { DiscordConsent } from "@/lib/discord/consent";
 import { clearSessionCode, getSessionCode, setSessionCode } from "@/lib/discord/session";
 import { generateSessionCode, normalizeSessionCode } from "@/lib/discord/sessionCode";
+import { createId } from "@/lib/id";
 import type { RollHistoryEntry } from "@/types/character";
 
 type DiceDrawerProps = {
@@ -97,7 +98,7 @@ export default function DiceDrawer({
     try {
       const result = rollDice(target);
       const entry: RollHistoryEntry = {
-        id: crypto.randomUUID(),
+        id: createId(),
         type: "free_roll",
         label: target,
         characterId: "",

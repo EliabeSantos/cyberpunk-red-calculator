@@ -1,5 +1,7 @@
 "use client";
 
+import { createId } from "@/lib/id";
+
 /**
  * F1.12.3 — **Player Mesa Screen**: a tela completa do Jogador em `/mesa/[id]`.
  *
@@ -26,15 +28,17 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import MesaCharacterLink from "@/components/mesa/MesaCharacterLink";
-import { endCombat, fetchMesaControlMetadata, leaveMesa, MesaApiError } from "@/lib/mesa/client";
+import { closeMesa, endCombat, fetchMesaControlMetadata, leaveMesa, MesaApiError } from "@/lib/mesa/client";
 import { attackTargets, myCombatant } from "@/lib/mesa/playerScreen";
 import type { MesaState } from "@/lib/mesa/types";
 import type { CombatWeapon } from "@/lib/combat/contract";
+import type { Character } from "@/types/character";
 import { getAvailableAttacks } from "@/lib/attacks";
 import type { AvailableAttack } from "@/types/attack";
 import { useAutoLinkCharacter } from "@/lib/mesa/useAutoLinkCharacter";
 import { loadCharacters } from "@/lib/storage";
 import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
+import { shouldReconcileAfterAction } from "@/lib/mesa/useMesaState";
 
 import CombatLog from "./CombatLog";
 import ActionFeedback from "./ActionFeedback";
@@ -50,18 +54,22 @@ import GmNetArchitecturePanel from "./GmNetArchitecturePanel";
 import PlayerStatusPanel from "./PlayerStatusPanel";
 import TurnStatus from "./TurnStatus";
 import TacticalView from "./TacticalView";
-import type { Notice, NoticeFn, RunAction, RunOptions } from "./types";
+import type { NoticeFn, RunAction, RunOptions } from "./types";
+import FloatingUpdateCard, { type FloatingUpdate } from "@/components/FloatingUpdateCard";
+
+const EMPTY_WEAPONS: Character["weapons"] = [];
 
 interface Props {
   state: MesaState;
   /** `true` = Realtime entregando; `false` = polling (mostrado como reconexão). */
   realtime: boolean;
   onRefresh: () => Promise<void>;
+  getRefreshVersion: () => number;
 }
 
-export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) {
+export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefreshVersion }: Props) {
   const router = useRouter();
-  const [notice, setNotice] = useState<Notice>(null);
+  const [notice, setNotice] = useState<FloatingUpdate[]>([]);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [targetDraft, setTargetDraft] = useState("");
@@ -70,12 +78,14 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
   const [selectedAttackId, setSelectedAttackId] = useState("");
   const [gmControlledCombatantId, setGmControlledCombatantId] = useState<string | null>(null);
   const [selectedHackableObjectId, setSelectedHackableObjectId] = useState<string | null>(null);
+  const [selectedAccessPointId, setSelectedAccessPointId] = useState<string | null>(null);
   const [gmControlMode, setGmControlMode] = useState<"enemy" | "map">("enemy");
   const [controlWeapons, setControlWeapons] = useState<Record<string, { weapons: CombatWeapon[]; attacks: AvailableAttack[] }>>({});
 
   const onNotice = useCallback<NoticeFn>((message, kind) => {
-    setNotice({ message, kind });
-    window.setTimeout(() => setNotice(null), 5000);
+    const id = createId();
+    setNotice((current) => [...current.slice(-3), { id, message, kind }]);
+    window.setTimeout(() => setNotice((current) => current.filter((entry) => entry.id !== id)), 5000);
   }, []);
 
   const onChanged = useCallback(async () => {
@@ -85,9 +95,12 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
   const run = useCallback<RunAction>(
     async (action, options?: RunOptions) => {
       setBusy(true);
+      const versionBeforeAction = getRefreshVersion();
       try {
         await action();
-        await onChanged();
+        // O Realtime continua sendo primário. Se já aplicou um GET autenticado
+        // enquanto o POST estava em andamento, não faça um segundo GET.
+        if (shouldReconcileAfterAction(versionBeforeAction, getRefreshVersion())) await onChanged();
         if (options?.success) onNotice(options.success, "ok");
       } catch (caught) {
         const message = caught instanceof MesaApiError ? caught.message : "Falha na operação.";
@@ -98,7 +111,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
         setBusy(false);
       }
     },
-    [onChanged, onNotice],
+    [getRefreshVersion, onChanged, onNotice],
   );
 
   // Vincula a ficha ativa do navegador quando o jogador ainda não escolheu.
@@ -112,12 +125,13 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
   // Alvo: mantém a escolha enquanto ela ainda existir; senão cai no primeiro
   // inimigo vivo (derivação pura — nenhum estado paralelo de Mesa).
   const selectedTargetId = useMemo(() => {
+    if (selectedAccessPointId || selectedHackableObjectId) return "";
     if (targets.some((target) => target.id === targetDraft)) return targetDraft;
     const coverId = tacticalCoverObstacleId(targetDraft);
     const geometry = state.session.tacticalMap?.geometry;
     if (coverId && [...(geometry?.walls ?? []), ...(geometry?.doors ?? [])].some((entry) => entry.id === coverId && entry.destroyed !== true && !(entry.type === "door" && entry.state === "open"))) return targetDraft;
     return targets[0]?.id ?? "";
-  }, [state.session.tacticalMap?.geometry, targets, targetDraft]);
+  }, [selectedAccessPointId, selectedHackableObjectId, state.session.tacticalMap?.geometry, targets, targetDraft]);
 
   const gmTargets = useMemo(
     () => state.combatants.filter((combatant) => combatant.kind === "character" && !combatant.isDead && combatant.id !== gmControlledCombatantId),
@@ -135,39 +149,21 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
   const isControllingEnemy = isGM && gmSelectedCombatant?.kind === "enemy";
   const displayedCombatant = isControllingEnemy ? gmSelectedCombatant : me;
 
-  useEffect(() => {
-    if (state.session.status === "finished" || state.combat?.status !== "active") {
-      setTargetDraft("");
-      setGmTargetDraft("");
-      return;
-    }
-    const geometry = state.session.tacticalMap?.geometry;
-    const coverExists = (targetId: string) => {
-      const obstacleId = tacticalCoverObstacleId(targetId);
-      return obstacleId !== null && [...(geometry?.walls ?? []), ...(geometry?.doors ?? [])].some((entry) => entry.id === obstacleId && entry.destroyed !== true && !(entry.type === "door" && entry.state === "open"));
-    };
-    if (targetDraft && !targets.some((target) => target.id === targetDraft) && !coverExists(targetDraft)) setTargetDraft("");
-    if (gmTargetDraft && !gmTargets.some((target) => target.id === gmTargetDraft) && !coverExists(gmTargetDraft)) setGmTargetDraft("");
-  }, [gmTargetDraft, gmTargets, state.combat?.status, state.session.status, targetDraft, targets]);
-
   const meParticipant = state.participants.find((entry) => entry.id === state.viewer.participantId) ?? null;
   const linkedCharacterId = meParticipant?.characterId ?? null;
 
-  // Ficha local correspondente (só para RÓTULO: os dados da tela vêm da Mesa).
-  const characterName = useMemo(() => {
-    if (!linkedCharacterId) return null;
-    return loadCharacters().find((entry) => entry.id === linkedCharacterId)?.identity.name ?? null;
-  }, [linkedCharacterId]);
-
-  const weapons = useMemo(() => {
-    if (!linkedCharacterId) return [];
-    return loadCharacters().find((entry) => entry.id === linkedCharacterId)?.weapons ?? [];
-  }, [linkedCharacterId]);
-  const attacks = useMemo<AvailableAttack[]>(() => {
-    if (!linkedCharacterId) return [];
-    const character = loadCharacters().find((entry) => entry.id === linkedCharacterId);
-    return character ? getAvailableAttacks(character) : [];
-  }, [linkedCharacterId]);
+  // Uma única leitura da ficha local por render. A Mesa continua sendo a fonte
+  // autoritativa; esta ficha só fornece rótulo, armas e ataques disponíveis.
+  const localCharacter = useMemo(
+    () => linkedCharacterId ? loadCharacters().find((entry) => entry.id === linkedCharacterId) ?? null : null,
+    [linkedCharacterId],
+  );
+  const characterName = localCharacter?.identity.name ?? null;
+  const weapons = localCharacter?.weapons ?? EMPTY_WEAPONS;
+  const attacks = useMemo<AvailableAttack[]>(
+    () => localCharacter ? getAvailableAttacks(localCharacter) : [],
+    [localCharacter],
+  );
   const playerSelectedWeapon = useMemo(
     () => {
       const selected = attacks.find((attack) => attack.id === selectedAttackId);
@@ -191,10 +187,14 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
   const playerSelectedAttack = attacks.find((attack) => attack.id === selectedAttackId) ?? attacks[0] ?? null;
 
   async function handleLeave() {
-    if (!window.confirm("Sair da mesa? Para voltar você vai precisar do código de novo.")) return;
+    const message = isGM
+      ? "Encerrar a mesa? O estado será salvo no banco e a sessão ficará disponível apenas para histórico."
+      : "Sair da mesa? Para voltar você vai precisar do código de novo.";
+    if (!window.confirm(message)) return;
     setLeaving(true);
     try {
-      await leaveMesa(state.session.id, state.session.joinCode);
+      if (isGM) await closeMesa(state.session.id, state.session.joinCode);
+      else await leaveMesa(state.session.id, state.session.joinCode);
       router.push("/");
     } catch (caught) {
       onNotice(
@@ -239,7 +239,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
         <p className="player-mesa-notice">Esta Mesa foi encerrada pelo Mestre.</p>
       )}
 
-      {notice && <p className={`mesa-notice ${notice.kind}`}>{notice.message}</p>}
+      <FloatingUpdateCard updates={notice} />
 
       <ActionFeedback busy={busy} />
 
@@ -272,14 +272,33 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
            <TacticalView
              state={state}
              onNotice={onNotice}
-             selectedTargetId={isGM ? selectedGmTargetId : selectedTargetId}
-             onSelectTarget={isGM ? setGmTargetDraft : setTargetDraft}
+              selectedTargetId={isGM ? selectedGmTargetId : selectedTargetId}
+              onSelectTarget={(id) => {
+                setSelectedAccessPointId(null);
+                setSelectedHackableObjectId(null);
+                if (isGM) setGmTargetDraft(id);
+                else setTargetDraft(id);
+              }}
              controlledCombatantId={isGM ? gmControlledCombatantId : null}
              selectedWeapon={isGM ? gmSelectedWeapon : playerSelectedWeapon}
              selectedAttackType={isGM ? gmSelectedWeapon?.attackType ?? gmSelectedAttack?.context.type : playerSelectedWeapon?.attackType ?? playerSelectedAttack?.context.type}
              selectedSkillId={isGM ? gmSelectedWeapon?.skill ?? gmSelectedAttack?.context.skillId : playerSelectedWeapon?.skill ?? playerSelectedAttack?.context.skillId}
-             selectedHackableObjectId={selectedHackableObjectId}
-             onSelectHackableObject={setSelectedHackableObjectId}
+              selectedHackableObjectId={selectedHackableObjectId}
+              onSelectHackableObject={(id) => {
+                setSelectedHackableObjectId(id);
+                if (id) {
+                  setSelectedAccessPointId(null);
+                  setTargetDraft("");
+                }
+              }}
+              selectedAccessPointId={selectedAccessPointId}
+              onSelectAccessPoint={(id) => {
+                setSelectedAccessPointId(id);
+                if (id) {
+                  setSelectedHackableObjectId(null);
+                  setTargetDraft("");
+                }
+              }}
              gmMapToolsVisible={!isGM || gmControlMode === "map"}
            />
           <div className="player-mesa-stage-tools">
@@ -310,13 +329,20 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh }: Props) 
            <PlayerNetrunnerPanel
              state={state}
              me={me}
-             character={linkedCharacterId ? loadCharacters().find((entry) => entry.id === linkedCharacterId) ?? null : null}
-              target={targets.find((target) => target.id === selectedTargetId) ?? null}
+              character={localCharacter}
+              target={selectedAccessPointId || selectedHackableObjectId ? null : targets.find((target) => target.id === selectedTargetId) ?? null}
               selectedHackableObject={(state.session.tacticalMap?.hackableObjects ?? []).find((object) => object.id === selectedHackableObjectId) ?? null}
-             busy={busy}
-             run={run}
-             onChanged={onChanged}
-           />
+              selectedAccessPointId={selectedAccessPointId}
+              onSelectAccessPoint={(id) => {
+                setSelectedAccessPointId(id);
+                if (id) {
+                  setSelectedHackableObjectId(null);
+                  setTargetDraft("");
+                }
+              }}
+              busy={busy}
+              run={run}
+            />
            <GmNetArchitecturePanel state={state} />
           </div>
         </section>

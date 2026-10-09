@@ -1,5 +1,9 @@
 "use client";
 
+/* These effects hydrate localStorage and synchronize the Mesa snapshot into
+ * the local character editor; the updates are intentional external-state sync. */
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import CharacterCreator from "@/components/character/CharacterCreator";

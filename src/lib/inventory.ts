@@ -3,6 +3,7 @@ import { getWeaponAttackProfile } from "@/data/attacks";
 import { installCyberware, type CyberwareInstallationResult } from "@/lib/cyberware";
 import { validateCyberwareInstall, validateWeaponEquip } from "@/lib/cyberwareEffects";
 import type { Character, InventoryItem, Weapon } from "@/types/character";
+import { createId } from "@/lib/id";
 
 export type EquipResult = { character: Character; cyberwareInstallation?: CyberwareInstallationResult };
 export function isEquippableItem(item: InventoryItem): boolean { return item.category === "cyberware" || item.category === "weapon" || item.category === "armor"; }
@@ -27,7 +28,7 @@ export function equipInventoryItem(character: Character, inventoryItemId: string
       if (requirement) return requirement;
     }
     const attackProfile = catalogItem ? getWeaponAttackProfile(catalogItem) : undefined;
-    const weapon: Weapon = { id: crypto.randomUUID(), catalogItemId: inventoryItem.catalogItemId, name: inventoryItem.name, damage: typeof catalogItem?.damage === "string" ? catalogItem.damage : "—", rateOfFire: typeof catalogItem?.rof === "number" ? catalogItem.rof : undefined, magazine: typeof catalogItem?.ammo === "number" ? catalogItem.ammo : undefined, ammo: typeof catalogItem?.ammo === "number" ? catalogItem.ammo : undefined, skill: attackProfile?.skillId, attackType: attackProfile?.type };
+  const weapon: Weapon = { id: createId(), catalogItemId: inventoryItem.catalogItemId, name: inventoryItem.name, damage: typeof catalogItem?.damage === "string" ? catalogItem.damage : "—", rateOfFire: typeof catalogItem?.rof === "number" ? catalogItem.rof : undefined, magazine: typeof catalogItem?.ammo === "number" ? catalogItem.ammo : undefined, ammo: typeof catalogItem?.ammo === "number" ? catalogItem.ammo : undefined, skill: attackProfile?.skillId, attackType: attackProfile?.type };
     return { character: { ...character, inventory, weapons: [...character.weapons, weapon] } };
   }
   const sp = typeof catalogItem?.sp === "number" ? catalogItem.sp : 0;

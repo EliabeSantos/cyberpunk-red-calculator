@@ -327,8 +327,22 @@ postgresTest("POST /combat/attack atravessa autorização, Engine, commit e retr
   const differentA = postAttack(gmToken, differentBody(`http-different-a-${randomUUID()}`));
   const differentB = postAttack(gmToken, differentBody(`http-different-b-${randomUUID()}`));
   const differentResponses = await Promise.all([differentA, differentB]);
+  // As duas resoluções são PRÓPRIAS (resolutionId diferente), então exatamente
+  // UMA pode aplicar o orçamento de ação — nunca dois commits. O código da
+  // recusa do perdedor depende do momento em que ele leu o estado:
+  //   409 action_conflict      → leu antes do commit e perdeu o CAS;
+  //   403 insufficient_actions → leu depois, com o orçamento já gasto;
+  //   400 target_defeated      → leu depois, com o alvo já derrotado.
+  // Os três são recusas legítimas do servidor; o invariante testado aqui é
+  // "uma aplicação e uma recusa", não qual delas ocorre.
   assert.equal(differentResponses.filter((item) => item.response.status === 200).length, 1);
-  assert.equal(differentResponses.filter((item) => item.response.status === 409).length, 1);
+  const rejected = differentResponses.filter((item) => item.response.status !== 200);
+  assert.equal(rejected.length, 1, "a disputa precisa terminar com exatamente uma recusa");
+  const rejection = `${rejected[0].response.status}:${rejected[0].payload.code ?? ""}`;
+  assert.ok(
+    ["409:action_conflict", "403:insufficient_actions", "400:target_defeated"].includes(rejection),
+    `rejeição fora do conjunto esperado: ${rejection}`,
+  );
 
   const forbidden = await postAttack(playerToken, { ...concurrentBody(`http-forbidden-${randomUUID()}`), actorId: gmActorId, targetId: missTargetId });
   assert.equal(forbidden.response.status, 403);

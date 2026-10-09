@@ -8,7 +8,7 @@
  */
 import { errorResponse, ok, readJson, tokenFrom } from "@/lib/mesa/http";
 import { leaveSession, linkCharacter } from "@/lib/mesa/store";
-import { publishMesaState } from "@/lib/mesa/realtimeServer";
+import { createMesaHostingInfrastructure } from "@/lib/mesa/hostingInfrastructure";
 
 export const runtime = "nodejs";
 
@@ -26,7 +26,7 @@ export async function PATCH(request: Request, context: Context): Promise<Respons
       characterId: body.characterId,
       sheet: body.sheet,
     });
-    await publishMesaState(id);
+    await (await createMesaHostingInfrastructure()).eventTransport.publishInvalidation(id);
     return ok({ participant });
   } catch (error) {
     return errorResponse(error);
@@ -38,7 +38,7 @@ export async function DELETE(request: Request, context: Context): Promise<Respon
   try {
     const { id } = await context.params;
     await leaveSession({ sessionId: id, token: tokenFrom(request) });
-    await publishMesaState(id);
+    await (await createMesaHostingInfrastructure()).eventTransport.publishInvalidation(id);
     return ok();
   } catch (error) {
     return errorResponse(error);

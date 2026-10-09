@@ -8,19 +8,23 @@ set tactical_map = jsonb_set(
     tactical_map,
     '{geometry,walls}',
     coalesce((
-      select jsonb_agg(case when item ? 'coverMaterial' and not (item ? 'coverThickness')
-        then item || jsonb_build_object('coverThickness', null) else item end)
+      select jsonb_agg(
+        case when item ? 'coverMaterial' and not (item ? 'coverThickness')
+          then item || jsonb_build_object('coverThickness', null) else item end
+        order by ord
+      )
       from jsonb_array_elements(coalesce(tactical_map #> '{geometry,walls}', '[]'::jsonb)) with ordinality as entries(item, ord)
-      order by ord
     ), '[]'::jsonb),
     true
   ),
   '{geometry,doors}',
   coalesce((
-    select jsonb_agg(case when item ? 'coverMaterial' and not (item ? 'coverThickness')
-      then item || jsonb_build_object('coverThickness', null) else item end)
+    select jsonb_agg(
+      case when item ? 'coverMaterial' and not (item ? 'coverThickness')
+        then item || jsonb_build_object('coverThickness', null) else item end
+      order by ord
+    )
     from jsonb_array_elements(coalesce(tactical_map #> '{geometry,doors}', '[]'::jsonb)) with ordinality as entries(item, ord)
-    order by ord
   ), '[]'::jsonb),
   true
 )

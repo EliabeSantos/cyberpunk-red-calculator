@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { getAvailableAttacks, isRangedAttackType, rollAttack } from "@/lib/attacks";
 import { attackMesa, MesaApiError } from "@/lib/mesa/client";
+import { markMesaVisualConfirmation } from "@/lib/mesa/telemetry";
+import { createId } from "@/lib/id";
 import type { AttackResult, DamageResult } from "@/lib/combat/contract";
 import type { DiceResult } from "@/lib/dice";
 import type { AttackRollResult, AttackMode } from "@/types/attack";
@@ -94,7 +96,7 @@ function LegacyAttackActions({ character, onUpdate, onResult, weaponAttackModes,
               </div>
             )}
             <div style={{ padding: "0.35rem 0.6rem" }}>
-              <button type="button" onClick={() => attack(availableAttack.id, isRanged ? currentMode : undefined)} disabled={isOut} style={{ width: "100%", color: isOut ? "#666" : "var(--accent)", padding: "0.35rem", fontSize: "0.7rem" }}>
+                <button data-testid="mesa-attack-submit" type="button" onClick={() => attack(availableAttack.id, isRanged ? currentMode : undefined)} disabled={isOut} style={{ width: "100%", color: isOut ? "#666" : "var(--accent)", padding: "0.35rem", fontSize: "0.7rem" }}>
                 {isOut ? "🔫 Sem munição" : "🎲 Rolar ataque"}
               </button>
             </div>
@@ -124,7 +126,7 @@ function PlayerAttackActions({ character, onUpdate, onResult, weaponAttackModes,
       if (!effectiveTargetId || busy) return;
       setBusy(true);
       try {
-        const resolutionId = crypto.randomUUID();
+        const resolutionId = createId();
         const weapon = availableAttack.context.weaponId
           ? character.weapons.find((item) => item.id === availableAttack.context.weaponId)
           : undefined;
@@ -147,8 +149,9 @@ function PlayerAttackActions({ character, onUpdate, onResult, weaponAttackModes,
         if (response.damageError) mesaAttack.onDamageError(response.damageError.message);
         // Ammo is authoritative on the server. The refresh below is the only
         // path that projects the new value back into the sheet; do not apply
-        // `response.ammoAfter` optimistically here.
-        await mesaAttack.onRefresh();
+         // `response.ammoAfter` optimistically here.
+         await mesaAttack.onRefresh();
+         markMesaVisualConfirmation({ sessionId: mesaAttack.sessionId, resolutionId });
       } catch (caught) {
         mesaAttack.onError(caught instanceof MesaApiError ? caught.message : "Falha no ataque.");
       } finally {
@@ -297,6 +300,7 @@ function PlayerAttackActions({ character, onUpdate, onResult, weaponAttackModes,
             {/* Roll button */}
             <div style={{ padding: "0.35rem 0.6rem" }}>
               <button
+                data-testid="mesa-attack-submit"
                 type="button"
                 onClick={() => void attack(availableAttack.id, isRanged ? currentMode : undefined)}
                 disabled={isOut || busy || !effectiveTargetId}

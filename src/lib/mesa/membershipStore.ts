@@ -10,6 +10,7 @@
  * quem escreveu (mesmo documento) também seja notificado — o evento nativo
  * `storage` só dispara em OUTRAS abas.
  */
+import { createSecureId } from "@/lib/id";
 
 export interface MesaEntry {
   sessionId: string;
@@ -66,12 +67,16 @@ export function getPlayerToken(): string {
   try {
     const existing = window.localStorage.getItem(TOKEN_KEY);
     if (existing && existing.length >= 16) return existing;
-    const token = crypto.randomUUID();
+    const token = createSecureId();
+    if (!token) throw new Error("Este navegador não oferece um gerador criptográfico seguro para a identidade da Mesa.");
     window.localStorage.setItem(TOKEN_KEY, token);
     return token;
   } catch {
-    // Sem storage: a sessão da mesa não sobrevive ao reload, mas nada quebra.
-    return crypto.randomUUID();
+    // Sem storage, a sessão da mesa não sobrevive ao reload. Não criamos um
+    // token fraco: playerToken é uma credencial bearer e exige Web Crypto.
+    const token = createSecureId();
+    if (!token) throw new Error("Este navegador não oferece um gerador criptográfico seguro para a identidade da Mesa.");
+    return token;
   }
 }
 

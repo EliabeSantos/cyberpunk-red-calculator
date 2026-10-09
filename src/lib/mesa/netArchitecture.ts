@@ -177,11 +177,20 @@ export function normalizeNetDiscovery(raw: unknown, architectureId: string): Net
   return { architectureId, discoveredNodeIds: [] };
 }
 
+/**
+ * Projeção da Architecture para um viewer.
+ *
+ * `viewerNetrunnerId` é o combatente do PRÓPRIO Netrunner: somente nesse caso
+ * o Control Node revela `controlledByNetrunnerId`. O estado de um Node de
+ * terceiros continua privado — o Player vê que o Node está `controlled`, nunca
+ * quem o controla.
+ */
 export function projectNetArchitecture(
   architecture: NetArchitecture,
   currentFloor: number,
   discovery: NetDiscoveryState,
   administrative: boolean,
+  viewerNetrunnerId: string | null = null,
 ): NetArchitectureProjection {
   if (administrative) return { ...architecture, architectureId: architecture.id, currentFloor, nodes: architecture.floors.find((floor) => floor.index === currentFloor)?.nodes ?? [], administrative: true, floors: architecture.floors };
   const discovered = new Set(discovery.discoveredNodeIds);
@@ -195,7 +204,8 @@ export function projectNetArchitecture(
   const publicNodes = nodes.map((node) => {
     if (node.type === "control_node") {
       const demonKnown = node.controlledByDemonId ? discoveredDemonIds.has(node.controlledByDemonId) : false;
-      return { ...node, controlledByNetrunnerId: undefined, ...(demonKnown ? {} : { controlledByDemonId: undefined }) };
+      const ownedByViewer = Boolean(viewerNetrunnerId) && node.controlledByNetrunnerId === viewerNetrunnerId;
+      return { ...node, controlledByNetrunnerId: ownedByViewer ? node.controlledByNetrunnerId : undefined, ...(demonKnown ? {} : { controlledByDemonId: undefined }) };
     }
     if (node.type === "demon" && node.demon) {
       return { ...node, demon: { ...node.demon, controlledNodeIds: (node.demon.controlledNodeIds ?? []).filter((id) => discovered.has(id)) } };

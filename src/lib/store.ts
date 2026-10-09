@@ -1,5 +1,6 @@
 import { getCatalogItem, type CatalogItem } from "@/data/items";
 import type { Character, InventoryItem } from "@/types/character";
+import { createId } from "@/lib/id";
 
 export type PurchaseResult = { character: Character; item: CatalogItem } | { error: "item-not-found" | "insufficient-funds" };
 export type SaleResult = { character: Character; item: CatalogItem; quantity: number; proceeds: number } | { error: "item-not-found" | "not-in-inventory" | "invalid-quantity" };
@@ -7,7 +8,7 @@ export type SaleResult = { character: Character; item: CatalogItem; quantity: nu
 export function addCatalogItemToInventory(character: Character, item: CatalogItem, quantity = item.quantity ?? 1): Character {
   if (!Number.isInteger(quantity) || quantity <= 0) return character;
   const existing = character.inventory.find((inventoryItem) => inventoryItem.catalogItemId === item.id);
-  const inventory: InventoryItem[] = existing ? character.inventory.map((inventoryItem) => inventoryItem.catalogItemId === item.id ? { ...inventoryItem, quantity: inventoryItem.quantity + quantity } : inventoryItem) : [...character.inventory, { id: crypto.randomUUID(), catalogItemId: item.id, name: item.name, category: item.category, quantity, notes: item.description ?? item.effects?.join(" ") }];
+  const inventory: InventoryItem[] = existing ? character.inventory.map((inventoryItem) => inventoryItem.catalogItemId === item.id ? { ...inventoryItem, quantity: inventoryItem.quantity + quantity } : inventoryItem) : [...character.inventory, { id: createId(), catalogItemId: item.id, name: item.name, category: item.category, quantity, notes: item.description ?? item.effects?.join(" ") }];
   return { ...character, inventory };
 }
 export function canPurchaseItem(character: Character, item: CatalogItem): boolean { return character.wallet.eurodollars >= item.price; }

@@ -1,0 +1,19 @@
+import { errorResponse, ok, readJson, tokenFrom } from "@/lib/mesa/http";
+import { MesaError, setCyberdeckStatus } from "@/lib/mesa/store";
+import { publishMesaState } from "@/lib/mesa/realtimeServer";
+
+export const runtime = "nodejs";
+
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+  try {
+    const { id } = await context.params;
+    const body = await readJson(request);
+    const extra = Object.keys(body).filter((key) => !["combatantId", "status"].includes(key));
+    if (extra.length) throw new MesaError("Estado do Cyberdeck é server-authoritative.", 400, "client_authority_forbidden");
+    const result = await setCyberdeckStatus({ sessionId: id, token: tokenFrom(request), combatantId: body.combatantId, status: body.status });
+    await publishMesaState(id);
+    return ok(result);
+  } catch (error) {
+    return errorResponse(error);
+  }
+}

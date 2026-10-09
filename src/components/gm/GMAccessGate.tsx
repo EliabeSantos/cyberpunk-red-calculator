@@ -1,5 +1,8 @@
 "use client";
 
+/* Access is read from browser storage after mount; this effect gates the UI. */
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useEffect, useState } from "react";
 import { hasGMAccess, enableGMAccessForDevelopment, setGMSession } from "@/lib/gmStorage";
 
