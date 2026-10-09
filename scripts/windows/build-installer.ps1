@@ -36,6 +36,7 @@ Copy-Item "$root\public" "$stage\app\public" -Recurse
 Copy-Item "$root\package.json","$root\package-lock.json" "$stage\app"
 Copy-Item "$root\node_modules" "$stage\app\node_modules" -Recurse
 Copy-Item "$root\scripts" "$stage\app\scripts" -Recurse
+Remove-Item "$stage\app\scripts\windows" -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\supabase" "$stage\app\supabase" -Recurse
 & $InnoSetup "$root\installer\windows\CyberpunkRedCalculator.iss"
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE." }

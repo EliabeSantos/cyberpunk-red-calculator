@@ -16,10 +16,12 @@ Uninstallable=yes
 [Files]
 Source: "stage\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 Source: "..\..\scripts\windows\bootstrap-host.ps1"; DestDir: "{app}\windows"; Flags: ignoreversion
+Source: "..\..\scripts\windows\stop-host.ps1"; DestDir: "{app}\windows"; Flags: ignoreversion
+Source: "..\..\scripts\windows\open-host.ps1"; DestDir: "{app}\windows"; Flags: ignoreversion
 [Icons]
 Name: "{group}\Cyberpunk RED Calculator"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; WorkingDir: "{app}"
-Name: "{group}\Abrir Cyberpunk RED Calculator"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\windows\open-host.ps1"""; WorkingDir: "{app}"
-Name: "{group}\Parar Cyberpunk RED Calculator"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\windows\stop-host.ps1"""; WorkingDir: "{app}"
+Name: "{group}\Abrir Cyberpunk RED Calculator"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\windows\open-host.ps1"""; WorkingDir: "{app}"
+Name: "{group}\Parar Cyberpunk RED Calculator"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\windows\stop-host.ps1"""; WorkingDir: "{app}"
 Name: "{userstartup}\Cyberpunk RED Calculator"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; WorkingDir: "{app}"
 [Run]
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; Flags: postinstall nowait

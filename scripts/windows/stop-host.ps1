@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$root = Split-Path -Parent $PSScriptRoot
 $data = Join-Path $env:ProgramData "Cyberpunk RED Calculator"
 $config = Join-Path $data "config"
 $logs = Join-Path $data "logs"
