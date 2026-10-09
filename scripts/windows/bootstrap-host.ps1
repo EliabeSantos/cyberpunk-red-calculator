@@ -63,7 +63,13 @@ if (-not $clusterExisted) {
   Remove-Item $pwFile -Force
   if ($LASTEXITCODE -ne 0) { throw "PostgreSQL cluster initialization failed." }
   Start-Postgres
-  & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app cyberpunk_red
+  $previousPgPassword = $env:PGPASSWORD
+  $env:PGPASSWORD = $password
+  try {
+    & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app cyberpunk_red
+  } finally {
+    $env:PGPASSWORD = $previousPgPassword
+  }
   if ($LASTEXITCODE -ne 0) { throw "Local database creation failed." }
 }
 $envFile = Join-Path $config "host.env"
