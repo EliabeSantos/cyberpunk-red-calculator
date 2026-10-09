@@ -6,7 +6,10 @@ $config = Join-Path $data "config"
 $logs = Join-Path $data "logs"
 New-Item $config,$logs -ItemType Directory -Force | Out-Null
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-& icacls.exe $data /inheritance:r /grant:r "${identity}:(OI)(CI)M" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" *> (Join-Path $logs "permissions.log")
+# Use well-known SIDs for SYSTEM and the local Administrators group so this
+# works on localized Windows installations (Administradores, Administrators,
+# Administrateurs, etc.).
+& icacls.exe $data /inheritance:r /grant:r "${identity}:(OI)(CI)M" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" *> (Join-Path $logs "permissions.log")
 if ($LASTEXITCODE -ne 0) { throw "Could not protect the local data directory permissions. See $logs\permissions.log." }
 $node = Get-ChildItem (Join-Path $root "node") -Filter node.exe -Recurse | Select-Object -First 1
 $pg = Get-ChildItem (Join-Path $root "postgres") -Filter initdb.exe -Recurse | Select-Object -First 1
