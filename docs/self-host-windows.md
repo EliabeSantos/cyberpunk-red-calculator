@@ -15,6 +15,8 @@ Na primeira execução, o bootstrap cria um cluster em `%ProgramData%\Cyberpunk 
 
 O atalho **Cyberpunk RED Calculator** inicia o host e abre `http://localhost:3000`. O primeiro GM cria o usuário/mesa pela interface; não há usuário ou senha de aplicação padrão. O PostgreSQL empacotado usa a porta local dedicada `55432` (não fica acessível pela LAN); se ela ou a porta 3000 estiver ocupada, o bootstrap interrompe com erro e grava o diagnóstico em `%ProgramData%\Cyberpunk RED Calculator\logs`.
 
+Ao clicar em **Criar uma mesa**, o anfitrião vê o modo de hospedagem disponível no servidor. Jogadores que escolhem **Entrar com código** não veem essa configuração. A troca entre Local e Supabase grava somente `MESA_HOSTING_MODE` no `host.env` protegido e exige reiniciar o servidor; não é permitida enquanto a aplicação ainda estiver usando o modo anterior. O Supabase só aparece se `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` já estiverem configuradas no ambiente do host.
+
 O grupo de atalhos também inclui **Abrir** e **Parar**. O atalho de parada encerra somente o processo do host registrado pelo bootstrap e o cluster PostgreSQL deste aplicativo; não encerra processos desconhecidos que usem as mesmas portas.
 
 ## Uso e rede

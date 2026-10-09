@@ -40,7 +40,7 @@ function Start-App {
   if (Test-ListeningPort $appPort) {
     throw "Application port $appPort is already occupied. Stop the existing server before starting this host."
   }
-  $process = Start-Process -FilePath $node.FullName -ArgumentList "scripts\local-start.mjs" -WorkingDirectory (Join-Path $root "app") -RedirectStandardOutput (Join-Path $logs "host.log") -RedirectStandardError (Join-Path $logs "host-error.log") -PassThru
+  $process = Start-Process -FilePath $node.FullName -ArgumentList "scripts\start-host.mjs" -WorkingDirectory (Join-Path $root "app") -RedirectStandardOutput (Join-Path $logs "host.log") -RedirectStandardError (Join-Path $logs "host-error.log") -PassThru
   $process.Id | Set-Content (Join-Path $config "host.pid") -Encoding ascii
   for ($attempt = 1; $attempt -le 60; $attempt++) {
     try {
@@ -55,8 +55,18 @@ function Start-App {
 $password = [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))
 $encodedPassword = [uri]::EscapeDataString($password)
 $cluster = Join-Path $data "postgres"
+$envFile = Join-Path $config "host.env"
+$hostEnvExists = Test-Path $envFile
+if ($hostEnvExists) {
+  Get-Content $envFile | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } }
+}
+$configuredMode = $env:MESA_HOSTING_MODE?.Trim().ToLower()
+if (-not $configuredMode) { $configuredMode = "local" }
+if ($configuredMode -ne "local" -and $configuredMode -ne "supabase") {
+  throw "MESA_HOSTING_MODE must be local or supabase."
+}
 $clusterExisted = Test-Path (Join-Path $cluster "PG_VERSION")
-if (-not $clusterExisted) {
+if ($configuredMode -eq "local" -and -not $clusterExisted) {
   $pwFile = Join-Path $config "bootstrap-password"
   $password | Set-Content $pwFile -Encoding ascii
   & $pg.FullName -D $cluster --username=mesa_app --pwfile=$pwFile --auth=scram-sha-256
@@ -72,13 +82,12 @@ if (-not $clusterExisted) {
   }
   if ($LASTEXITCODE -ne 0) { throw "Local database creation failed." }
 }
-$envFile = Join-Path $config "host.env"
-if ($clusterExisted -and -not (Test-Path $envFile)) {
+if ($clusterExisted -and -not $hostEnvExists) {
   throw "Database exists but host.env is missing; restore the configuration or use the documented recovery procedure."
 }
-if (-not (Test-Path $envFile)) {
-  "MESA_HOSTING_MODE=local`nMESA_LOCAL_DATABASE_URL=postgresql://mesa_app:$encodedPassword@127.0.0.1:$pgPort/cyberpunk_red`nMESA_HOSTNAME=0.0.0.0`nPORT=$appPort" | Set-Content $envFile -Encoding ascii
+if (-not $hostEnvExists) {
+  "MESA_HOSTING_MODE=local`nMESA_HOST_ENV_FILE=$envFile`nMESA_LOCAL_DATABASE_URL=postgresql://mesa_app:$encodedPassword@127.0.0.1:$pgPort/cyberpunk_red`nMESA_HOSTNAME=0.0.0.0`nPORT=$appPort" | Set-Content $envFile -Encoding ascii
 }
 Get-Content $envFile | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } }
-Start-Postgres
+if ($env:MESA_HOSTING_MODE -eq "local") { Start-Postgres }
 Start-App

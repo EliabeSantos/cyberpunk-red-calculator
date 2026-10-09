@@ -8,7 +8,7 @@ $pidFile = Join-Path $config "host.pid"
 if (Test-Path $pidFile) {
   $hostPid = [int](Get-Content $pidFile -Raw).Trim()
   $process = Get-CimInstance Win32_Process -Filter "ProcessId = $hostPid" -ErrorAction SilentlyContinue
-  if ($process -and $process.CommandLine -like "*scripts\\local-start.mjs*") {
+  if ($process -and $process.CommandLine -match "scripts\\(local-start|start-host)\.mjs") {
     & taskkill.exe /PID $hostPid /T /F *> (Join-Path $logs "stop.log")
   }
   Remove-Item $pidFile -Force -ErrorAction SilentlyContinue

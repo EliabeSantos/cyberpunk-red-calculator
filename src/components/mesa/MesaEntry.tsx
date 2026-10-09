@@ -42,7 +42,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { resolveActiveMesa } from "@/lib/mesa/activeMesa";
-import { closeMesa, createMesa, joinMesa, leaveMesa, MesaApiError } from "@/lib/mesa/client";
+import { closeMesa, createMesa, getHostingConfig, joinMesa, leaveMesa, MesaApiError, setHostingMode, type HostingConfig, type HostingMode } from "@/lib/mesa/client";
 import { defaultMesaDisplayName } from "@/lib/mesa/displayName";
 import { JOIN_CODE_PLACEHOLDER, normalizeJoinCode } from "@/lib/mesa/joinCode";
 import {
@@ -65,6 +65,9 @@ export default function MesaEntry() {
   const [joinCode, setJoinCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [hostingConfig, setHostingConfig] = useState<HostingConfig | null>(null);
+  const [hostingMode, setHostingModeChoice] = useState<HostingMode | null>(null);
+  const [hostingSaving, setHostingSaving] = useState(false);
 
   // Lista REATIVA das mesas deste navegador (mudou → re-render, sem efeito).
   const membershipStore = useSyncExternalStore(
@@ -114,6 +117,16 @@ export default function MesaEntry() {
     previousPanel.current = panel;
   }, [panel]);
 
+  useEffect(() => {
+    if (panel !== "create" || hostingConfig) return;
+    void getHostingConfig()
+      .then((config) => {
+        setHostingConfig(config);
+        setHostingModeChoice(config.mode ?? config.availableModes[0] ?? null);
+      })
+      .catch(() => setHostingConfig(null));
+  }, [panel, hostingConfig]);
+
   /**
    * Botão principal do nav: decide entre a tela da Mesa e o fluxo de entrada.
    *
@@ -156,6 +169,21 @@ export default function MesaEntry() {
     } catch (caught) {
       setError(caught instanceof MesaApiError ? caught.message : "Não foi possível criar a mesa.");
       setBusy(false);
+    }
+  }
+
+  async function handleHostingMode(mode: HostingMode) {
+    setHostingModeChoice(mode);
+    if (!hostingConfig || mode === hostingConfig.mode) return;
+    setHostingSaving(true);
+    setError(null);
+    try {
+      const next = await setHostingMode(mode);
+      setHostingConfig(next);
+    } catch (caught) {
+      setError(caught instanceof MesaApiError ? caught.message : "Não foi possível configurar o modo do servidor.");
+    } finally {
+      setHostingSaving(false);
     }
   }
 
@@ -307,6 +335,30 @@ export default function MesaEntry() {
 
               {panel === "create" && (
                 <form className="mesa-form" onSubmit={handleCreate}>
+                  {hostingConfig && hostingConfig.availableModes.length > 0 && (
+                    <fieldset className="mesa-hosting-config">
+                      <legend>Onde esta mesa será hospedada?</legend>
+                      {hostingConfig.availableModes.map((mode) => (
+                        <label key={mode}>
+                          <input
+                            type="radio"
+                            name="hosting-mode"
+                            value={mode}
+                            checked={hostingMode === mode}
+                            onChange={() => void handleHostingMode(mode)}
+                            disabled={hostingSaving || !hostingConfig.configurable}
+                          />
+                          {mode === "local" ? "Servidor local (PostgreSQL)" : "Supabase"}
+                        </label>
+                      ))}
+                      {!hostingConfig.configurable && (
+                        <small>O modo é definido pela configuração do servidor.</small>
+                      )}
+                      {hostingConfig.restartRequired && (
+                        <small>Modo alterado. Reinicie o servidor antes de criar a mesa.</small>
+                      )}
+                    </fieldset>
+                  )}
                   <label>
                     Nome da mesa
                     <input
@@ -329,7 +381,7 @@ export default function MesaEntry() {
                   <button
                     type="submit"
                     className="mesa-primary"
-                    disabled={busy || !sessionName.trim() || !displayName.trim()}
+                    disabled={busy || hostingSaving || Boolean(hostingConfig?.restartRequired) || !sessionName.trim() || !displayName.trim()}
                   >
                     {busy ? "Criando..." : "Criar mesa"}
                   </button>

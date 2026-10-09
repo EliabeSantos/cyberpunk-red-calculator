@@ -134,6 +134,23 @@ export async function createMesa(input: { name: string; displayName: string }): 
   return result;
 }
 
+export type HostingMode = "local" | "supabase";
+
+export interface HostingConfig {
+  mode: HostingMode | null;
+  availableModes: HostingMode[];
+  configurable: boolean;
+  restartRequired: boolean;
+}
+
+export function getHostingConfig(): Promise<HostingConfig> {
+  return api<HostingConfig>("/api/hosting/config");
+}
+
+export function setHostingMode(mode: HostingMode): Promise<HostingConfig> {
+  return api<HostingConfig>("/api/hosting/config", { method: "POST", body: { mode } });
+}
+
 export async function joinMesa(input: { joinCode: string; displayName: string }): Promise<JoinResult> {
   const result = await api<JoinResult>("/api/mesa/join", { method: "POST", body: input });
   rememberMembership(result.session.joinCode, {
