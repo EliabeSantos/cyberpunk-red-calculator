@@ -17,7 +17,9 @@ if (-not $node -or -not $pg) { throw "Portable Node.js/PostgreSQL payload is inc
 $pgBin = Split-Path $pg.FullName
 $pgCtl = Join-Path $pgBin "pg_ctl.exe"
 $createdb = Join-Path $pgBin "createdb.exe"
-$pgPort = 5432
+# Keep the bundled database separate from common WSL/development PostgreSQL
+# forwarding, which frequently occupies 127.0.0.1:5432 on developer machines.
+$pgPort = 55432
 $appPort = 3000
 
 function Test-ListeningPort([int] $port) {

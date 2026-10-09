@@ -13,7 +13,7 @@ As versões e hashes SHA-256 dos runtimes estão em `installer/windows/RUNTIME-M
 
 Na primeira execução, o bootstrap cria um cluster em `%ProgramData%\Cyberpunk RED Calculator\postgres`, uma configuração protegida e aplica todas as migrations. O instalador também cria um atalho de inicialização automática; após reiniciar o Windows, PostgreSQL e o servidor são recuperados pelo mesmo bootstrap. Não copie essa pasta para chats ou repositórios.
 
-O atalho **Cyberpunk RED Calculator** inicia o host e abre `http://localhost:3000`. O primeiro GM cria o usuário/mesa pela interface; não há usuário ou senha de aplicação padrão. Se a porta 5432 ou 3000 estiver ocupada, o bootstrap interrompe com erro e grava o diagnóstico em `%ProgramData%\Cyberpunk RED Calculator\logs`.
+O atalho **Cyberpunk RED Calculator** inicia o host e abre `http://localhost:3000`. O primeiro GM cria o usuário/mesa pela interface; não há usuário ou senha de aplicação padrão. O PostgreSQL empacotado usa a porta local dedicada `55432` (não fica acessível pela LAN); se ela ou a porta 3000 estiver ocupada, o bootstrap interrompe com erro e grava o diagnóstico em `%ProgramData%\Cyberpunk RED Calculator\logs`.
 
 O grupo de atalhos também inclui **Abrir** e **Parar**. O atalho de parada encerra somente o processo do host registrado pelo bootstrap e o cluster PostgreSQL deste aplicativo; não encerra processos desconhecidos que usem as mesmas portas.
 
@@ -55,7 +55,7 @@ Em falha, consulte `%ProgramData%\Cyberpunk RED Calculator\logs`, confirme o pro
 
 Problemas comuns:
 
-* **Porta ocupada:** encerre o processo identificado por `Get-NetTCPConnection -LocalPort 3000` ou `5432`; não altere a porta no banco sem atualizar `host.env`.
+* **Porta ocupada:** encerre somente um processo identificado por `Get-NetTCPConnection -LocalPort 3000` ou `55432`; não encerre o `wslrelay.exe` se ele pertencer a outro ambiente. Não altere a porta no banco sem atualizar `host.env`.
 * **Bootstrap interrompido:** preserve `ProgramData`, consulte `postgres.log` e `host-error.log`, corrija a causa e execute o atalho novamente. Não apague o cluster para “reparar” sem backup.
 * **Após reiniciar o Windows:** confirme o atalho em `shell:common startup`; o bootstrap deve iniciar PostgreSQL antes do Next.js.
 * **Acesso remoto:** confirme primeiro firewall, IP alcançável e `MESA_HOSTNAME`; nunca exponha a porta 5432.
