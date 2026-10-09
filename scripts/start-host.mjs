@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
+import { join } from "node:path";
 
 const mode = process.env.MESA_HOSTING_MODE?.trim().toLowerCase();
 if (mode !== "local" && mode !== "supabase") {
@@ -8,7 +9,9 @@ if (mode !== "local" && mode !== "supabase") {
   process.exit(2);
 }
 
-const command = platform() === "win32" ? "next.cmd" : "next";
+// Do not depend on npm adding node_modules/.bin to PATH: the Windows
+// installer launches this file directly with the bundled node.exe.
+const command = join(process.cwd(), "node_modules", ".bin", platform() === "win32" ? "next.cmd" : "next");
 const args = ["start", "--hostname", process.env.MESA_HOSTNAME ?? "0.0.0.0", "--port", process.env.PORT ?? "3000"];
 
 function startServer() {

@@ -52,10 +52,11 @@ function Start-App {
   throw "Application did not become healthy on port $appPort. See $logs\host.log and $logs\host-error.log."
 }
 
-$password = [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))
-$encodedPassword = [uri]::EscapeDataString($password)
 $cluster = Join-Path $data "postgres"
 $envFile = Join-Path $config "host.env"
+$pwFile = Join-Path $config "bootstrap-password"
+$password = if (Test-Path $pwFile) { (Get-Content $pwFile -Raw).Trim() } else { [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 })) }
+$encodedPassword = [uri]::EscapeDataString($password)
 $hostEnvExists = Test-Path $envFile
 if ($hostEnvExists) {
   Get-Content $envFile | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } }
@@ -67,26 +68,39 @@ if ($configuredMode -ne "local" -and $configuredMode -ne "supabase") {
 }
 $clusterExisted = Test-Path (Join-Path $cluster "PG_VERSION")
 if ($configuredMode -eq "local" -and -not $clusterExisted) {
-  $pwFile = Join-Path $config "bootstrap-password"
-  $password | Set-Content $pwFile -Encoding ascii
+  if (-not (Test-Path $pwFile)) { $password | Set-Content $pwFile -Encoding ascii }
+  if (Test-ListeningPort $pgPort) {
+    throw "PostgreSQL port $pgPort is already occupied by another process. The database cluster was not initialized."
+  }
   & $pg.FullName -D $cluster --username=mesa_app --pwfile=$pwFile --auth=scram-sha-256
-  Remove-Item $pwFile -Force
   if ($LASTEXITCODE -ne 0) { throw "PostgreSQL cluster initialization failed." }
   Start-Postgres
   $previousPgPassword = $env:PGPASSWORD
   $env:PGPASSWORD = $password
   try {
-    & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app cyberpunk_red
+    & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app --if-not-exists cyberpunk_red
   } finally {
     $env:PGPASSWORD = $previousPgPassword
   }
   if ($LASTEXITCODE -ne 0) { throw "Local database creation failed." }
 }
-if ($clusterExisted -and -not $hostEnvExists) {
+if ($configuredMode -eq "local" -and $clusterExisted -and -not $hostEnvExists -and (Test-Path $pwFile)) {
+  Start-Postgres
+  $previousPgPassword = $env:PGPASSWORD
+  $env:PGPASSWORD = $password
+  try {
+    & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app --if-not-exists cyberpunk_red
+  } finally {
+    $env:PGPASSWORD = $previousPgPassword
+  }
+  if ($LASTEXITCODE -ne 0) { throw "Local database recovery failed." }
+}
+if ($configuredMode -eq "local" -and $clusterExisted -and -not $hostEnvExists -and -not (Test-Path $pwFile)) {
   throw "Database exists but host.env is missing; restore the configuration or use the documented recovery procedure."
 }
 if (-not $hostEnvExists) {
   "MESA_HOSTING_MODE=local`nMESA_HOST_ENV_FILE=$envFile`nMESA_LOCAL_DATABASE_URL=postgresql://mesa_app:$encodedPassword@127.0.0.1:$pgPort/cyberpunk_red`nMESA_HOSTNAME=0.0.0.0`nPORT=$appPort" | Set-Content $envFile -Encoding ascii
+  Remove-Item $pwFile -Force -ErrorAction SilentlyContinue
 }
 Get-Content $envFile | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } }
 if ($env:MESA_HOSTING_MODE -eq "local") { Start-Postgres }
