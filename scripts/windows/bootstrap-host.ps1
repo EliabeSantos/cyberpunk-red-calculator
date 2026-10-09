@@ -53,7 +53,8 @@ function Start-App {
 $password = [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))
 $encodedPassword = [uri]::EscapeDataString($password)
 $cluster = Join-Path $data "postgres"
-if (-not (Test-Path (Join-Path $cluster "PG_VERSION"))) {
+$clusterExisted = Test-Path (Join-Path $cluster "PG_VERSION")
+if (-not $clusterExisted) {
   $pwFile = Join-Path $config "bootstrap-password"
   $password | Set-Content $pwFile -Encoding ascii
   & $pg.FullName -D $cluster --username=mesa_app --pwfile=$pwFile --auth=scram-sha-256
@@ -64,7 +65,7 @@ if (-not (Test-Path (Join-Path $cluster "PG_VERSION"))) {
   if ($LASTEXITCODE -ne 0) { throw "Local database creation failed." }
 }
 $envFile = Join-Path $config "host.env"
-if ((Test-Path (Join-Path $cluster "PG_VERSION")) -and -not (Test-Path $envFile)) {
+if ($clusterExisted -and -not (Test-Path $envFile)) {
   throw "Database exists but host.env is missing; restore the configuration or use the documented recovery procedure."
 }
 if (-not (Test-Path $envFile)) {
