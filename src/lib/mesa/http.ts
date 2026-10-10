@@ -7,6 +7,13 @@
 
 import { DatabaseNotConfiguredError, DatabaseQueryError } from "@/lib/supabaseAdmin";
 import { MesaError } from "@/lib/mesa/store";
+import {
+  LocalPostgresAvailabilityError,
+  LocalPostgresConfigurationError,
+  LocalPostgresConnectionError,
+  LocalPostgresShutdownTimeoutError,
+  MesaHostingConfigurationError,
+} from "@/lib/mesa/hostingInfrastructure";
 import { beginMesaGatewayTelemetry, finishMesaGatewayTelemetry } from "@/lib/mesa/telemetryServer";
 import { randomUUID } from "node:crypto";
 
@@ -49,6 +56,12 @@ export function errorResponse(error: unknown): Response {
   console.error(`[mesa-error:${errorId}] ${errorName}: ${safeLog(errorMessage)}`, errorStack ? safeLog(errorStack) : "");
   if (error instanceof DatabaseNotConfiguredError) {
     return Response.json({ ok: false, error: "O serviço de Mesa está temporariamente indisponível.", code: "database_not_configured", errorId }, { status: 503 });
+  }
+  if (error instanceof MesaHostingConfigurationError || error instanceof LocalPostgresConfigurationError) {
+    return Response.json({ ok: false, error: "A configuração do serviço de Mesa está incompleta.", code: "hosting_configuration_error", errorId }, { status: 503 });
+  }
+  if (error instanceof LocalPostgresAvailabilityError || error instanceof LocalPostgresConnectionError || error instanceof LocalPostgresShutdownTimeoutError) {
+    return Response.json({ ok: false, error: "O serviço de Mesa está temporariamente indisponível.", code: "hosting_unavailable", errorId }, { status: 503 });
   }
   if (error instanceof DatabaseQueryError) {
     return Response.json({ ok: false, error: "Não foi possível carregar a Mesa agora. Tente novamente.", code: "database_error", errorId }, { status: 502 });

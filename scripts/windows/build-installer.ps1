@@ -6,16 +6,34 @@ param(
   [string]$InnoSetup = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 )
 $ErrorActionPreference = "Stop"
+
+function Invoke-RequiredCommand {
+  param(
+    [Parameter(Mandatory = $true)][string]$Command,
+    [Parameter(Mandatory = $true)][string[]]$Arguments,
+    [Parameter(Mandatory = $true)][string]$Step
+  )
+  & $Command @Arguments
+  if ($LASTEXITCODE -ne 0) {
+    throw "$Step failed with exit code $LASTEXITCODE. See the command output above for the original error."
+  }
+}
+
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 $stage = Join-Path $root "installer\windows\stage"
 $output = Join-Path $root "installer\windows\output"
+$electronOutput = Join-Path $root "installer\windows\electron-output"
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $output -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $electronOutput -Recurse -Force -ErrorAction SilentlyContinue
 New-Item $stage -ItemType Directory | Out-Null
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw "npm is required on the Windows build runner." }
 if (-not (Test-Path $InnoSetup)) { throw "Inno Setup compiler not found: $InnoSetup" }
 Push-Location $root
-try { npm ci; npm run build } finally { Pop-Location }
+try {
+  Invoke-RequiredCommand "npm" @("ci") "npm ci"
+  Invoke-RequiredCommand "npm" @("run", "build") "Next.js build"
+} finally { Pop-Location }
 $electronExecutable = Join-Path $root "node_modules\electron\dist\electron.exe"
 if (-not (Test-Path $electronExecutable)) {
   throw "Electron installation is incomplete: npm ci did not provide $electronExecutable. Check the npm install logs and Electron download step."
@@ -49,7 +67,19 @@ Copy-Item "$root\src\app\favicon.ico" "$stage\app\favicon.ico"
 Remove-Item "$stage\app\scripts\windows" -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\supabase" "$stage\app\supabase" -Recurse
 Push-Location $root
-try { npm run dist:windows -- --publish never } finally { Pop-Location }
+try {
+  Invoke-RequiredCommand "npm" @("run", "dist:windows", "--", "--publish", "never") "Electron Builder"
+} finally { Pop-Location }
+if (-not (Test-Path $electronOutput -PathType Container)) {
+  throw "Electron Builder completed without creating its configured output directory: $electronOutput"
+}
+$electronArtifacts = @(Get-ChildItem (Join-Path $electronOutput "*Setup*.exe") -File -ErrorAction Stop)
+if ($electronArtifacts.Count -ne 1) {
+  throw "Expected exactly one Electron NSIS installer in $electronOutput, found $($electronArtifacts.Count)."
+}
+if ($electronArtifacts[0].Length -lt 1MB) {
+  throw "Electron installer is unexpectedly small: $($electronArtifacts[0].FullName) ($($electronArtifacts[0].Length) bytes)."
+}
 & $InnoSetup "$root\installer\windows\CyberpunkRedCalculator.iss"
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE." }
 if (-not (Test-Path (Join-Path $output "CyberpunkRedCalculator-Setup.exe"))) {

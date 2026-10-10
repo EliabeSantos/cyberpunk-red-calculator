@@ -67,8 +67,11 @@ jobs:
           $size = (Get-Item $artifact).Length
           if ($size -lt 1MB) { throw "Installer artifact is unexpectedly small: $size bytes" }
           Write-Host "Created $artifact ($size bytes)"
-          $electronArtifact = Get-ChildItem "installer\windows\electron-output\*Setup*.exe" -File | Select-Object -First 1
-          if (-not $electronArtifact) { throw "Electron NSIS artifact was not created." }
+          $electronOutput = "installer\windows\electron-output"
+          if (-not (Test-Path $electronOutput -PathType Container)) { throw "Electron Builder output directory is missing: $electronOutput. The build step should have failed earlier with the original error." }
+          $electronArtifacts = @(Get-ChildItem (Join-Path $electronOutput "*Setup*.exe") -File -ErrorAction Stop)
+          if ($electronArtifacts.Count -ne 1) { throw "Expected exactly one Electron NSIS installer in $electronOutput, found $($electronArtifacts.Count)." }
+          $electronArtifact = $electronArtifacts[0]
           if ($electronArtifact.Length -lt 1MB) { throw "Electron artifact is unexpectedly small: $($electronArtifact.Length) bytes" }
           Write-Host "Created $($electronArtifact.FullName) ($($electronArtifact.Length) bytes)"
 
