@@ -1,8 +1,10 @@
-import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
+import { readFile, writeFile, rename, mkdir, chmod } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { Pool } from "pg";
 
 import { errorResponse, ok, readJson } from "@/lib/mesa/http";
+import { authenticateHostAdmin } from "@/lib/hostingAdminAuth";
 
 export const runtime = "nodejs";
 
@@ -15,11 +17,6 @@ function currentMode(): HostingMode | null {
 
 function configFile(): string | null {
   return process.env.MESA_HOSTING_MODE_FILE?.trim() || process.env.MESA_HOST_ENV_FILE?.trim() || null;
-}
-
-function isLocalHost(request: Request): boolean {
-  const hostname = (request.headers.get("host") ?? "").split(":")[0].toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
 function availableModes(): HostingMode[] {
@@ -56,13 +53,27 @@ async function replaceMode(file: string, mode: HostingMode): Promise<void> {
   const line = `MESA_HOSTING_MODE=${mode}`;
   const lines = source.split(/\r?\n/).filter((item) => !item.startsWith("MESA_HOSTING_MODE="));
   lines.unshift(line);
-  const temporary = `${file}.tmp-${process.pid}`;
+  const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
   await mkdir(dirname(file), { recursive: true });
   await writeFile(temporary, `${lines.filter(Boolean).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
   await rename(temporary, file);
+  await chmod(file, 0o600).catch(() => undefined);
 }
 
-export async function GET(): Promise<Response> {
+function unauthorizedResponse(status: 401 | 429, retryAfter?: number): Response {
+  const headers = new Headers({ "Cache-Control": "no-store" });
+  if (retryAfter) headers.set("Retry-After", String(retryAfter));
+  return Response.json({ ok: false, error: status === 429 ? "hosting_admin_rate_limited" : "hosting_admin_unauthorized" }, { status, headers });
+}
+
+async function requireHostAdmin(request: Request): Promise<Response | null> {
+  const result = await authenticateHostAdmin(request);
+  return result.ok ? null : unauthorizedResponse(result.status, result.retryAfter);
+}
+
+export async function GET(request: Request): Promise<Response> {
+  const unauthorized = await requireHostAdmin(request);
+  if (unauthorized) return unauthorized;
   return ok({
     mode: currentMode(),
     availableModes: availableModes(),
@@ -73,9 +84,8 @@ export async function GET(): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   try {
-    if (!isLocalHost(request)) {
-      return Response.json({ error: "hosting_mode_host_only" }, { status: 403 });
-    }
+    const unauthorized = await requireHostAdmin(request);
+    if (unauthorized) return unauthorized;
     const body = await readJson(request);
     const mode = String(body.mode ?? "").trim().toLowerCase() as HostingMode;
     if (mode !== "local" && mode !== "supabase") {
@@ -89,7 +99,9 @@ export async function POST(request: Request): Promise<Response> {
     if (currentMode() === mode) return ok({ mode, availableModes: availableModes(), configurable: true, restartRequired: false });
     if (await hasActiveSessions()) return Response.json({ error: "hosting_mode_active_sessions" }, { status: 409 });
     await replaceMode(file, mode);
-    return ok({ mode, availableModes: availableModes(), configurable: true, restartRequired: true });
+    // Hosting mode is selected during process startup. Do not claim that the
+    // running process changed modes after only editing its env file.
+    return ok({ mode: currentMode(), pendingMode: mode, availableModes: availableModes(), configurable: true, restartRequired: true });
   } catch (error) {
     return errorResponse(error);
   }

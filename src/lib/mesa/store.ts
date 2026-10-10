@@ -1044,8 +1044,10 @@ async function ensurePositionAvailable(
   combatantId: string,
   target: TacticalPosition,
   map: TacticalMap,
+  providedRepository?: MesaRepository,
 ): Promise<void> {
-  const rows = await (await mesaRepository()).listCombatantsByCombat(combatId, sessionId) as Array<{ id: string; position?: TacticalPosition | null }>;
+  const repository = providedRepository ?? await mesaRepository();
+  const rows = await repository.listCombatantsByCombat(combatId, sessionId) as Array<{ id: string; position?: TacticalPosition | null }>;
   const occupied = rows.some((row) => row.id !== combatantId && tacticalPositionsOverlap(
     normalizeTacticalPosition(row.position), target, map,
   ));
@@ -1190,8 +1192,12 @@ export function netIceCombatantId(architectureId: string, nodeId: string): strin
 }
 
 /** Sincroniza somente entidades ICE já ativadas com o elenco do combate. */
-async function syncActiveNetIceCombatants(sessionId: string, combatId: string): Promise<void> {
-  const repository = await mesaRepository();
+async function syncActiveNetIceCombatants(
+  sessionId: string,
+  combatId: string,
+  providedRepository?: MesaRepository,
+): Promise<void> {
+  const repository = providedRepository ?? await mesaRepository();
   const architectures = normalizeNetArchitectures(await repository.findSessionNetArchitectures(sessionId));
   const nodes = architectures.flatMap((architecture) => architecture.floors.flatMap((floor) => floor.nodes
     .map((rawNode) => rawNode as NetBasicNode)
@@ -1215,8 +1221,11 @@ async function syncActiveNetIceCombatants(sessionId: string, combatId: string): 
   await measureMesaDb(repository.upsertCombatants(payload, "Falha ao sincronizar combatantes ICE"), "sincronizar combatantes ICE");
 }
 
-async function syncNetIceInitiative(combatId: string): Promise<void> {
-  const repository = await mesaRepository();
+async function syncNetIceInitiative(
+  combatId: string,
+  providedRepository?: MesaRepository,
+): Promise<void> {
+  const repository = providedRepository ?? await mesaRepository();
   const combat = await repository.findCombatById(combatId) as (Pick<CombatRow, "initiative_started"> & { session_id: string }) | null;
   if (!combat?.initiative_started) return;
   const rows = await repository.listCombatantsByCombat(combatId, combat.session_id) as unknown as CombatantRow[];
@@ -1233,9 +1242,14 @@ async function syncNetIceInitiative(combatId: string): Promise<void> {
 }
 
 /** Desconecta o vínculo lógico da ICE sem apagar a Architecture. */
-async function clearNetIceEngagement(sessionId: string, architectureId: string | null, netrunnerId: string): Promise<void> {
+async function clearNetIceEngagement(
+  sessionId: string,
+  architectureId: string | null,
+  netrunnerId: string,
+  providedRepository?: MesaRepository,
+): Promise<void> {
+  const repository = providedRepository ?? await mesaRepository();
   if (!architectureId) return;
-  const repository = await mesaRepository();
   const architectures = normalizeNetArchitectures(await repository.findSessionNetArchitectures(sessionId));
   let changed = false;
   const next = architectures.map((architecture) => architecture.id !== architectureId ? architecture : {
@@ -1731,14 +1745,19 @@ function connectionStateForRow(row: CombatantRow): NetrunnerConnectionState {
 }
 
 /** Fail closed when an Access Point changed after Jack In, clearing stale NET state. */
-async function requireLiveNetrunnerConnection(session: MesaSession, row: CombatantRow, state: NetrunnerConnectionState): Promise<void> {
+async function requireLiveNetrunnerConnection(
+  session: MesaSession,
+  row: CombatantRow,
+  state: NetrunnerConnectionState,
+  providedRepository?: MesaRepository,
+): Promise<void> {
+  const repository = providedRepository ?? await mesaRepository();
   if (state.cyberdeckStatus === "destroyed") throw new MesaError("O Cyberdeck está destruído e precisa ser reparado.", 409, "cyberdeck_destroyed");
   if (!state.isJackedIn) throw new MesaError("Netrunner precisa estar Jacked In.", 409, "not_jacked_in");
-  const repository = await mesaRepository();
   const disconnectStale = async (combat: CombatRow, message: string, code: string): Promise<never> => {
-    const consequences = await unsafeJackOutNetConsequences(row, state, session.id);
+    const consequences = await unsafeJackOutNetConsequences(row, state, session.id, repository);
     const next = unsafeJackOutState(consequences.state);
-    await clearNetIceEngagement(session.id, state.architectureId, row.id);
+    await clearNetIceEngagement(session.id, state.architectureId, row.id, repository);
     const written = await repository.updateCombatant({ id: row.id, sessionId: session.id, combatId: combat.id, patch: { netrunner_state: next }, expected: { netrunner_state: row.netrunner_state ?? null } });
     if (written.length !== 1) throw new MesaError("Falha ao limpar conexão NET inválida.", 409, "action_conflict");
     for (const event of consequences.events) await appendEvent(combat.id, { kind: "action", text: event });
@@ -1833,7 +1852,7 @@ export async function jackInCombatant(input: {
    const currentState = connectionStateForRow(row);
    if (currentState.isJackedIn) throw new MesaError("Netrunner já está conectado.", 409, "already_jacked_in");
    if (currentState.cyberdeckStatus === "destroyed") throw new MesaError("O Cyberdeck está destruído e precisa ser reparado.", 409, "cyberdeck_destroyed");
-  const sheet = row.character_id ? await loadSheet(row.character_id) : null;
+  const sheet = row.character_id ? await loadSheet(row.character_id, repository) : null;
   if (!hasCyberdeck(sheet)) throw new MesaError("Netrunner não possui um Cyberdeck válido.", 409, "cyberdeck_required");
   const interfaceRank = interfaceRankForSheet(sheet);
   if (interfaceRank <= 0) throw new MesaError("Personagem não possui Interface Role Ability.", 409, "interface_required");
@@ -1930,7 +1949,7 @@ export async function setNetrunnerQuickhackLoadout(input: {
   const row = await repository.findCombatantById(id, { combatId: combat.id, sessionId: session.id }) as CombatantRow | null;
   if (!row) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
   requireNetrunnerOwnership(participant, row);
-  const sheet = row.character_id ? await loadSheet(row.character_id) : null;
+  const sheet = row.character_id ? await loadSheet(row.character_id, repository) : null;
   if (!hasCyberdeck(sheet)) throw new MesaError("Netrunner não possui um Cyberdeck válido.", 409, "cyberdeck_required");
   const currentState = connectionStateForRow(row);
   const nextState = { ...currentState, equippedQuickhackIds: uniqueIds };
@@ -1998,13 +2017,13 @@ export async function executeNetAction(input: {
   const actor = actorRows?.[0] ?? null;
   if (!actor) throw new MesaError("Netrunner não encontrado.", 404, "combatant_not_found");
   requireNetrunnerOwnership(participant, actor);
-    const state = connectionStateForRow(actor);
-   await requireLiveNetrunnerConnection(session, actor, state);
+  const state = connectionStateForRow(actor);
+  await requireLiveNetrunnerConnection(session, actor, state, netRepository);
   if (!state.architectureId) throw new MesaError("Não há Architecture conectada.", 409, "architecture_not_connected");
   if (!Number.isInteger(state.currentFloor) || (state.currentFloor ?? 0) < 1) throw new MesaError("Floor atual inválido.", 409, "invalid_current_floor");
   const currentFloor = state.currentFloor as number;
   if (state.netActionsRemaining <= 0) throw new MesaError("Não há NET Actions restantes.", 403, "net_actions_exhausted");
-  const sheet = actor.character_id ? await loadSheet(actor.character_id) : null;
+  const sheet = actor.character_id ? await loadSheet(actor.character_id, netRepository) : null;
   if (!hasCyberdeck(sheet)) throw new MesaError("Netrunner não possui um Cyberdeck válido.", 409, "cyberdeck_required");
   const interfaceRank = interfaceRankForSheet(sheet);
   if (interfaceRank <= 0) throw new MesaError("Personagem não possui Interface Role Ability.", 409, "interface_required");
@@ -2262,7 +2281,7 @@ export async function executeControlDeviceEffect(input: {
   requireNetrunnerOwnership(participant, actor);
   const connectionState = connectionStateForRow(actor);
   // Jack In + Access Point + alcance: mesma validação de conexão das NET Actions.
-  await requireLiveNetrunnerConnection(session, actor, connectionState);
+  await requireLiveNetrunnerConnection(session, actor, connectionState, controlRepository);
   if (!connectionState.architectureId) throw new MesaError("Não há Architecture conectada.", 409, "architecture_not_connected");
 
   const sessionRow = await controlRepository.findSessionById(session.id) as { tactical_map?: unknown; net_architectures?: unknown } | null;
@@ -2438,7 +2457,7 @@ export async function executeCombatQuickhack(input: {
     if (!target || target.session_id !== session.id || target.combat_id !== combat.id) throw new MesaError("Alvo não encontrado.", 404, "target_not_found");
     if (target.id === actor.id || target.kind !== "enemy" || target.is_dead) throw new MesaError("Alvo inválido para Quickhack.", 400, "invalid_quickhack_target");
     const actorState = connectionStateForRow(actor);
-     await requireLiveNetrunnerConnection(session, actor, actorState);
+    await requireLiveNetrunnerConnection(session, actor, actorState, quickhackRepository);
     if (!actorState.equippedQuickhackIds.includes(quickhackId)) throw new MesaError("Quickhack não está equipado no Cyberdeck.", 409, "quickhack_not_equipped");
     if (actorState.netActionsRemaining <= 0) throw new MesaError("Não há NET Actions restantes.", 403, "net_actions_exhausted");
     const ramCost = getQuickhackRamCost(quickhackId);
@@ -2546,9 +2565,9 @@ export async function setCyberdeckStatus(input: {
     return { combatantId: row.id, cyberdeckStatus: "functional", state: next };
   }
   if (current.cyberdeckStatus === "destroyed") return { combatantId: row.id, cyberdeckStatus: "destroyed", state: current };
-  const consequences = await unsafeJackOutNetConsequences(row, current, session.id);
+  const consequences = await unsafeJackOutNetConsequences(row, current, session.id, repository);
   const next = { ...unsafeJackOutState(consequences.state), cyberdeckStatus: "destroyed" as const, ramCurrent: 0, netActionsRemaining: 0, netActionsMax: 0 };
-  await clearNetIceEngagement(session.id, current.architectureId, row.id);
+  await clearNetIceEngagement(session.id, current.architectureId, row.id, repository);
   const written = await repository.updateCombatant({ id: row.id, sessionId: session.id, combatId: combat.id, patch: { netrunner_state: next }, expected: { netrunner_state: row.netrunner_state ?? null } });
   if (written.length !== 1) throw new MesaError("O estado do Cyberdeck mudou; atualize a Mesa.", 409, "cyberdeck_conflict");
   for (const event of consequences.events) await appendEvent(combat.id, { kind: "action", text: event });
@@ -2911,7 +2930,7 @@ export async function positionCombatantPreparation(input: { sessionId: unknown; 
     const sessionMap = await repository.findSessionById(session.id) as { tactical_map?: TacticalMap | null } | null;
     map = sanitizeTacticalMap(sessionMap?.tactical_map);
   } catch { /* migration ainda não aplicada: usa escala padrão */ }
-  await ensurePositionAvailable(session.id, combat.id, id, position, map);
+  await ensurePositionAvailable(session.id, combat.id, id, position, map, repository);
   const written = await repository.updateCombatant({ id, sessionId: session.id, combatId: combat.id, patch: { position } });
   if (written.length !== 1) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
 }
@@ -3131,9 +3150,8 @@ async function getActiveCombat(sessionId: string): Promise<CombatRow | null> {
  * disparava ao passar `[]`). O único reset do histórico continua sendo o de
  * `startCombat`, explícito na atualização da linha de combate.
  *
- * A leitura imediatamente antes da escrita encurta a janela de corrida
- * read-modify-write; fechá-la de vez exigiria transação/RPC no Postgres
- * (fora do escopo desta correção).
+ * No modo local, a escrita usa CAS no `event_log` e relê em caso de corrida;
+ * no modo Supabase, o caminho legado permanece inalterado.
  *
  * F1.6: exportada como está para o adapter `src/lib/mesa/combatEvents.ts`
  * (`persistCombatResult`) repassar `CombatResult.events` — assinatura e
@@ -3158,13 +3176,21 @@ export async function appendEvent(combatId: string, event: Omit<MesaEvent, "at">
   const repository = infrastructure.repository;
   const combat = await repository.findCombatById(combatId) as CombatRow | null;
   if (!combat) throw new MesaError("Combate não encontrado.", 404, "combat_not_found");
-  const currentLog = await repository.findCombatEventLog(combatId, combat.session_id);
-  if (event.resolutionId && currentLog.some((entry) => (
-    typeof entry === "object" && entry !== null && (entry as MesaEvent).resolutionId === event.resolutionId
-  ))) return;
-  const next = [...currentLog, { at: new Date().toISOString(), ...event }].slice(-MAX_EVENT_LOG);
-  const written = await repository.replaceCombatEventLog(combatId, combat.session_id, next);
-  if (written.length !== 1) throw new MesaError("Falha ao registrar o evento.", 409, "transaction_failed");
+
+  // O transporte local não tem um RPC de evento. O CAS no event_log fecha a
+  // janela de read-modify-write para ações concorrentes que já passaram pelo
+  // commit autoritativo da resolução. Em caso de corrida, relê o log e tenta
+  // novamente sem descartar silenciosamente nenhum evento.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const currentLog = await repository.findCombatEventLog(combatId, combat.session_id);
+    if (event.resolutionId && currentLog.some((entry) => (
+      typeof entry === "object" && entry !== null && (entry as MesaEvent).resolutionId === event.resolutionId
+    ))) return;
+    const next = [...currentLog, { at: new Date().toISOString(), ...event }].slice(-MAX_EVENT_LOG);
+    const written = await repository.replaceCombatEventLog(combatId, combat.session_id, next, currentLog);
+    if (written.length === 1) return;
+  }
+  throw new MesaError("O histórico do combate mudou durante o registro do evento.", 409, "event_conflict");
 }
 
 /**
@@ -3183,12 +3209,12 @@ async function appendEventWithRepository(
     typeof entry === "object" && entry !== null && (entry as MesaEvent).resolutionId === event.resolutionId
   ))) return;
   const next = [...currentLog, { at: new Date().toISOString(), ...event }].slice(-MAX_EVENT_LOG);
-  const written = await repository.replaceCombatEventLog(combatId, sessionId, next);
+  const written = await repository.replaceCombatEventLog(combatId, sessionId, next, currentLog);
   if (written.length !== 1) throw new DatabaseQueryError("Falha ao registrar o evento: combate não encontrado");
 }
 
-async function loadSheet(characterId: string): Promise<Character | null> {
-  const repository = await mesaRepository();
+async function loadSheet(characterId: string, providedRepository?: MesaRepository): Promise<Character | null> {
+  const repository = providedRepository ?? await mesaRepository();
   const row = await repository.findCharacterById(characterId);
   return (row?.sheet as Character | undefined) ?? null;
 }
@@ -4067,6 +4093,7 @@ async function addEnemiesLocalTransactional(
       combat.id,
       session.id,
       [...currentLog, event].slice(-MAX_EVENT_LOG),
+      currentLog,
     );
     if (updated.length === 0) {
       throw new MesaError("Combate não encontrado.", 404, "combat_not_found");
@@ -5776,7 +5803,7 @@ export async function registerPlayerInitiative(input: {
     }
 
     // `refBonus` vem da ficha que O SERVIDOR guarda; o request só traz o total.
-    const sheet = actorRow.character_id ? await loadSheet(actorRow.character_id) : null;
+    const sheet = actorRow.character_id ? await loadSheet(actorRow.character_id, initiativeRepository) : null;
     const refBonus = typeof sheet?.stats?.REF === "number" ? sheet.stats.REF : undefined;
     const initiativeDetail: MesaCombatant["initiativeDetail"] = { total: initiative, ...(refBonus !== undefined ? { refBonus } : {}) };
     const outcome: PlayerInitiativeOutcome = {
@@ -6296,9 +6323,14 @@ export async function performAction(input: {
   await appendEvent(combat.id, { kind: "action", text: `${row.name}: ${label}` });
 }
 
-async function unsafeJackOutNetConsequences(row: CombatantRow, state: NetrunnerConnectionState, sessionId: string): Promise<{ state: NetrunnerConnectionState; events: string[] }> {
+async function unsafeJackOutNetConsequences(
+  row: CombatantRow,
+  state: NetrunnerConnectionState,
+  sessionId: string,
+  providedRepository?: MesaRepository,
+): Promise<{ state: NetrunnerConnectionState; events: string[] }> {
+  const repository = providedRepository ?? await mesaRepository();
   if (!state.architectureId || !(state.engagedBlackIceIds ?? []).length) return { state, events: [] };
-  const repository = await mesaRepository();
   const architecture = normalizeNetArchitectures(await repository.findSessionNetArchitectures(sessionId)).find((entry) => entry.id === state.architectureId);
   if (!architecture) return { state, events: [] };
   let brainDamage = state.brainDamage ?? 0;
@@ -6452,9 +6484,9 @@ export async function movePlayerCombatant(input: {
       if (hasPosition && currentNetrunnerState.isJackedIn && currentNetrunnerState.connectionType === "wireless") {
       const accessPoint = (map.accessPoints ?? []).find((entry) => entry.id === currentNetrunnerState.connectedAccessPointId);
       if (!accessPoint) {
-        const consequences = await unsafeJackOutNetConsequences(row, currentNetrunnerState, session.id);
+        const consequences = await unsafeJackOutNetConsequences(row, currentNetrunnerState, session.id, moveRepository);
         const disconnected = unsafeJackOutState(consequences.state);
-        await clearNetIceEngagement(session.id, currentNetrunnerState.architectureId, row.id);
+        await clearNetIceEngagement(session.id, currentNetrunnerState.architectureId, row.id, moveRepository);
         const disconnectedWritten = await moveRepository.updateCombatant({ id: row.id, sessionId: session.id, combatId: combat.id, patch: { netrunner_state: disconnected }, expected: { netrunner_state: row.netrunner_state ?? null } });
         if (disconnectedWritten.length !== 1) throw new MesaError("Falha ao limpar Access Point inválido.", 409, "action_conflict");
         for (const event of consequences.events) await appendEvent(combat.id, { kind: "action", text: event });
@@ -6480,7 +6512,7 @@ export async function movePlayerCombatant(input: {
         const obstacleLabel = path.blockedBy?.type === "door" ? "porta fechada" : "parede";
         throw new MesaError(`Movimento bloqueado: ${obstacleLabel} no caminho.`, 409, "movement_blocked");
       }
-      await ensurePositionAvailable(session.id, combat.id, row.id, targetPosition, map);
+      await ensurePositionAvailable(session.id, combat.id, row.id, targetPosition, map, moveRepository);
     }
     const unconsciousUntilRound = unconsciousUntilRoundForRow(row);
     const validation = resolveAction({
@@ -6501,10 +6533,10 @@ export async function movePlayerCombatant(input: {
     if (!validation.ok) throw new MesaError(DENIAL_MESSAGES[validation.reason], 403, validation.reason);
 
     if (nextNetrunnerState) {
-      const consequences = await unsafeJackOutNetConsequences(row, currentNetrunnerState, session.id);
+      const consequences = await unsafeJackOutNetConsequences(row, currentNetrunnerState, session.id, moveRepository);
       unsafeEvents = consequences.events;
       nextNetrunnerState = unsafeJackOutState(consequences.state);
-      await clearNetIceEngagement(session.id, currentNetrunnerState.architectureId, row.id);
+      await clearNetIceEngagement(session.id, currentNetrunnerState.architectureId, row.id, moveRepository);
     }
 
     const economy = applyAction({

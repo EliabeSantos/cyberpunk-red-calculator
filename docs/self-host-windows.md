@@ -11,13 +11,23 @@ Requisitos para montar o instalador: Windows x64, Node/npm apenas na máquina de
 
 As versões e hashes SHA-256 dos runtimes estão em `installer/windows/RUNTIME-MANIFEST.md`; o script de build recusa qualquer arquivo baixado que não corresponda ao hash fixado. Inno Setup é necessário somente na máquina de build. Os avisos/licenças distribuídos nos arquivos oficiais de Node.js e PostgreSQL permanecem no pacote.
 
-Na primeira execução, o bootstrap cria um cluster em `%ProgramData%\Cyberpunk RED Calculator\postgres`, uma configuração protegida e aplica todas as migrations. O instalador também cria um atalho de inicialização automática; após reiniciar o Windows, PostgreSQL e o servidor são recuperados pelo mesmo bootstrap. Não copie essa pasta para chats ou repositórios.
+Na primeira execução, o bootstrap cria um cluster em `%ProgramData%\Cyberpunk RED Calculator\postgres`, uma configuração protegida, um token administrativo aleatório em `%ProgramData%\Cyberpunk RED Calculator\config\host-admin-token` e aplica todas as migrations. O instalador também cria um atalho de inicialização automática; após reiniciar o Windows, PostgreSQL e o servidor são recuperados pelo mesmo bootstrap. Não copie essa pasta ou o token para chats ou repositórios.
 
 O atalho **Cyberpunk RED Calculator** inicia o host e abre `http://localhost:3000`. O primeiro GM cria o usuário/mesa pela interface; não há usuário ou senha de aplicação padrão. O PostgreSQL empacotado usa a porta local dedicada `55432` (não fica acessível pela LAN); se ela ou a porta 3000 estiver ocupada, o bootstrap interrompe com erro e grava o diagnóstico em `%ProgramData%\Cyberpunk RED Calculator\logs`.
 
-Ao clicar em **Criar uma mesa**, o anfitrião vê o modo de hospedagem disponível no servidor. Jogadores que escolhem **Entrar com código** não veem essa configuração. A troca entre Local e Supabase grava somente `MESA_HOSTING_MODE` no `host.env` protegido e exige reiniciar o servidor; não é permitida enquanto a aplicação ainda estiver usando o modo anterior. O Supabase só aparece se `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` já estiverem configuradas no ambiente do host.
+O modo de hospedagem não é uma configuração da mesa e não aparece na UI de jogadores ou mestres. Para consultar ou alterar `/api/hosting/config`, use o token do arquivo protegido somente no cabeçalho `Authorization: Bearer <token>` ou `x-host-admin-token`; `x-mesa-token`, `Host`, `Origin` e loopback não concedem administração. A troca entre Local e Supabase grava somente `MESA_HOSTING_MODE` no `host.env` protegido e exige reiniciar o servidor; o processo atual não muda de adapter no meio da execução e a alteração não é permitida enquanto há mesas ativas. O Supabase só aparece se `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` já estiverem configuradas no ambiente do host.
 
-O grupo de atalhos também inclui **Abrir** e **Parar**. O atalho de parada encerra somente o processo do host registrado pelo bootstrap e o cluster PostgreSQL deste aplicativo; não encerra processos desconhecidos que usem as mesmas portas.
+O token inicial é gerado por fonte criptográfica do Windows, não é fixo nem impresso em respostas HTTP ou logs. Um administrador local pode lê-lo diretamente no arquivo protegido para uma operação administrativa, por exemplo:
+
+```powershell
+$token = (Get-Content "$env:ProgramData\Cyberpunk RED Calculator\config\host-admin-token" -Raw).Trim()
+Invoke-RestMethod http://127.0.0.1:3000/api/hosting/config `
+  -Headers @{ Authorization = "Bearer $token" }
+```
+
+Não coloque esse valor em URL, localStorage, scripts client-side ou histórico de shell compartilhado. Tentativas inválidas recebem erro genérico e entram em limitação temporária contra brute force. O token administrativo é diferente do token de mesa do Mestre e dos tokens dos jogadores.
+
+O grupo de atalhos também inclui **Abrir** e **Parar**. O atalho de parada encerra somente o processo cujo PID foi registrado pelo bootstrap, confirma que ele usa o Node empacotado e aguarda sua saída antes de parar o cluster PostgreSQL deste aplicativo. Não encerra processos desconhecidos só porque usam as mesmas portas. Atualizações também executam essa parada e são abortadas se ela não for confirmada.
 
 ## Uso e rede
 
@@ -44,16 +54,18 @@ Para VPN, repita o teste usando o IP virtual e mantenha a regra de firewall rest
 
 ## Atualização, backup e recuperação
 
-O instalador não remove `%ProgramData%\Cyberpunk RED Calculator`; atualizar preserva mesas, personagens e histórico. Use `scripts/backup-local.mjs` com `pg_dump` antes de atualizar:
+O instalador não remove `%ProgramData%\Cyberpunk RED Calculator`; atualizar preserva mesas, personagens e histórico. O layout instalado é `{app}\app` para o Next.js e `{app}\postgres` para os binários PostgreSQL. Os scripts de backup e restauração resolvem automaticamente `pg_dump.exe` e `pg_restore.exe` nesse diretório; não dependem de PostgreSQL no `PATH`. Em uma instalação, execute-os a partir de `{app}\app`:
 
 ```powershell
-$env:MESA_LOCAL_DATABASE_URL = "postgresql://mesa_app:<senha>@127.0.0.1:5432/cyberpunk_red"
-node scripts/backup-local.mjs C:\Backups\mesa-2026-10-09.dump
+$env:MESA_LOCAL_DATABASE_URL = "postgresql://mesa_app:<senha>@127.0.0.1:55432/cyberpunk_red"
+node .\scripts\backup-local.mjs C:\Backups\mesa-2026-10-09.dump
 ```
 
-Crie um banco/cluster separado e restaure nele com `scripts/restore-local.mjs` e `pg_restore`. O restore recusa destinos não vazios por padrão; para uma substituição deliberada, use `--allow-overwrite` junto de `MESA_RESTORE_CONFIRM=I_UNDERSTAND`, depois valide a mesa restaurada antes de apontar o host para ela. Migrations já aplicadas são verificadas por checksum; uma alteração manual é recusada. A correção de Cover Damage possui migration posterior e o migrador local aceita somente o checksum legado conhecido dessa migration específica.
+Para um banco/cluster separado, restaure com `node .\scripts\restore-local.mjs C:\Backups\mesa-2026-10-09.dump`. O formato é o **custom archive** do `pg_dump` (`--format=custom`), restaurado com `pg_restore`; ele não é SQL texto. A restauração deve usar PostgreSQL compatível com a versão do servidor de origem e migrations do mesmo aplicativo. O restore recusa destinos não vazios por padrão; para uma substituição deliberada, use `--allow-overwrite` junto de `MESA_RESTORE_CONFIRM=I_UNDERSTAND`, depois valide a mesa restaurada antes de apontar o host para ela. Migrations já aplicadas são verificadas por checksum; uma alteração manual é recusada. A correção de Cover Damage possui migration posterior e o migrador local aceita somente o checksum legado conhecido dessa migration específica.
 
-Em falha, consulte `%ProgramData%\Cyberpunk RED Calculator\logs`, confirme o processo PostgreSQL e execute o bootstrap novamente. O backup deve ser restaurado em uma instância/banco separado: `restore-local.mjs` recusa destinos não vazios por padrão. Para uma substituição deliberada, use `--allow-overwrite` junto de `MESA_RESTORE_CONFIRM=I_UNDERSTAND`, depois valide a mesa restaurada antes de apontar o host para ela. Desinstalar remove o programa e preserva os dados por padrão.
+Se os scripts forem executados fora do instalador, informe explicitamente o diretório que contém os binários: `$env:MESA_POSTGRES_BIN_DIR = "C:\caminho\para\postgres\bin"`. O script recusa continuar quando `pg_dump.exe` ou `pg_restore.exe` não existem. Credenciais são removidas dos argumentos visíveis e passadas por `PGPASSWORD`; não cole URLs com senha em logs ou comandos compartilhados.
+
+Em falha, consulte `%ProgramData%\Cyberpunk RED Calculator\logs`, confirme o processo PostgreSQL e execute o bootstrap novamente. O backup deve ser restaurado em uma instância/banco separado: `restore-local.mjs` recusa destinos não vazios por padrão. Para uma substituição deliberada, use `--allow-overwrite` junto de `MESA_RESTORE_CONFIRM=I_UNDERSTAND`, depois valide a mesa restaurada antes de apontar o host para ela. Atualizar substitui somente `{app}` e mantém `%ProgramData%\Cyberpunk RED Calculator`, incluindo banco, `host.env` e token administrativo. Desinstalar para o host antes de remover o programa e preserva os dados por padrão; não remove banco, backups ou token.
 
 Problemas comuns:
 
@@ -75,4 +87,4 @@ silencioso para Supabase. PostgreSQL, persistência, backup/restauração,
 instalador Windows e acesso LAN/VPN continuam exigindo a validação manual
 descrita neste documento quando o ambiente real estiver disponível.
 
-Não há TLS embutido. Para redes não confiáveis, use VPN ou proxy reverso com TLS; nunca exponha PostgreSQL à internet.
+Não há TLS embutido. HTTP sem TLS permite interceptação dos tokens de mesa e do token administrativo por alguém com acesso à rede; autenticação não substitui transporte seguro. Para redes não confiáveis, use VPN ou proxy reverso com TLS; nunca exponha PostgreSQL à internet. A proteção de `%ProgramData%` reduz acesso local não autorizado, mas não protege um token enviado em HTTP puro.

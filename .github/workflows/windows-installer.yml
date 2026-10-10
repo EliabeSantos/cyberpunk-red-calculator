@@ -8,6 +8,9 @@ on:
       - "scripts/windows/**"
       - "scripts/local-start.mjs"
       - "scripts/migrate-local.mjs"
+      - "scripts/backup-local.mjs"
+      - "scripts/restore-local.mjs"
+      - "scripts/postgres-binaries.mjs"
       - "supabase/migrations/**"
       - "src/**"
       - "package.json"
@@ -42,6 +45,20 @@ jobs:
       - name: Check artifact contents
         shell: pwsh
         run: |
+          $required = @(
+            "installer\windows\stage\app\scripts\start-host.mjs",
+            "installer\windows\stage\app\scripts\migrate-local.mjs",
+            "installer\windows\stage\app\scripts\backup-local.mjs",
+            "installer\windows\stage\app\scripts\restore-local.mjs",
+            "installer\windows\stage\app\scripts\postgres-binaries.mjs",
+            "installer\windows\stage\node",
+            "installer\windows\stage\postgres"
+          )
+          foreach ($path in $required) { if (-not (Test-Path $path)) { throw "Required installer payload is missing: $path" } }
+          foreach ($name in @("node.exe", "pg_dump.exe", "pg_restore.exe", "initdb.exe", "pg_ctl.exe")) {
+            $base = if ($name -eq "node.exe") { "installer\windows\stage\node" } else { "installer\windows\stage\postgres" }
+            if (-not (Get-ChildItem $base -Filter $name -Recurse -File | Select-Object -First 1)) { throw "Required bundled executable is missing: $name" }
+          }
           $artifact = "installer\windows\output\CyberpunkRedCalculator-Setup.exe"
           if (-not (Test-Path $artifact)) { throw "Installer artifact was not created: $artifact" }
           $size = (Get-Item $artifact).Length

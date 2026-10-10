@@ -2,9 +2,9 @@
  * Contratos server-side da infraestrutura da Mesa.
  *
  * Esta camada descreve operações que já existem no store; ela não contém
- * regras de Cyberpunk RED nem decide autorização. A implementação inicial é
- * Supabase. O adapter local deverá cumprir os mesmos contratos depois, sem
- * alterar a fachada de `store.ts`.
+ * regras de Cyberpunk RED nem decide autorização. Os adapters Supabase e
+ * PostgreSQL local cumprem os mesmos contratos sem alterar a fachada de
+ * `store.ts`.
  */
 
 export interface MesaSessionRecord {
@@ -178,7 +178,12 @@ export interface MesaRepository {
   createCombat(input: MesaCombatCreate): Promise<MesaCombatRecord>;
   updateCombat(combatId: string, sessionId: string, patch: Readonly<Record<string, unknown>>): Promise<MesaCombatRecord[]>;
   findCombatEventLog(combatId: string, sessionId: string): Promise<unknown[]>;
-  replaceCombatEventLog(combatId: string, sessionId: string, eventLog: unknown): Promise<MesaCombatRecord[]>;
+  replaceCombatEventLog(
+    combatId: string,
+    sessionId: string,
+    eventLog: unknown,
+    expectedEventLog?: unknown,
+  ): Promise<MesaCombatRecord[]>;
   findBattleByEncounter(encounterId: string): Promise<MesaBattleRecord | null>;
   findActiveBattle(sessionId: string): Promise<MesaBattleRecord | null>;
   createBattle(input: MesaBattleCreate): Promise<MesaBattleRecord>;

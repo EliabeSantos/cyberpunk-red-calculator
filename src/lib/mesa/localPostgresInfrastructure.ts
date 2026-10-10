@@ -8,12 +8,11 @@
  * `SupabaseMesaRepository` traduz, só que em SQL parametrizado direto.
  *
  * O que este arquivo NÃO faz, de propósito:
- * - não implementa `ResolutionStore` nem `MesaEventTransport`;
- * - não é importado por nenhuma rota/camada de domínio: a aplicação segue
- *   usando exclusivamente o adapter Supabase (não há seleção de hospedagem e
- *   nenhum fallback silencioso entre modos);
+ * - não implementa `MesaEventTransport`;
  * - não calcula regra, HP, alvo ou `resolutionId` — payloads chegam prontos
- *   do domínio.
+ *   do domínio;
+ * - não faz fallback para Supabase: a seleção explícita de hospedagem ocorre
+ *   na factory e o adapter local recebe somente consultas do PostgreSQL local.
  *
  * Os registros voltam com as mesmas colunas snake_case que o PostgREST devolve
  * para o adapter Supabase: o formato persistido não muda.
@@ -259,8 +258,20 @@ export class LocalPostgresMesaRepository implements MesaRepository {
     return Array.isArray(eventLog) ? eventLog : [];
   }
 
-  async replaceCombatEventLog(combatId: string, sessionId: string, eventLog: unknown): Promise<MesaCombatRecord[]> {
-    return this.updateRecord("mesa_combats", combatId, { event_log: eventLog, updated_at: new Date().toISOString() }, "Falha ao registrar o evento", sessionId);
+  async replaceCombatEventLog(
+    combatId: string,
+    sessionId: string,
+    eventLog: unknown,
+    expectedEventLog?: unknown,
+  ): Promise<MesaCombatRecord[]> {
+    return this.updateRecord(
+      "mesa_combats",
+      combatId,
+      { event_log: eventLog, updated_at: new Date().toISOString() },
+      "Falha ao registrar o evento",
+      sessionId,
+      expectedEventLog === undefined ? {} : { event_log: expectedEventLog },
+    );
   }
 
   async findBattleByEncounter(encounterId: string): Promise<MesaBattleRecord | null> {

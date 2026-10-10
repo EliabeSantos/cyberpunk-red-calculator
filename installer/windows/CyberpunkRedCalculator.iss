@@ -19,11 +19,26 @@ Source: "..\..\scripts\windows\bootstrap-host.ps1"; DestDir: "{app}\windows"; Fl
 Source: "..\..\scripts\windows\stop-host.ps1"; DestDir: "{app}\windows"; Flags: ignoreversion
 Source: "..\..\scripts\windows\open-host.ps1"; DestDir: "{app}\windows"; Flags: ignoreversion
 [Icons]
-Name: "{group}\Cyberpunk RED Calculator"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; WorkingDir: "{app}"
-Name: "{group}\Abrir Cyberpunk RED Calculator"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\windows\open-host.ps1"""; WorkingDir: "{app}"
-Name: "{group}\Parar Cyberpunk RED Calculator"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\windows\stop-host.ps1"""; WorkingDir: "{app}"
-Name: "{userstartup}\Cyberpunk RED Calculator"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; WorkingDir: "{app}"
+Name: "{group}\Cyberpunk RED Calculator"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; WorkingDir: "{app}"
+Name: "{group}\Abrir Cyberpunk RED Calculator"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\open-host.ps1"""; WorkingDir: "{app}"
+Name: "{group}\Parar Cyberpunk RED Calculator"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\stop-host.ps1"""; WorkingDir: "{app}"
+Name: "{userstartup}\Cyberpunk RED Calculator"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; WorkingDir: "{app}"
 [Run]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; Flags: postinstall nowait
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; Flags: postinstall nowait
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\windows\stop-host.ps1"""; Flags: runhidden
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\stop-host.ps1"""; Flags: runhidden
+[Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ExitCode: Integer;
+  StopScript: String;
+  Params: String;
+begin
+  Result := '';
+  StopScript := ExpandConstant('{app}\windows\stop-host.ps1');
+  if not FileExists(StopScript) then Exit;
+  Params := '-NoProfile -ExecutionPolicy Bypass -File "' + StopScript + '"';
+  if (not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params,
+    ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode)) or (ExitCode <> 0) then
+    Result := 'Não foi possível parar a versão anterior. A atualização foi abortada; consulte %ProgramData%\Cyberpunk RED Calculator\logs.';
+end;

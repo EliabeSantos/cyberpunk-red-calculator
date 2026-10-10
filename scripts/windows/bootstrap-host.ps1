@@ -5,6 +5,13 @@ $data = Join-Path $env:ProgramData "Cyberpunk RED Calculator"
 $config = Join-Path $data "config"
 $logs = Join-Path $data "logs"
 New-Item $config,$logs -ItemType Directory -Force | Out-Null
+trap {
+  # Keep diagnostics useful without echoing environment variables, passwords,
+  # or the host-admin token into the log.
+  "Host bootstrap failed: $($_.Exception.GetType().Name)" |
+    Add-Content (Join-Path $logs "host-error.log")
+  exit 1
+}
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 # Use well-known SIDs for SYSTEM and the local Administrators group so this
 # works on localized Windows installations (Administradores, Administrators,
@@ -40,7 +47,9 @@ function Start-App {
   if (Test-ListeningPort $appPort) {
     throw "Application port $appPort is already occupied. Stop the existing server before starting this host."
   }
-  $process = Start-Process -FilePath $node.FullName -ArgumentList "scripts\start-host.mjs" -WorkingDirectory (Join-Path $root "app") -RedirectStandardOutput (Join-Path $logs "host.log") -RedirectStandardError (Join-Path $logs "host-error.log") -PassThru
+  $startScript = Join-Path $root "app\scripts\start-host.mjs"
+  if (-not (Test-Path $startScript)) { throw "Host start script is missing from the installed application." }
+  $process = Start-Process -FilePath $node.FullName -ArgumentList @("`"$startScript`"") -WorkingDirectory (Join-Path $root "app") -RedirectStandardOutput (Join-Path $logs "host.log") -RedirectStandardError (Join-Path $logs "host-error.log") -PassThru
   $process.Id | Set-Content (Join-Path $config "host.pid") -Encoding ascii
   for ($attempt = 1; $attempt -le 60; $attempt++) {
     try {
@@ -49,19 +58,36 @@ function Start-App {
     } catch { Start-Sleep -Seconds 1 }
   }
   & taskkill.exe /PID $process.Id /T /F *> $null
+  Remove-Item (Join-Path $config "host.pid") -Force -ErrorAction SilentlyContinue
   throw "Application did not become healthy on port $appPort. See $logs\host.log and $logs\host-error.log."
 }
 
 $cluster = Join-Path $data "postgres"
 $envFile = Join-Path $config "host.env"
 $pwFile = Join-Path $config "bootstrap-password"
+$adminTokenFile = Join-Path $config "host-admin-token"
+function New-RandomAdminToken {
+  $bytes = New-Object byte[] 32
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+  return [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+}
 $password = if (Test-Path $pwFile) { (Get-Content $pwFile -Raw).Trim() } else { [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 })) }
 $encodedPassword = [uri]::EscapeDataString($password)
+$adminToken = if (Test-Path $adminTokenFile) { (Get-Content $adminTokenFile -Raw).Trim() } else {
+  New-RandomAdminToken
+}
+if ([string]::IsNullOrWhiteSpace($adminToken)) {
+  $adminToken = New-RandomAdminToken
+}
+if (-not (Test-Path $adminTokenFile) -or [string]::IsNullOrWhiteSpace((Get-Content $adminTokenFile -Raw))) {
+  $adminToken | Set-Content $adminTokenFile -Encoding ascii
+}
 $hostEnvExists = Test-Path $envFile
 if ($hostEnvExists) {
   Get-Content $envFile | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } }
 }
-$configuredMode = $env:MESA_HOSTING_MODE?.Trim().ToLower()
+$configuredMode = if ($env:MESA_HOSTING_MODE) { $env:MESA_HOSTING_MODE.Trim().ToLowerInvariant() } else { $null }
 if (-not $configuredMode) { $configuredMode = "local" }
 if ($configuredMode -ne "local" -and $configuredMode -ne "supabase") {
   throw "MESA_HOSTING_MODE must be local or supabase."
@@ -99,9 +125,15 @@ if ($configuredMode -eq "local" -and $clusterExisted -and -not $hostEnvExists -a
   throw "Database exists but host.env is missing; restore the configuration or use the documented recovery procedure."
 }
 if (-not $hostEnvExists) {
-  "MESA_HOSTING_MODE=local`nMESA_HOST_ENV_FILE=$envFile`nMESA_LOCAL_DATABASE_URL=postgresql://mesa_app:$encodedPassword@127.0.0.1:$pgPort/cyberpunk_red`nMESA_HOSTNAME=0.0.0.0`nPORT=$appPort" | Set-Content $envFile -Encoding ascii
+  "MESA_HOSTING_MODE=local`nMESA_HOST_ENV_FILE=$envFile`nMESA_HOSTING_MODE_FILE=$envFile`nMESA_HOST_ADMIN_TOKEN_FILE=$adminTokenFile`nMESA_LOCAL_DATABASE_URL=postgresql://mesa_app:$encodedPassword@127.0.0.1:$pgPort/cyberpunk_red`nMESA_HOSTNAME=0.0.0.0`nPORT=$appPort" | Set-Content $envFile -Encoding ascii
   Remove-Item $pwFile -Force -ErrorAction SilentlyContinue
+} elseif (-not (Select-String -Path $envFile -Pattern '^MESA_HOST_ADMIN_TOKEN_FILE=' -Quiet)) {
+  Add-Content $envFile "MESA_HOST_ADMIN_TOKEN_FILE=$adminTokenFile" -Encoding ascii
 }
 Get-Content $envFile | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } }
+& icacls.exe $envFile /inheritance:r /grant:r "${identity}:R" "*S-1-5-18:R" "*S-1-5-32-544:R" *> (Join-Path $logs "permissions.log")
+if ($LASTEXITCODE -ne 0) { throw "Could not protect host.env permissions. See $logs\permissions.log." }
+& icacls.exe $adminTokenFile /inheritance:r /grant:r "${identity}:R" "*S-1-5-18:F" "*S-1-5-32-544:F" *> (Join-Path $logs "permissions.log")
+if ($LASTEXITCODE -ne 0) { throw "Could not protect host-admin-token permissions. See $logs\permissions.log." }
 if ($env:MESA_HOSTING_MODE -eq "local") { Start-Postgres }
 Start-App

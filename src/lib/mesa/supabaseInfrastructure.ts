@@ -213,9 +213,13 @@ export class SupabaseMesaRepository implements MesaRepository {
     return Array.isArray(row?.event_log) ? row.event_log : [];
   }
 
-  async replaceCombatEventLog(combatId: string, sessionId: string, eventLog: unknown): Promise<MesaCombatRecord[]> {
+  async replaceCombatEventLog(combatId: string, sessionId: string, eventLog: unknown, expectedEventLog?: unknown): Promise<MesaCombatRecord[]> {
+    let request = this.client.from("mesa_combats").update({ event_log: eventLog, updated_at: new Date().toISOString() }).eq("id", combatId).eq("session_id", sessionId);
+    if (expectedEventLog !== undefined) {
+      request = request.eq("event_log", typeof expectedEventLog === "object" ? JSON.stringify(expectedEventLog) : expectedEventLog);
+    }
     return result(
-      this.client.from("mesa_combats").update({ event_log: eventLog, updated_at: new Date().toISOString() }).eq("id", combatId).eq("session_id", sessionId).select("*"),
+      request.select("*"),
       "Falha ao registrar o evento",
     ) as Promise<MesaCombatRecord[]>;
   }
