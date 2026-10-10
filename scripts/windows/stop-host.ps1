@@ -47,7 +47,14 @@ $cluster = Join-Path $data "postgres"
 if ($pg -and (Test-Path (Join-Path $cluster "PG_VERSION"))) {
   & $pg.FullName -D $cluster status *> (Join-Path $logs "postgres-status.log")
   if ($LASTEXITCODE -eq 0) {
-    & $pg.FullName -D $cluster stop -m fast -w *> (Join-Path $logs "postgres-stop.log")
-    if ($LASTEXITCODE -ne 0) { throw "PostgreSQL não confirmou a parada; atualização/desinstalação abortada." }
+    # The server may exit between `status` and `stop` (for example after the
+    # host was closed manually). Treat that already-stopped state as success.
+    if (Test-Path (Join-Path $cluster "postmaster.pid")) {
+      & $pg.FullName -D $cluster stop -m fast -w *> (Join-Path $logs "postgres-stop.log")
+      if ($LASTEXITCODE -ne 0) {
+        & $pg.FullName -D $cluster status *> (Join-Path $logs "postgres-status.log")
+        if ($LASTEXITCODE -eq 0) { throw "PostgreSQL não confirmou a parada; atualização/desinstalação abortada." }
+      }
+    }
   }
 }
