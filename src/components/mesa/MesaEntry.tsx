@@ -81,6 +81,7 @@ export default function MesaEntry() {
   const isOpen = panel !== "closed";
   const triggerRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+  const createNameRef = useRef<HTMLInputElement>(null);
   const previousPanel = useRef<Panel>("closed");
   /** Trava contra duplo clique enquanto a checagem da Mesa ativa não responde. */
   const openingRef = useRef(false);
@@ -107,6 +108,10 @@ export default function MesaEntry() {
   // primeiro campo já recebe o foco sozinho via `autoFocus`.
   useEffect(() => {
     if (isOpen && panel === "home") modalRef.current?.focus();
+    if (isOpen && panel === "create") {
+      const frame = window.requestAnimationFrame(() => createNameRef.current?.focus());
+      return () => window.cancelAnimationFrame(frame);
+    }
   }, [isOpen, panel]);
 
   useEffect(() => {
@@ -310,6 +315,7 @@ export default function MesaEntry() {
                   <label>
                     Nome da mesa
                     <input
+                      ref={createNameRef}
                       value={sessionName}
                       onChange={(event) => setSessionName(event.target.value)}
                       placeholder="Heywood"

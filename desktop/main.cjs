@@ -145,6 +145,7 @@ function createWindow() {
     return { action: "deny" };
   });
   mainWindow.once("ready-to-show", () => mainWindow.show());
+  mainWindow.once("ready-to-show", () => mainWindow.focus());
   mainWindow.on("close", (event) => {
     if (isStopping) return;
     event.preventDefault();

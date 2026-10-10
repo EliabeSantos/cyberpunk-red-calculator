@@ -54,6 +54,16 @@ export function errorResponse(error: unknown): Response {
     .replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "postgresql://[redacted]")
     .replace(/(authorization|token|key|secret|password)=?[^\s,;]+/gi, "$1=[redacted]");
   console.error(`[mesa-error:${errorId}] ${errorName}: ${safeLog(errorMessage)}`, errorStack ? safeLog(errorStack) : "");
+  if (error instanceof MesaError) {
+    return Response.json({
+      ok: false,
+      error: error.status === 503
+        ? "O serviço de Mesa está temporariamente indisponível."
+        : "Ocorreu um erro interno ao processar a Mesa.",
+      code: error.code,
+      errorId,
+    }, { status: error.status >= 500 ? error.status : 500 });
+  }
   if (error instanceof DatabaseNotConfiguredError) {
     return Response.json({ ok: false, error: "O serviço de Mesa está temporariamente indisponível.", code: "database_not_configured", errorId }, { status: 503 });
   }
