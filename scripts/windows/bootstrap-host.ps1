@@ -112,7 +112,7 @@ if ($configuredMode -eq "local" -and -not $clusterExisted) {
   if (Test-ListeningPort $pgPort) {
     throw "PostgreSQL port $pgPort is already occupied by another process. The database cluster was not initialized."
   }
-  & $pg.FullName -D $cluster --username=mesa_app --pwfile=$pwFile --auth=scram-sha-256
+  & $pg.FullName -D $cluster --username=mesa_app --pwfile=$pwFile --auth=scram-sha-256 --encoding=UTF8 --locale=C
   if ($LASTEXITCODE -ne 0) { throw "PostgreSQL cluster initialization failed." }
   Start-Postgres
   $previousPgPassword = $env:PGPASSWORD
