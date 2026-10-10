@@ -18,6 +18,10 @@ try {
 } catch {
   & (Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe") `
     -NoProfile -ExecutionPolicy Bypass -File $bootstrap
+  if (Test-Path $envFile) {
+    $portLine = Get-Content $envFile | Where-Object { $_ -match '^PORT=(\d+)$' } | Select-Object -First 1
+    if ($portLine) { $port = [int]($portLine -replace '^PORT=', '') }
+  }
 }
 
 Start-Process $url
