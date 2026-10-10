@@ -58,6 +58,7 @@ export default function CharacterToolkit({ startScreen = "sheet", forceNew = fal
    */
   const initiativeBusyRef = useRef(false);
   const deathSaveBusyRef = useRef(false);
+  const finalizedCombatSyncRef = useRef<string | null>(null);
   /**
    * F1.13.4/F1.13.5 — modo de operação da ficha. `"mesa-combat"` (Mesa como
    * autoridade) só quando dá para afirmar com segurança: sessão viva, olhando
@@ -232,7 +233,18 @@ export default function CharacterToolkit({ startScreen = "sheet", forceNew = fal
   // O snapshot já foi validado pelo servidor. Esta convergência local não usa
   // handleUpdate, portanto não gera um POST de retorno nem loop de espelho.
   useEffect(() => {
-    if (!character || !mesa.state || sheetMode !== "mesa-combat") return;
+    if (!character || !mesa.state) return;
+    const combat = mesa.state.combat;
+    const combatFinished = combat?.status === "finished";
+    if (combat?.status === "active") finalizedCombatSyncRef.current = null;
+    if (sheetMode !== "mesa-combat" && !combatFinished) return;
+    // A finished combat is synchronized once so its final HP, injuries,
+    // armor, ammo and inventory reach the local ficha after the GM closes it.
+    // Do not reapply that old snapshot over a later manual ficha edit.
+    if (combatFinished) {
+      if (!combat || finalizedCombatSyncRef.current === combat.id) return;
+      finalizedCombatSyncRef.current = combat.id;
+    }
     const synchronized = syncMesaCharacterState(character, mesa.state);
     if (synchronized === character) return;
     upsertCharacter(synchronized);

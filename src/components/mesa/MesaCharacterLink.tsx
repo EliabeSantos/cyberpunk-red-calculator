@@ -46,9 +46,15 @@ export default function MesaCharacterLink({
   const [linking, setLinking] = useState(false);
 
   async function handleLink(characterId: string) {
-    if (!characterId || characterId === selectedCharacterId) return;
+    if (characterId === selectedCharacterId || (!characterId && !selectedCharacterId)) return;
     setLinking(true);
     try {
+      if (!characterId) {
+        await linkCharacter(sessionId, null);
+        await onChanged();
+        onNotice("Ficha desvinculada.", "ok");
+        return;
+      }
       const character = loadCharacters().find((entry) => entry.id === characterId);
       if (!character) throw new MesaApiError("Personagem não encontrado no navegador.", 400, "not_found");
       await linkCharacter(sessionId, character.id, character);

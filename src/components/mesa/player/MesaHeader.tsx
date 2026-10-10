@@ -76,9 +76,14 @@ export default function MesaHeader({ state, realtime, leaving, busy, onNotice, o
         <Link className="mesa-ghost" href="/ficha">
           Ficha
         </Link>
+        {isGM && (
+          <Link className="mesa-ghost" href="/gm/encounters" title="Abrir a visão de GM.">
+            Visão de GM
+          </Link>
+        )}
         <button
           type="button"
-          className="mesa-ghost"
+          className="mesa-ghost mesa-leave"
           disabled={leaving}
           onClick={onLeave}
           title="Sair da mesa. Para voltar você vai precisar do código."

@@ -11,6 +11,9 @@
 
 import { rosterInInitiativeOrder } from "@/lib/mesa/playerScreen";
 import type { MesaCombatant, MesaState } from "@/lib/mesa/types";
+import type { CombatWeapon } from "@/lib/combat/contract";
+import CombatantFigure from "@/components/mesa/CombatantFigure";
+import type { TacticalAttackAnimation } from "./TacticalView";
 
 interface Props {
   state: MesaState;
@@ -20,6 +23,9 @@ interface Props {
   onSelectTarget: (combatantId: string) => void;
   controlledCombatantId?: string | null;
   onSelectControl?: (combatantId: string) => void;
+  figureCombatantId?: string | null;
+  figureWeapon?: CombatWeapon | null;
+  attackAnimation?: TacticalAttackAnimation | null;
 }
 
 export default function InitiativePanel({
@@ -29,6 +35,9 @@ export default function InitiativePanel({
   onSelectTarget,
   controlledCombatantId,
   onSelectControl,
+  figureCombatantId,
+  figureWeapon,
+  attackAnimation,
 }: Props) {
   const roster = rosterInInitiativeOrder(state);
   const activeCombatantId = state.combat?.activeCombatantId ?? null;
@@ -46,11 +55,15 @@ export default function InitiativePanel({
           const isActive = combatant.id === activeCombatantId;
           const isYou = Boolean(me && combatant.id === me.id);
           const selectable = combatActive && combatant.kind === "enemy" && !combatant.isDead;
-          const selected = combatant.id === selectedTargetId;
+            const selected = combatant.id === selectedTargetId;
+           const visibleWeapon = combatant.id === figureCombatantId ? figureWeapon : null;
 
           const content = (
-            <>
-              <span className="player-mesa-initiative-num" aria-label="Iniciativa">
+              <>
+               <span className="player-mesa-figure-cell">
+                  <CombatantFigure combatant={combatant} weapon={visibleWeapon} visualWeaponKind={combatant.visualWeaponKind} animation={attackAnimation?.attackerId === combatant.id ? attackAnimation.kind : undefined} active={isActive} compact />
+               </span>
+               <span className="player-mesa-initiative-num" aria-label="Iniciativa">
                 {combatant.initiative ?? "—"}
               </span>
               <span className="player-mesa-initiative-name">

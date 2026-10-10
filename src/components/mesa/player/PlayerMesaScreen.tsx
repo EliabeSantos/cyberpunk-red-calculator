@@ -36,7 +36,8 @@ import type { Character } from "@/types/character";
 import { getAvailableAttacks } from "@/lib/attacks";
 import type { AvailableAttack } from "@/types/attack";
 import { useAutoLinkCharacter } from "@/lib/mesa/useAutoLinkCharacter";
-import { loadCharacters } from "@/lib/storage";
+import { loadCharacters, upsertCharacter } from "@/lib/storage";
+import { syncMesaCharacterState } from "@/lib/mesa/characterSync";
 import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
 import { shouldReconcileAfterAction } from "@/lib/mesa/useMesaState";
 
@@ -53,7 +54,7 @@ import PlayerNetrunnerPanel from "./PlayerNetrunnerPanel";
 import GmNetArchitecturePanel from "./GmNetArchitecturePanel";
 import PlayerStatusPanel from "./PlayerStatusPanel";
 import TurnStatus from "./TurnStatus";
-import TacticalView from "./TacticalView";
+import TacticalView, { type TacticalAttackAnimation } from "./TacticalView";
 import type { NoticeFn, RunAction, RunOptions } from "./types";
 import FloatingUpdateCard, { type FloatingUpdate } from "@/components/FloatingUpdateCard";
 import AppDialog from "@/components/AppDialog";
@@ -72,6 +73,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
   const router = useRouter();
   const [notice, setNotice] = useState<FloatingUpdate[]>([]);
   const [busy, setBusy] = useState(false);
+  const [attackAnimation, setAttackAnimation] = useState<TacticalAttackAnimation | null>(null);
   const [leaving, setLeaving] = useState(false);
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const [targetDraft, setTargetDraft] = useState("");
@@ -93,6 +95,12 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
   const onChanged = useCallback(async () => {
     await onRefresh();
   }, [onRefresh]);
+
+  const playAttackAnimation = useCallback((attackerId: string, targetId: string, kind: "ranged" | "melee", hit: boolean, damage: number | null) => {
+    const key = Date.now();
+    setAttackAnimation({ attackerId, targetId, kind, hit, damage, key });
+    window.setTimeout(() => setAttackAnimation((current) => current?.key === key ? null : current), kind === "ranged" ? 1700 : 700);
+  }, []);
 
   const run = useCallback<RunAction>(
     async (action, options?: RunOptions) => {
@@ -156,10 +164,10 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
 
   // Uma única leitura da ficha local por render. A Mesa continua sendo a fonte
   // autoritativa; esta ficha só fornece rótulo, armas e ataques disponíveis.
-  const localCharacter = useMemo(
-    () => linkedCharacterId ? loadCharacters().find((entry) => entry.id === linkedCharacterId) ?? null : null,
-    [linkedCharacterId],
-  );
+  // A ficha pode ser editada em outra tela enquanto a Mesa continua aberta.
+  // Ler a fonte persistida a cada render mantém a miniatura e a arma alinhadas
+  // ao equipamento atual, sem criar estado paralelo para a regra de combate.
+  const localCharacter = linkedCharacterId ? loadCharacters().find((entry) => entry.id === linkedCharacterId) ?? null : null;
   const characterName = localCharacter?.identity.name ?? null;
   const weapons = localCharacter?.weapons ?? EMPTY_WEAPONS;
   const attacks = useMemo<AvailableAttack[]>(
@@ -168,7 +176,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
   );
   const playerSelectedWeapon = useMemo(
     () => {
-      const selected = attacks.find((attack) => attack.id === selectedAttackId);
+       const selected = attacks.find((attack) => attack.id === selectedAttackId) ?? attacks[0];
       const weaponId = selected?.context.weaponId;
       return weapons.find((weapon) => weapon.id === weaponId) ?? null;
     },
@@ -187,6 +195,17 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
     ? controlWeapons[gmSelectedCombatant.id]?.attacks.find((attack) => attack.id === selectedAttackId) ?? controlWeapons[gmSelectedCombatant.id]?.attacks[0] ?? null
     : null;
   const playerSelectedAttack = attacks.find((attack) => attack.id === selectedAttackId) ?? attacks[0] ?? null;
+
+  // Quando o combate termina, o snapshot final já vem na projeção da Mesa.
+  // Converge somente o cache local desta ficha; o servidor já consolidou a
+  // ficha durante `endCombat`, então não fazemos um POST de retorno.
+  useEffect(() => {
+    if (state.combat?.status !== "finished" || !linkedCharacterId) return;
+    const local = loadCharacters().find((entry) => entry.id === linkedCharacterId);
+    if (!local) return;
+    const synchronized = syncMesaCharacterState(local, state);
+    if (synchronized !== local) upsertCharacter(synchronized);
+  }, [linkedCharacterId, state]);
 
   async function handleLeave() {
     setLeaveDialogOpen(false);
@@ -231,7 +250,12 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
         busy={busy}
         onNotice={onNotice}
         onLeave={() => setLeaveDialogOpen(true)}
-        onEndCombat={() => void run(() => endCombat(state.session.id), { success: "Combate encerrado." })}
+        onEndCombat={async () => {
+          await run(() => endCombat(state.session.id), { success: "Combate encerrado." });
+          // O transporte local pode entregar apenas a invalidação, sem um GET
+          // imediato. Reconsulta para retirar o botão e atualizar o status.
+          await onRefresh();
+        }}
       />
 
       {sessionFinished && (
@@ -274,6 +298,9 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
             onSelectTarget={setTargetDraft}
             controlledCombatantId={isGM ? gmControlledCombatantId : null}
             onSelectControl={isGM ? setGmControlledCombatantId : undefined}
+            attackAnimation={attackAnimation}
+            figureCombatantId={isGM ? gmControlledCombatantId : me?.id}
+            figureWeapon={isGM ? gmSelectedWeapon : playerSelectedWeapon}
           />
         </aside>
 
@@ -309,6 +336,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
                 }
               }}
              gmMapToolsVisible={!isGM || gmControlMode === "map"}
+             attackAnimation={attackAnimation}
            />
           <div className="player-mesa-stage-tools">
             <PlayerEquipmentPanel
@@ -363,15 +391,16 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
               busy={busy}
               run={run}
                metadata={controlWeapons}
-              sessionFinished={sessionFinished}
-               controlledCombatantId={gmControlledCombatantId}
+               sessionFinished={sessionFinished}
+                controlledCombatantId={gmControlledCombatantId}
                selectedTargetId={selectedGmTargetId}
                selectedWeaponId={selectedWeaponId}
                onSelectWeapon={setSelectedWeaponId}
                selectedAttackId={selectedAttackId}
-               onSelectAttack={setSelectedAttackId}
-               controlMode={gmControlMode}
-               onControlModeChange={setGmControlMode}
+                onSelectAttack={setSelectedAttackId}
+                onAttackAnimation={playAttackAnimation}
+                controlMode={gmControlMode}
+                onControlModeChange={setGmControlMode}
              />
           ) : (
             <PlayerActionsPanel
@@ -388,7 +417,8 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
                onSelectWeapon={setSelectedWeaponId}
                selectedAttackId={selectedAttackId}
                onSelectAttack={setSelectedAttackId}
-              sessionFinished={sessionFinished}
+               sessionFinished={sessionFinished}
+               onAttackAnimation={playAttackAnimation}
             />
           )}
 

@@ -1249,17 +1249,15 @@ select:focus-visible {
   overflow: hidden;
   gap: 0;
   padding: 0;
-  border: 1px solid var(--redline-line);
-  border-left: 3px solid var(--redline-line-bright);
+  border: none;
   border-radius: var(--redline-radius-md);
-  background:
-    linear-gradient(145deg, rgb(21 35 38 / 84%), transparent 48%),
-    var(--redline-cockpit-surface);
-  box-shadow: 0 18px 55px rgb(0 0 0 / 18%);
+  background: transparent;
+  box-shadow: none;
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
 .enemy-card::before {
+  display: none;
   position: absolute;
   top: -1px;
   left: -1px;
@@ -1272,12 +1270,12 @@ select:focus-visible {
 
 .enemy-card:hover {
   border-color: var(--redline-line-bright);
-  background:
-    linear-gradient(145deg, rgb(21 35 38 / 96%), transparent 52%),
-    var(--redline-cockpit-surface);
-  box-shadow: 0 22px 65px rgb(0 0 0 / 28%), 0 0 0 1px rgb(126 231 215 / 8%);
+  background: transparent;
+  box-shadow: none;
   transform: translateY(-2px);
 }
+
+.enemy-card[data-threat-level] { border-left: none; }
 
 .enemy-card[data-threat-level="low"] { border-left-color: #5acd8a; }
 .enemy-card[data-threat-level="medium"] { border-left-color: var(--redline-yellow); }
@@ -2200,8 +2198,8 @@ textarea:disabled {
 .tactical-map-settings .tactical-grid-toggle { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: .35rem; }
 .tactical-map-settings .tactical-grid-toggle input { width: auto; }
 .tactical-surface { position: relative; width: 100%; min-height: 20rem; overflow: hidden; overscroll-behavior: contain; background: #0a1215; }
-.tactical-map-content { position: absolute; inset: 0; transform-origin: center; transition: transform 160ms ease; }
-.tactical-zoom-controls { position: absolute; z-index: 8; right: .75rem; bottom: .75rem; display: flex; align-items: center; gap: .25rem; padding: .25rem; border: 1px solid rgb(126 231 215 / 35%); background: rgb(8 15 18 / 88%); color: var(--redline-teal); font: 700 .58rem var(--font-geist-mono), monospace; }
+.tactical-map-content { position: absolute; inset: 0; transform-origin: center; }
+.tactical-zoom-controls { position: absolute; z-index: 8; left: .75rem; bottom: .75rem; display: flex; align-items: center; gap: .25rem; padding: .25rem; border: 1px solid rgb(126 231 215 / 35%); background: rgb(8 15 18 / 88%); color: var(--redline-teal); font: 700 .58rem var(--font-geist-mono), monospace; }
 .tactical-zoom-controls button { display: grid; min-width: 1.8rem; min-height: 1.8rem; place-items: center; padding: 0 .35rem; border: 1px solid var(--redline-line-bright); background: transparent; color: var(--redline-paper); font: inherit; cursor: pointer; }
 .tactical-zoom-controls button:hover, .tactical-zoom-controls button:focus-visible { border-color: var(--redline-teal); color: var(--redline-teal); outline: none; }
 .tactical-zoom-controls output { min-width: 3rem; text-align: center; }
@@ -2269,11 +2267,11 @@ textarea:disabled {
 .tactical-info-toggle { position: absolute; z-index: 8; right: .75rem; bottom: 2rem; padding: .3rem .5rem; border: 1px solid var(--redline-line-bright); background: rgb(8 15 18 / 92%); color: var(--redline-muted); font: 700 .58rem var(--font-geist-mono), monospace; letter-spacing: .04em; cursor: pointer; }
 .tactical-info-toggle:hover, .tactical-info-toggle:focus-visible { border-color: var(--redline-teal); color: var(--redline-teal); outline: none; }
 .tactical-info-toggle[aria-pressed="false"] { border-color: var(--redline-yellow); color: var(--redline-yellow); }
-.tactical-token { position: absolute; z-index: 2; display: grid; justify-items: center; gap: .1rem; width: 2.65rem; padding: .1rem; border: 2px solid var(--redline-teal); border-radius: 50%; background: rgb(8 15 18 / 92%); color: var(--redline-paper); transform: translate(-50%, -50%); cursor: default; touch-action: none; transition: filter .15s, transform .15s; }
-.tactical-token img { width: 1.7rem; height: 1.7rem; border-radius: 50%; object-fit: cover; pointer-events: none; }
+.tactical-token { position: absolute; z-index: 2; display: grid; justify-items: center; gap: .1rem; width: 4.7rem; min-height: 5.5rem; padding: .1rem; border: none; border-radius: 0; background: transparent; color: var(--redline-paper); transform: translate(-50%, -50%); cursor: default; touch-action: none; transition: filter .15s, transform .15s; }
+.tactical-token img { width: 100%; height: auto; border-radius: 0; object-fit: contain; pointer-events: none; }
+.tactical-token .combatant-figure { width: 4rem; height: 5rem; }
 .tactical-token.is-remote { will-change: left, top; transition: filter .15s, transform .15s, left .45s ease-out, top .45s ease-out; }
 .tactical-token span { max-width: 6rem; overflow: hidden; color: var(--redline-paper); font-size: .58rem; font-weight: 700; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
-.tactical-token.is-enemy { border-color: var(--redline-coral); }
 .tactical-token.is-active { box-shadow: 0 0 0 .2rem rgb(255 105 92 / 25%), 0 0 1.5rem rgb(255 105 92 / 35%); }
 .tactical-token.is-target-selected { outline: 2px solid var(--redline-paper); outline-offset: .2rem; box-shadow: 0 0 0 .35rem rgb(247 196 90 / 28%), 0 0 1.25rem rgb(247 196 90 / 38%); }
 .tactical-token.is-movable { cursor: grab; }
@@ -2282,6 +2280,83 @@ textarea:disabled {
 .tactical-token.is-processing::after { position: absolute; right: -.15rem; top: -.2rem; width: .45rem; height: .45rem; border: 2px solid rgb(126 231 215 / 35%); border-top-color: var(--redline-teal); border-radius: 50%; animation: tactical-token-spin .7s linear infinite; content: ""; }
 .tactical-token.is-rejected { animation: tactical-token-rejected .22s ease-out; }
 .tactical-token.is-out-of-range { filter: grayscale(.55) saturate(.7); opacity: .72; }
+.tactical-projectile { position: absolute; z-index: 6; width: .8rem; height: .18rem; border-radius: 999px; background: #ffd36a; box-shadow: 0 0 .55rem .14rem rgb(255 105 92 / 85%); pointer-events: none; transform: translate(-50%, -50%); animation: tactical-projectile-flight 1.05s cubic-bezier(.2, .75, .35, 1) both; }
+.tactical-hit-card { position: absolute; z-index: 8; display: grid; justify-items: center; gap: .08rem; min-width: 3.2rem; padding: .3rem .48rem; border: 1px solid currentColor; border-radius: .2rem; background: rgb(8 15 18 / 94%); color: var(--redline-paper); transform: translate(-50%, -135%); pointer-events: none; animation: tactical-hit-card-rise 1.35s ease-out both; }
+.tactical-hit-card strong { font: 800 .72rem var(--font-geist-mono), monospace; letter-spacing: .08em; }
+.tactical-hit-card span { font: 700 .58rem var(--font-geist-mono), monospace; white-space: nowrap; }
+.tactical-hit-card.is-hit { color: var(--redline-yellow); }
+.tactical-hit-card.is-miss { color: var(--redline-coral); }
+
+/* Miniaturas 2.5D compartilhadas pelos cartões, iniciativa e mapa. */
+.combatant-figure { position: relative; display: inline-block; width: 4.35rem; height: 5.7rem; flex: 0 0 auto; color: var(--redline-teal); filter: drop-shadow(0 .3rem .45rem rgb(0 0 0 / 38%)); isolation: isolate; }
+.combatant-figure svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.combatant-figure.is-enemy { color: var(--redline-coral); }
+.combatant-figure.is-injured:not(.is-dead) .figure-core { fill: var(--redline-yellow); }
+.combatant-figure.is-injured:not(.is-dead) .figure-visor { stroke: var(--redline-yellow); }
+.combatant-figure-ground { fill: rgb(0 0 0 / 38%); }
+.combatant-figure-body { transform-origin: center bottom; }
+.figure-hair { fill: #121c24; stroke: #526a73; stroke-width: 2; }
+.figure-visor { fill: none; stroke: var(--redline-yellow); stroke-width: 3; stroke-linecap: round; filter: drop-shadow(0 0 3px var(--redline-yellow)); }
+.figure-torso { stroke: rgb(255 255 255 / 25%); stroke-width: 1.5; }
+.figure-arm, .figure-leg, .figure-boot { fill: none; stroke: url(#figure-suit); stroke-width: 10; stroke-linecap: round; stroke-linejoin: round; }
+.figure-boot { stroke: #111a21; stroke-width: 8; }
+.figure-armor-detail, .figure-core { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; opacity: .8; }
+.figure-core { fill: currentColor; stroke: none; filter: drop-shadow(0 0 3px currentColor); }
+.combatant-figure-weapon { transform-origin: center; }
+.weapon-edge { fill: none; stroke: #d8e2df; stroke-width: 5; stroke-linecap: round; filter: drop-shadow(0 0 3px currentColor); }
+.weapon-shell, .weapon-hilt, .weapon-core { fill: #18262d; stroke: currentColor; stroke-width: 2; }
+.weapon-barrel { fill: #9aa8a6; stroke: #1e3037; stroke-width: 2; }
+.weapon-grip { fill: #0d171d; stroke: currentColor; stroke-width: 2; }
+.weapon-staff-shaft { fill: none; stroke: #b78652; stroke-width: 7; stroke-linecap: round; filter: drop-shadow(0 0 3px #8c5e35); }
+.weapon-staff-cap, .weapon-staff-grip { fill: none; stroke: #e0b06a; stroke-width: 3; stroke-linecap: round; }
+.weapon-guard, .weapon-detail { fill: none; stroke: var(--redline-yellow); stroke-width: 2; stroke-linecap: round; }
+.weapon-light { fill: var(--redline-coral); filter: drop-shadow(0 0 4px var(--redline-coral)); }
+.combatant-figure.is-active .figure-core { animation: combatant-figure-pulse 1.8s ease-in-out infinite; }
+.combatant-figure.is-dead { filter: grayscale(.85) brightness(.65); opacity: .58; }
+.combatant-figure.is-dead .figure-visor { stroke: #8c9694; filter: none; }
+.combatant-figure.is-compact { width: 3.1rem; height: 4rem; }
+.combatant-figure.is-compact .figure-core { animation: none; }
+.combatant-figure.is-attacking-ranged .combatant-figure-weapon-ranged { animation: combatant-ranged-recoil .3s ease-out; transform-origin: center; }
+.combatant-figure.is-attacking-melee .combatant-figure-weapon-staff,
+.combatant-figure.is-attacking-melee .combatant-figure-weapon-melee { animation: combatant-melee-hit .46s cubic-bezier(.2, .8, .25, 1); transform-origin: 50% 90%; }
+@keyframes combatant-figure-pulse { 50% { opacity: .52; } }
+@keyframes tactical-projectile-flight {
+  0% { left: var(--projectile-from-x); top: var(--projectile-from-y); opacity: 0; transform: translate(-50%, -50%) scale(.35); }
+  12% { opacity: 1; }
+  100% { left: var(--projectile-to-x); top: var(--projectile-to-y); opacity: .15; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes tactical-hit-card-rise {
+  0% { opacity: 0; transform: translate(-50%, -95%) scale(.75); }
+  15% { opacity: 1; }
+  72% { opacity: 1; transform: translate(-50%, -155%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -205%) scale(.95); }
+}
+@keyframes combatant-ranged-recoil {
+  35% { transform: translate(-.18rem, .08rem); }
+}
+@keyframes combatant-melee-hit {
+  38% { transform: translate(.38rem, -.18rem) rotate(-18deg); }
+  62% { transform: translate(-.08rem, .04rem) rotate(5deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .combatant-figure.is-active .figure-core { animation: none; }
+  .tactical-projectile,
+  .tactical-hit-card,
+  .combatant-figure.is-attacking-ranged .combatant-figure-weapon-ranged,
+  .combatant-figure.is-attacking-melee .combatant-figure-weapon-staff,
+  .combatant-figure.is-attacking-melee .combatant-figure-weapon-melee { animation: none; }
+}
+
+.mesa-combatant-main .combatant-figure { width: 3.2rem; height: 4.1rem; }
+.mesa-combatant-main { align-items: center; }
+
+@media (max-width: 720px) {
+  .tactical-token { width: 3.7rem; min-height: 4.6rem; }
+  .tactical-token .combatant-figure { width: 3.1rem; height: 4rem; }
+  .player-mesa-initiative .combatant-figure { width: 2.55rem; height: 3.4rem; }
+  .player-mesa-initiative li > button,
+  .player-mesa-initiative li > div { grid-template-columns: 2.55rem 2.3rem minmax(0, 1fr) auto; gap: .4rem; }
+}
 .tactical-hackable-object { position: absolute; z-index: 3; display: grid; justify-items: center; gap: .08rem; min-width: 2.7rem; padding: .22rem .3rem; border: 1px solid rgb(247 196 90 / 75%); border-radius: .2rem; background: rgb(26 20 12 / 94%); color: var(--redline-yellow); transform: translate(-50%, -50%); cursor: pointer; font: 700 .52rem var(--font-geist-mono), monospace; letter-spacing: .04em; text-transform: uppercase; touch-action: none; }
 .tactical-hackable-object:hover, .tactical-hackable-object:focus-visible, .tactical-hackable-object.is-selected { border-color: var(--redline-paper); outline: none; box-shadow: 0 0 0 .2rem rgb(247 196 90 / 25%), 0 0 1rem rgb(247 196 90 / 28%); }
 .tactical-hackable-object.is-disabled { opacity: .38; filter: grayscale(.8); }
@@ -3194,6 +3269,26 @@ textarea:disabled {
 
 .player-mesa-initiative-hp {
   color: var(--redline-soft);
+}
+
+.player-mesa-figure-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.player-mesa-initiative .player-mesa-figure-cell {
+  grid-row: span 2;
+}
+
+.player-mesa-initiative .combatant-figure {
+  width: 3rem;
+  height: 4rem;
+}
+
+.player-mesa-initiative li > button,
+.player-mesa-initiative li > div {
+  grid-template-columns: 3rem 2.8rem minmax(0, 1fr) auto;
 }
 
 .player-mesa-actions {

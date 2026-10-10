@@ -373,6 +373,8 @@ export interface MesaCombatant {
   criticalInjuries: import("@/types/character").CriticalInjury[];
   /** Munição atual por `weaponId`, mantida pelo servidor. */
   ammoByWeapon?: Record<string, number> | null;
+  /** Silhueta pública da arma carregada por inimigos, sem expor seus dados. */
+  visualWeaponKind?: "ranged" | "staff";
   initiative: number | null;
   /**
    * Como a iniciativa foi calculada. `bonus` é o bônus de implantes do inimigo

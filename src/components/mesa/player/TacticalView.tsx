@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { createId } from "@/lib/id";
 import { moveMesa, positionCombatant, saveTacticalMap, MesaApiError } from "@/lib/mesa/client";
@@ -12,6 +12,7 @@ import { TACTICAL_COVER_MATERIALS } from "@/lib/mesa/types";
 import { TACTICAL_COVER_THICKNESSES } from "@/lib/mesa/tacticalCoverCatalog";
 import type { MesaState, TacticalAccessPoint, TacticalCoverMaterial, TacticalCoverThickness, TacticalGeometry, TacticalHackableDeviceState, TacticalHackableObject, TacticalHackableObjectType, TacticalMap, TacticalPosition } from "@/lib/mesa/types";
 import type { CombatWeapon } from "@/lib/combat/contract";
+import CombatantFigure from "@/components/mesa/CombatantFigure";
 import type { AttackType } from "@/types/attack";
 import { tacticalDistance } from "@/lib/mesa/tacticalMap";
 import { markMesaVisualConfirmation } from "@/lib/mesa/telemetry";
@@ -19,6 +20,15 @@ import { markMesaVisualConfirmation } from "@/lib/mesa/telemetry";
 /* These effects reconcile local drag/edit state with Realtime snapshots and
  * ResizeObserver/DOM portal state; refs remain imperative pointer-handler state. */
 /* eslint-disable react-hooks/set-state-in-effect, react-hooks/refs */
+
+export interface TacticalAttackAnimation {
+  attackerId: string;
+  targetId: string;
+  kind: "ranged" | "melee";
+  hit: boolean;
+  damage: number | null;
+  key: number;
+}
 
 interface Props {
   state: MesaState;
@@ -34,6 +44,7 @@ interface Props {
   selectedAccessPointId?: string | null;
   onSelectAccessPoint?: (accessPointId: string | null) => void;
   gmMapToolsVisible?: boolean;
+  attackAnimation?: TacticalAttackAnimation | null;
 }
 type MoveStatus = "dragging" | "processing" | "confirmed" | "rejected";
 type GeometryMode = "select" | "wall" | "door" | "erase";
@@ -51,7 +62,6 @@ interface LocalMove {
 }
 
 const DEFAULT_MAP: TacticalMap = { imageUrl: "", enabled: false, width: 1000, height: 600, pixelsPerMeter: 50, grid: { enabled: false, size: DEFAULT_TACTICAL_GRID_SIZE_METERS, snap: false } };
-const ENEMY_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23301f35'/%3E%3Cpath d='M18 78 28 35 50 18l22 17 10 43H18Z' fill='%23ff695c'/%3E%3Ccircle cx='39' cy='48' r='6' fill='%230b1114'/%3E%3Ccircle cx='61' cy='48' r='6' fill='%230b1114'/%3E%3Cpath d='M35 68h30' stroke='%230b1114' stroke-width='6'/%3E%3C/svg%3E";
 const MIN_MAP_ZOOM = 1;
 const MAX_MAP_ZOOM = 2.5;
 const MAP_ZOOM_STEP = 0.25;
@@ -85,7 +95,7 @@ function geometryDependency(geometry: TacticalGeometry): string {
     .join("|");
 }
 
-export default function TacticalView({ state, onNotice, selectedTargetId, onSelectTarget, controlledCombatantId, selectedWeapon, selectedAttackType, selectedSkillId, selectedHackableObjectId, onSelectHackableObject, selectedAccessPointId, onSelectAccessPoint, gmMapToolsVisible = true }: Props) {
+export default function TacticalView({ state, onNotice, selectedTargetId, onSelectTarget, controlledCombatantId, selectedWeapon, selectedAttackType, selectedSkillId, selectedHackableObjectId, onSelectHackableObject, selectedAccessPointId, onSelectAccessPoint, gmMapToolsVisible = true, attackAnimation }: Props) {
   const map = state.session.tacticalMap ?? DEFAULT_MAP;
   const isGM = state.viewer.role === "gm";
   const combatActive = state.combat?.status === "active";
@@ -99,6 +109,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
   const [geometryMode, setGeometryMode] = useState<GeometryMode>("select");
   const [showTacticalInfo, setShowTacticalInfo] = useState(true);
   const [mapZoom, setMapZoom] = useState(MIN_MAP_ZOOM);
+  const [mapPan, setMapPan] = useState({ x: 0, y: 0 });
   const [selectedGeometryId, setSelectedGeometryId] = useState<string | null>(null);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(selectedHackableObjectId ?? null);
   const objectDragRef = useRef<string | null>(null);
@@ -112,6 +123,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
   const pointerRef = useRef<TacticalPosition | null>(null);
   const frameRef = useRef<number | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  const mapPanRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
   const draggedPastThresholdRef = useRef(false);
   const suppressClickRef = useRef(false);
   const [surfaceWidth, setSurfaceWidth] = useState(0);
@@ -195,13 +207,37 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
     if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null;
     const visualPosition = { x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height };
     return validPosition({
-      x: (visualPosition.x - 0.5) / mapZoom + 0.5,
-      y: (visualPosition.y - 0.5) / mapZoom + 0.5,
+      x: (visualPosition.x - 0.5 - mapPan.x / bounds.width) / mapZoom + 0.5,
+      y: (visualPosition.y - 0.5 - mapPan.y / bounds.height) / mapZoom + 0.5,
     });
   }
 
   function changeMapZoom(delta: number): void {
-    setMapZoom((current) => Math.min(MAX_MAP_ZOOM, Math.max(MIN_MAP_ZOOM, Number((current + delta).toFixed(2)))));
+    setMapZoom((current) => {
+      const next = Math.min(MAX_MAP_ZOOM, Math.max(MIN_MAP_ZOOM, Number((current + delta).toFixed(2))));
+      if (next === MIN_MAP_ZOOM) setMapPan({ x: 0, y: 0 });
+      return next;
+    });
+  }
+
+  function startMapPan(event: React.PointerEvent<HTMLDivElement>): void {
+    if (mapZoom <= MIN_MAP_ZOOM || geometryEditing || dragging || objectDragRef.current) return;
+    const target = event.target as HTMLElement;
+    if (target.tagName !== "IMG" && !target.classList.contains("tactical-map-content")) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    mapPanRef.current = { startX: event.clientX, startY: event.clientY, originX: mapPan.x, originY: mapPan.y };
+  }
+
+  function moveMapPan(event: React.PointerEvent): void {
+    const pan = mapPanRef.current;
+    const bounds = surfaceRef.current?.getBoundingClientRect();
+    if (!pan || !bounds) return;
+    const limitX = Math.max(0, ((mapZoom - 1) * bounds.width) / 2);
+    const limitY = Math.max(0, ((mapZoom - 1) * bounds.height) / 2);
+    setMapPan({
+      x: Math.max(-limitX, Math.min(limitX, pan.originX + event.clientX - pan.startX)),
+      y: Math.max(-limitY, Math.min(limitY, pan.originY + event.clientY - pan.startY)),
+    });
   }
 
   function overlapsAnother(id: string, target: TacticalPosition): boolean {
@@ -625,7 +661,8 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
            </div>}
            </>, mapToolsHost)}
            </div>
-        <div className="tactical-surface" ref={surfaceRef} style={mapStyle} onWheel={(event) => { event.preventDefault(); event.stopPropagation(); changeMapZoom(event.deltaY < 0 ? MAP_ZOOM_STEP : -MAP_ZOOM_STEP); }} onPointerUp={() => { if (objectDragRef.current) { objectDragRef.current = null; persistHackableObjects(mapDraftRef.current); } finishGeometry(); }} onPointerMove={(event) => {
+         <div className="tactical-surface" ref={surfaceRef} style={mapStyle} onWheel={(event) => { event.preventDefault(); event.stopPropagation(); changeMapZoom(event.deltaY < 0 ? MAP_ZOOM_STEP : -MAP_ZOOM_STEP); }} onPointerDown={startMapPan} onPointerUp={() => { mapPanRef.current = null; if (objectDragRef.current) { objectDragRef.current = null; persistHackableObjects(mapDraftRef.current); } finishGeometry(); }} onPointerMove={(event) => {
+          if (mapPanRef.current) { moveMapPan(event); return; }
          if (objectDragRef.current) {
            const point = positionFromPointer(event);
            const id = objectDragRef.current;
@@ -679,7 +716,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
             <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => changeMapZoom(-MAP_ZOOM_STEP)} aria-label="Reduzir zoom">−</button>
             <button type="button" className="tactical-zoom-reset" onPointerDown={(event) => event.stopPropagation()} onClick={() => setMapZoom(MIN_MAP_ZOOM)}>1:1</button>
           </div>
-          <div className="tactical-map-content" style={{ transform: `scale(${mapZoom})` }}>
+           <div className="tactical-map-content" style={{ transform: `translate(${mapPan.x}px, ${mapPan.y}px) scale(${mapZoom})` }}>
           {map.enabled && map.imageUrl ? <img className="tactical-map-image" src={map.imageUrl} alt="Mapa tático da mesa" draggable={false} /> : <div className="tactical-empty"><strong>Mapa não definido</strong><span>O Mestre pode adicionar uma imagem acima.</span></div>}
          <div className="tactical-grid" aria-hidden="true" style={{ backgroundSize: `${tacticalGridSpacingPixels(map, surfaceWidth)}px ${tacticalGridSpacingPixels(map, surfaceWidth)}px`, opacity: map.grid?.enabled ? undefined : 0 }} />
          <svg className={`tactical-geometry-layer ${geometryEditing ? "is-editing" : ""}`} viewBox="0 0 1 1" preserveAspectRatio="none" onPointerDown={startGeometryDraw} aria-label="Geometria do mapa">
@@ -703,7 +740,35 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
              <line x1={move.origin.x} y1={move.origin.y} x2={move.position.x} y2={move.position.y} />
            </svg>;
           })()}
-           {attackFeedback && (
+            {attackAnimation && (() => {
+              const attacker = state.combatants.find((entry) => entry.id === attackAnimation.attackerId);
+              const target = state.combatants.find((entry) => entry.id === attackAnimation.targetId);
+              if (!attacker || !target || attackAnimation.kind !== "ranged") return null;
+              const from = positionFor(attacker);
+              const to = positionFor(target);
+              return Array.from({ length: 5 }, (_, index) => <span
+                key={`${attackAnimation.key}-${index}`}
+                className="tactical-projectile"
+                style={{ left: `${from.x * 100}%`, top: `${from.y * 100}%`, animationDelay: `${index * 0.12}s`, "--projectile-from-x": `${from.x * 100}%`, "--projectile-from-y": `${from.y * 100}%`, "--projectile-to-x": `${to.x * 100}%`, "--projectile-to-y": `${to.y * 100}%` } as CSSProperties}
+                aria-hidden="true"
+              />);
+            })()}
+            {attackAnimation && (() => {
+              const target = state.combatants.find((entry) => entry.id === attackAnimation.targetId);
+              if (!target) return null;
+              const position = positionFor(target);
+              return <div
+                key={`result-${attackAnimation.key}`}
+                className={`tactical-hit-card ${attackAnimation.hit ? "is-hit" : "is-miss"}`}
+                style={{ left: `${position.x * 100}%`, top: `${position.y * 100}%` }}
+                role="status"
+                aria-live="polite"
+              >
+                <strong>{attackAnimation.hit ? "HIT" : "MISS"}</strong>
+                {attackAnimation.hit && attackAnimation.damage !== null && <span>{attackAnimation.damage} dano</span>}
+              </div>;
+            })()}
+            {attackFeedback && (
             <>
               <svg className={`tactical-attack-line ${attackFeedback.withinRange === false ? "is-invalid" : ""}`} viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
                 <line x1={positionFor(attackFeedback.attacker).x} y1={positionFor(attackFeedback.attacker).y} x2={positionFor(attackFeedback.target).x} y2={positionFor(attackFeedback.target).y} />
@@ -765,7 +830,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
           >
             {showTacticalInfo ? "Ocultar info" : "Mostrar info"}
           </button>
-          {state.combatants.map((combatant) => { const position = positionFor(combatant); const movable = canDrag(combatant); const remote = !localMoves[combatant.id] && !movable; const move = localMoves[combatant.id]; const status = move?.status; const selected = selectedTargetId === combatant.id; const movementInvalid = move && (!move.withinMovement || !move.pathValid); return <button key={combatant.id} data-testid={`mesa-tactical-token-${combatant.id}`} type="button" className={`tactical-token ${combatant.kind === "enemy" ? "is-enemy" : "is-player"} ${combatant.id === state.combat?.activeCombatantId ? "is-active" : ""} ${selected ? "is-target-selected" : ""} ${movable ? "is-movable" : ""} ${remote ? "is-remote" : ""} ${status ? `is-${status}` : ""} ${movementInvalid ? "is-out-of-range" : ""}`} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}%` }} onPointerDown={(event) => startDrag(combatant.id, event)} onPointerUp={(event) => handleTokenPointerUp(combatant.id, event)} onPointerCancel={() => cancelDrag(combatant.id)} onClick={(event) => { if (geometryEditing) return; if (suppressClickRef.current) { suppressClickRef.current = false; return; } if (canSelectTarget(combatant) && selectedTargetId !== combatant.id) { event.preventDefault(); onSelectTarget(combatant.id); } }} aria-pressed={selected} aria-label={`${combatant.name}${canSelectTarget(combatant) ? ", selecionar alvo" : movable ? ", arraste para mover" : ""}`}><img src={combatant.kind === "enemy" ? ENEMY_AVATAR : (combatant.avatarUrl || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='38' r='24' fill='%237ee7d7'/%3E%3Cpath d='M15 95c2-28 17-40 35-40s33 12 35 40' fill='%237ee7d7'/%3E%3C/svg%3E")} alt="" draggable={false} /><span>{combatant.name}</span></button>; })}
+           {state.combatants.map((combatant) => { const position = positionFor(combatant); const movable = canDrag(combatant); const remote = !localMoves[combatant.id] && !movable; const move = localMoves[combatant.id]; const status = move?.status; const selected = selectedTargetId === combatant.id; const movementInvalid = move && (!move.withinMovement || !move.pathValid); const figureWeapon = selectedWeapon && (combatant.id === controlledCombatantId || (!isGM && combatant.participantId === state.viewer.participantId)) ? selectedWeapon : null; return <button key={combatant.id} data-testid={`mesa-tactical-token-${combatant.id}`} type="button" className={`tactical-token ${combatant.kind === "enemy" ? "is-enemy" : "is-player"} ${combatant.id === state.combat?.activeCombatantId ? "is-active" : ""} ${selected ? "is-target-selected" : ""} ${movable ? "is-movable" : ""} ${remote ? "is-remote" : ""} ${status ? `is-${status}` : ""} ${movementInvalid ? "is-out-of-range" : ""}`} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}%` }} onPointerDown={(event) => startDrag(combatant.id, event)} onPointerUp={(event) => handleTokenPointerUp(combatant.id, event)} onPointerCancel={() => cancelDrag(combatant.id)} onClick={(event) => { if (geometryEditing) return; if (suppressClickRef.current) { suppressClickRef.current = false; return; } if (canSelectTarget(combatant) && selectedTargetId !== combatant.id) { event.preventDefault(); onSelectTarget(combatant.id); } }} aria-pressed={selected} aria-label={`${combatant.name}${canSelectTarget(combatant) ? ", selecionar alvo" : movable ? ", arraste para mover" : ""}`}><CombatantFigure combatant={combatant} weapon={figureWeapon} visualWeaponKind={combatant.visualWeaponKind} animation={attackAnimation?.attackerId === combatant.id ? attackAnimation.kind : undefined} active={combatant.id === state.combat?.activeCombatantId} compact /><span>{combatant.name}</span></button>; })}
           </div>
        </div>
       <div className="tactical-legend"><span><i className="player-dot" /> Players</span><span><i className="enemy-dot" /> Enemies</span>{dragging && <em>Movendo...</em>}</div>

@@ -43,6 +43,7 @@ interface Props extends PlayerPanelBase {
   selectedAttackId: string;
   onSelectAttack: (attackId: string) => void;
   sessionFinished: boolean;
+  onAttackAnimation?: (attackerId: string, targetId: string, kind: "ranged" | "melee", hit: boolean, damage: number | null) => void;
 }
 
 export default function PlayerActionsPanel({
@@ -59,6 +60,7 @@ export default function PlayerActionsPanel({
   selectedAttackId,
   onSelectAttack,
   sessionFinished,
+  onAttackAnimation,
 }: Props) {
   const [attackMode, setAttackMode] = useState<AttackMode>("aimed");
   const [aimedTarget, setAimedTarget] = useState<AimedLocation>("head");
@@ -122,7 +124,8 @@ export default function PlayerActionsPanel({
           attackMode,
           ...(attackMode === "aimed" ? { aimedTarget } : {}),
         });
-        setFeedback(result);
+         setFeedback(result);
+         if (!coverObstacleId) onAttackAnimation?.(me.id, selectedTargetId, meleeAttack ? "melee" : "ranged", result.attackResult.hit, result.damageResult?.damageAfterArmor ?? null);
       },
       {
         onError: (message, code) => {

@@ -641,7 +641,19 @@ function combatSnapshotFingerprint(snapshot: CombatState["participants"][number]
 }
 
 function sameCombatConsequences(left: CombatConsequenceFingerprint, right: CombatConsequenceFingerprint): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return stableCombatJson(left) === stableCombatJson(right);
+}
+
+/** Compara snapshots JSON sem transformar ordem de chaves em conflito falso. */
+function stableCombatJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableCombatJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableCombatJson(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 /**
@@ -670,8 +682,21 @@ async function finalizeCombatConsequencesWithRepository(
     const current = (toolkit?.payload ?? persisted.sheet) as Character;
     const combatant = toCombatant(row);
     const desired = applyCombatantState(current, combatant);
-    const initialFingerprint = combatSnapshotFingerprint(row.combat_snapshot, row);
     const currentFingerprint = combatConsequenceFingerprint(current, row);
+    const initialFingerprint = combatSnapshotFingerprint(row.combat_snapshot, row);
+    // Snapshots antigos não carregavam a iniciativa já existente na ficha
+    // (o adapter de combate materializa esse campo como null). Não trate essa
+    // diferença de compatibilidade como uma edição externa da ficha; a
+    // iniciativa autoritativa continua sendo a da linha do combatente.
+    if (initialFingerprint.initiative === null && row.initiative === null) {
+      initialFingerprint.initiative = currentFingerprint.initiative;
+      // Preserve a legacy initiative that predates the Mesa snapshot. Without
+      // this, the conflict check passes but closing the combat needlessly
+      // erases the value from the character sheet.
+      if (current.combat.initiative !== undefined) {
+        desired.combat = { ...desired.combat, initiative: current.combat.initiative };
+      }
+    }
     const desiredFingerprint = combatConsequenceFingerprint(desired, row);
     if (!sameCombatConsequences(currentFingerprint, initialFingerprint) && !sameCombatConsequences(currentFingerprint, desiredFingerprint)) {
       throw new MesaError("A ficha mudou durante o combate; atualize a Mesa antes de encerrá-la.", 409, "character_consequence_conflict");
@@ -1226,6 +1251,11 @@ function unconsciousUntilRoundForRow(row: CombatantRow): number | undefined {
 function toCombatant(row: CombatantRow, round = Number.POSITIVE_INFINITY): MesaCombatant {
   const movement = effectiveMovementForRow(row, round);
   const unconsciousUntilRound = unconsciousUntilRoundForRow(row);
+  const rangedEnemyWeaponTypes = new Set(["handgun", "smg", "rifle", "shotgun", "sniper", "heavy_weapon", "exotic_weapon", "weapon"]);
+  const enemyWeapons = row.kind === "enemy" ? (row.combat_snapshot?.weapons ?? []) : [];
+  const visualWeaponKind = row.kind === "enemy"
+    ? enemyWeapons.some((weapon) => rangedEnemyWeaponTypes.has(weapon.attackType ?? "")) ? "ranged" as const : "staff" as const
+    : undefined;
   return {
     id: row.id,
     combatId: row.combat_id,
@@ -1239,6 +1269,7 @@ function toCombatant(row: CombatantRow, round = Number.POSITIVE_INFINITY): MesaC
     armor: row.combat_armor ?? null,
     criticalInjuries: criticalInjuriesForRow(row),
     ammoByWeapon: row.combat_ammo ?? null,
+    ...(visualWeaponKind ? { visualWeaponKind } : {}),
     initiative: row.initiative,
     initiativeDetail: row.initiative_detail ?? null,
     actionsMax: row.actions_max,

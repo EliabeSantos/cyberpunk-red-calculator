@@ -551,7 +551,7 @@ export class LocalPostgresMesaRepository implements MesaRepository, ToolkitRepos
     // Coluna ausente no payload recebe DEFAULT — é o mesmo resultado que o
     // PostgREST produz para um insert com coluna omitida.
     const tuples = rowsInput.map(
-      (row) => `(${columns.map((name) => (Object.hasOwn(row, name) ? bind(row[name]) : "default")).join(", ")})`,
+      (row) => `(${columns.map((name) => (Object.hasOwn(row, name) ? bind(combatantJsonColumn(name) ? jsonParameter(row[name]) : row[name]) : "default")).join(", ")})`,
     );
 
     await this.rows(
@@ -571,7 +571,7 @@ export class LocalPostgresMesaRepository implements MesaRepository, ToolkitRepos
 
     const columns = payloadColumns(rowsInput);
     const tuples = rowsInput.map(
-      (row) => `(${columns.map((name) => (Object.hasOwn(row, name) ? bind(row[name]) : "default")).join(", ")})`,
+      (row) => `(${columns.map((name) => (Object.hasOwn(row, name) ? bind(combatantJsonColumn(name) ? jsonParameter(row[name]) : row[name]) : "default")).join(", ")})`,
     );
     const updates = columns.map((name) => `${name} = excluded.${name}`).join(", ");
 
@@ -984,6 +984,24 @@ function jsonParameter(value: unknown): string | null {
 
 function battleJsonColumn(name: string): boolean {
   return name === "combatants" || name === "event_log" || name === "tactical_map";
+}
+
+function combatantJsonColumn(name: string): boolean {
+  return [
+    "conditions",
+    "initiative_detail",
+    "combat_snapshot",
+    "combat_ammo",
+    "supplies",
+    "combat_armor",
+    "critical_injuries",
+    "position",
+    "detected_by",
+    "netrunner_state",
+    "net_effects",
+    "net_ice_state",
+    "net_discovery",
+  ].includes(name);
 }
 
 /** União das chaves dos payloads, preservando a ordem da primeira ocorrência. */

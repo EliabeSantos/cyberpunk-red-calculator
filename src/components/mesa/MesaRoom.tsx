@@ -259,6 +259,11 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
           <Link className="mesa-ghost" href={playerMesaHref(sessionId)} title="Tela dedicada do Jogador, em rota própria.">
             Abrir tela da mesa
           </Link>
+          {isGM && (
+            <Link className="mesa-ghost" href="/gm/encounters" title="Abrir a visão de GM.">
+              Visão de GM
+            </Link>
+          )}
           {onClose && (
             <button type="button" className="mesa-ghost" onClick={onClose}>
               ✕ Fechar

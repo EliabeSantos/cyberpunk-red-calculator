@@ -29,6 +29,7 @@ import { denialMessage } from "@/lib/mesa/messages";
 import { isHealingSupply } from "@/data/enemySupplies";
 import type { MesaCombatant, MesaState } from "@/lib/mesa/types";
 import RollAuditDetails from "@/components/mesa/RollAuditDetails";
+import CombatantFigure from "@/components/mesa/CombatantFigure";
 
 interface Props {
   sessionId: string;
@@ -260,6 +261,7 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
           return (
             <li key={combatant.id} className={isActive ? "is-active" : combatant.isDead ? "is-dead" : ""}>
               <div className="mesa-combatant-main">
+                <CombatantFigure combatant={combatant} visualWeaponKind={combatant.visualWeaponKind} active={isActive} compact />
                 <span className="mesa-initiative">{combatant.initiative ?? "—"}</span>
                 <div className="mesa-combatant-info">
                   <strong>{combatant.name}</strong>
