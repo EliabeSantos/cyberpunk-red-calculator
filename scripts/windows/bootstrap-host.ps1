@@ -8,7 +8,8 @@ New-Item $config,$logs -ItemType Directory -Force | Out-Null
 trap {
   # Keep diagnostics useful without echoing environment variables, passwords,
   # or the host-admin token into the log.
-  "Host bootstrap failed: $($_.Exception.GetType().Name)" |
+  $message = $_.Exception.Message -replace '(?i)(postgres(?:ql)?://[^\s]+)', 'postgresql://[redacted]'
+  "Host bootstrap failed: $($_.Exception.GetType().Name): $message" |
     Add-Content (Join-Path $logs "host-error.log")
   exit 1
 }
