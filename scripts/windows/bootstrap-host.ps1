@@ -178,4 +178,13 @@ if ($protectConfig) {
   if ($LASTEXITCODE -ne 0) { throw "Could not protect host-admin-token permissions. See $logs\permissions.log." }
 }
 if ($env:MESA_HOSTING_MODE -eq "local") { Start-Postgres }
+if ($env:MESA_HOSTING_MODE -eq "local") {
+  $migrationScript = Join-Path $root "app\scripts\migrate-local.mjs"
+  if (-not (Test-Path $migrationScript)) { throw "Local migration script is missing from the installed application." }
+  $migrationLog = Join-Path $logs "migration.log"
+  & $node.FullName $migrationScript *> $migrationLog
+  if ($LASTEXITCODE -ne 0) {
+    throw "Local database migrations failed. See $migrationLog. The application server was not started."
+  }
+}
 Start-App

@@ -361,11 +361,14 @@ export class LocalPostgresMesaRepository implements MesaRepository, ToolkitRepos
 
   async updateBattle(battleId: string, sessionId: string, patch: Readonly<Record<string, unknown>>): Promise<MesaBattleRecord[]> {
     const params: unknown[] = [];
-    const bind = (value: unknown): string => { params.push(value); return `$${params.length}`; };
-    const assignments = Object.entries(patch).map(([name, value]) => `${column(name)} = ${bind(value)}`);
+    const bind = (name: string, value: unknown): string => {
+      params.push(battleJsonColumn(name) ? jsonParameter(value) : value);
+      return `$${params.length}`;
+    };
+    const assignments = Object.entries(patch).map(([name, value]) => `${column(name)} = ${bind(name, value)}`);
     if (assignments.length === 0) return [];
     return this.rows<MesaBattleRecord>(
-      `update public.mesa_battles set ${assignments.join(", ")} where id = ${bind(battleId)} and session_id = ${bind(sessionId)} returning *`,
+      `update public.mesa_battles set ${assignments.join(", ")} where id = ${bind("id", battleId)} and session_id = ${bind("session_id", sessionId)} returning *`,
       params,
       "Falha ao atualizar a partida",
     );
@@ -373,11 +376,14 @@ export class LocalPostgresMesaRepository implements MesaRepository, ToolkitRepos
 
   async completeBattle(battleId: string, sessionId: string, patch: Readonly<Record<string, unknown>>): Promise<MesaBattleRecord[]> {
     const params: unknown[] = [];
-    const bind = (value: unknown): string => { params.push(value); return `$${params.length}`; };
-    const assignments = Object.entries(patch).map(([name, value]) => `${column(name)} = ${bind(value)}`);
+    const bind = (name: string, value: unknown): string => {
+      params.push(battleJsonColumn(name) ? jsonParameter(value) : value);
+      return `$${params.length}`;
+    };
+    const assignments = Object.entries(patch).map(([name, value]) => `${column(name)} = ${bind(name, value)}`);
     if (assignments.length === 0) return [];
     return this.rows<MesaBattleRecord>(
-      `update public.mesa_battles set ${assignments.join(", ")} where id = ${bind(battleId)} and session_id = ${bind(sessionId)} and status = 'active' returning *`,
+      `update public.mesa_battles set ${assignments.join(", ")} where id = ${bind("id", battleId)} and session_id = ${bind("session_id", sessionId)} and status = 'active' returning *`,
       params,
       "Falha ao concluir a partida",
     );
@@ -910,6 +916,10 @@ export class LocalPostgresMoveResolutionStore extends LocalPostgresResolutionSto
 
 function jsonParameter(value: unknown): string | null {
   return value === null || value === undefined ? null : JSON.stringify(value);
+}
+
+function battleJsonColumn(name: string): boolean {
+  return name === "combatants" || name === "event_log";
 }
 
 /** União das chaves dos payloads, preservando a ordem da primeira ocorrência. */

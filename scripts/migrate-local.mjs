@@ -2,7 +2,8 @@
 /** Apply the checked-in PostgreSQL schema exactly once per filename. */
 import { readFile } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 
 const connectionString = process.env.MESA_LOCAL_DATABASE_URL;
@@ -11,10 +12,22 @@ if (!connectionString) {
   process.exit(2);
 }
 
-const migrationsDir = join(process.cwd(), "supabase", "migrations");
-const files = (await readdir(migrationsDir))
-  .filter((file) => file.endsWith(".sql"))
-  .sort();
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const migrationsDir = join(scriptDir, "..", "supabase", "migrations");
+let files;
+try {
+  files = (await readdir(migrationsDir))
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
+} catch (error) {
+  console.error(`Diretório de migrations local não encontrado ou inacessível: ${migrationsDir}`);
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+if (files.length === 0) {
+  console.error(`Nenhuma migration SQL foi encontrada em: ${migrationsDir}`);
+  process.exit(1);
+}
 // The Cover Damage migration was corrected before this checksum ledger was
 // introduced in some installations. Accept only the exact pre-correction
 // digest; the follow-up migration below still repairs the function.
