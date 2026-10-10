@@ -286,6 +286,13 @@ export class SupabaseMesaRepository implements MesaRepository, ToolkitRepository
     ) as Promise<MesaBattleRecord | null>;
   }
 
+  async findBattleById(battleId: string, sessionId: string): Promise<MesaBattleRecord | null> {
+    return result(
+      this.client.from("mesa_battles").select("*").eq("id", battleId).eq("session_id", sessionId).maybeSingle(),
+      "Falha ao consultar a partida",
+    ) as Promise<MesaBattleRecord | null>;
+  }
+
   async findActiveBattle(sessionId: string): Promise<MesaBattleRecord | null> {
     return result(
       this.client.from("mesa_battles").select("*").eq("session_id", sessionId).eq("status", "active").order("started_at", { ascending: false }).limit(1).maybeSingle(),

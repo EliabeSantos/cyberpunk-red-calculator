@@ -447,6 +447,7 @@ interface BattleRow {
   final_round: number | null;
   combatants: MesaBattleCombatant[] | null;
   event_log: MesaEvent[] | null;
+  tactical_map: TacticalMap | null;
 }
 
 function toBattle(row: BattleRow): MesaBattle {
@@ -461,6 +462,8 @@ function toBattle(row: BattleRow): MesaBattle {
     endedAt: row.ended_at,
     finalRound: row.final_round,
     combatants: Array.isArray(row.combatants) ? row.combatants : [],
+    eventLog: Array.isArray(row.event_log) ? row.event_log : [],
+    tacticalMap: row.tactical_map ?? null,
   };
 }
 
@@ -578,6 +581,7 @@ async function completeActiveBattle(sessionId: string): Promise<void> {
   const repository = await mesaRepository();
   const combatants = await listCombatants(sessionId);
   const combat = await repository.findCombatBySession(sessionId) as CombatRow | null;
+  const session = await repository.findSessionById(sessionId);
 
   await repository.completeBattle(battle.id, sessionId, {
         status: "completed",
@@ -587,7 +591,8 @@ async function completeActiveBattle(sessionId: string): Promise<void> {
           Array.isArray(battle.combatants) ? battle.combatants : [],
           combatants.map((row) => toCombatant(row)),
         ),
-        event_log: Array.isArray(combat?.event_log) ? combat.event_log : [],
+         event_log: Array.isArray(combat?.event_log) ? combat.event_log : [],
+         tactical_map: session?.tactical_map ?? null,
   });
 }
 
@@ -605,6 +610,7 @@ async function completeActiveBattleWithRepository(
 
    const combatants = await repository.listCombatantsBySession(sessionId) as unknown as CombatantRow[];
   const combat = await repository.findCombatBySession(sessionId) as unknown as CombatRow | null;
+  const session = await repository.findSessionById(sessionId);
   await repository.completeBattle(battle.id, sessionId, {
     status: "completed",
     ended_at: new Date().toISOString(),
@@ -614,6 +620,7 @@ async function completeActiveBattleWithRepository(
       combatants.map((row) => toCombatant(row)),
     ),
     event_log: Array.isArray(combat?.event_log) ? combat.event_log : [],
+    tactical_map: session?.tactical_map ?? null,
   });
   // Zero linhas é uma conclusão concorrente/idempotente, não uma falha que
   // deva reabrir ou duplicar o histórico.
@@ -5968,14 +5975,14 @@ async function advanceActiveTurnLocal(
   const advance = advanceTurn(order, combat.active_combatant_id, combat.round, (id) => alive.has(id));
   const now = new Date().toISOString();
 
-  // O contexto local já mantém o lock da linha de combate. Ainda assim, o CAS
-  // preserva a mesma garantia de domínio: uma requisição com snapshot obsoleto
-  // não pode resetar orçamentos nem registrar um segundo evento de turno.
+  // O contexto local já mantém o lock da linha de combate. Os campos de turno
+  // preservam a garantia de domínio sem comparar `updated_at`: o driver pg
+  // converte timestamptz para Date com precisão de milissegundos, enquanto o
+  // PostgreSQL pode armazená-lo com microssegundos, o que causaria falso CAS.
   const turnClaimExpected: Record<string, unknown> = {
     active_combatant_id: combat.active_combatant_id,
     round: combat.round,
   };
-  if (combat.updated_at) turnClaimExpected.updated_at = combat.updated_at;
   const turnClaim = await repository.updateCombat(
     combat.id,
     sessionId,
@@ -6101,7 +6108,7 @@ async function advanceActiveTurn(sessionId: string, combat: CombatRow): Promise<
 }
 
 /** Finaliza o turno local, incluindo o turno autoritativo de Black ICE. */
-async function endTurnLocalTransactional(sessionId: string): Promise<void> {
+async function endTurnLocalTransactional(sessionId: string, playerId?: string): Promise<void> {
   await withLocalPostgresTransaction(async (context) => {
     const repository = context.repository;
     await context.query("select id from public.mesa_sessions where id = $1 for update", [sessionId]);
@@ -6111,6 +6118,9 @@ async function endTurnLocalTransactional(sessionId: string): Promise<void> {
     if (!combat.initiative_started || !combat.active_combatant_id) throw new MesaError("Nenhum turno em andamento.", 409, "no_active_turn");
     const active = await repository.findCombatantById(combat.active_combatant_id, { combatId: combat.id, sessionId }) as CombatantRow | null;
     if (!active) throw new MesaError("Combatente ativo não encontrado.", 409, "turn_conflict");
+    if (playerId !== undefined && (active.kind !== "character" || active.participant_id !== playerId)) {
+      throw new MesaError("Você só pode passar o seu próprio turno.", 403, "turn_not_owned");
+    }
     if (active.kind === "net_ice") await executeBlackIceTurnWithRepository(repository, combat, active);
     await advanceActiveTurnLocal(context, sessionId, combat);
   });
@@ -7453,14 +7463,16 @@ export async function registerRoll(input: {
   return { registered: true, debited };
 }
 
-/** Finaliza o turno atual (somente GM; o avanço é autoritativo no servidor). */
+/** Finaliza o turno atual; o GM pode passar qualquer turno, o Player somente o seu. */
 export async function endTurn(input: { sessionId: unknown; token: unknown }): Promise<void> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
-  requireGM({ session, participant });
+  const isGM = participant.role === "gm";
+  if (isGM) requireGM({ session, participant });
+  else if (participant.role !== "player") throw new MesaError("Apenas o Mestre ou o Jogador em seu turno podem executar esta ação.", 403, "turn_not_owned");
 
   const infrastructure = await createMesaHostingInfrastructure();
   if (infrastructure.mode === "local") {
-    await endTurnLocalTransactional(session.id);
+    await endTurnLocalTransactional(session.id, isGM ? undefined : participant.id);
     return;
   }
 
@@ -7476,6 +7488,9 @@ export async function endTurn(input: { sessionId: unknown; token: unknown }): Pr
   )) as CombatantRow | null;
 
   if (!active) throw new MesaError("Combatente ativo não encontrado.", 409, "turn_conflict");
+  if (!isGM && (active.kind !== "character" || active.participant_id !== participant.id)) {
+    throw new MesaError("Você só pode passar o seu próprio turno.", 403, "turn_not_owned");
+  }
 
   if (active.kind === "net_ice") await executeBlackIceTurn(combat, active);
   await advanceActiveTurn(session.id, combat);
@@ -7611,6 +7626,36 @@ export async function listBattles(input: { sessionId: unknown; token: unknown })
     }
     throw error;
   }
+}
+
+/** Abre uma partida concluída em modo de consulta para qualquer participante. */
+export async function getBattle(input: { sessionId: unknown; battleId: unknown; token: unknown }): Promise<MesaBattle> {
+  const { session } = await authenticate(input.sessionId, input.token);
+  if (typeof input.battleId !== "string" || !input.battleId.trim()) {
+    throw new MesaError("Partida inválida.", 400, "invalid_battle");
+  }
+
+  let row: BattleRow | null;
+  if ((await createMesaHostingInfrastructure()).mode === "local") {
+    row = await (await mesaRepository()).findBattleById(input.battleId, session.id) as BattleRow | null;
+  } else {
+    if (battleSupport === "no") throw new MesaError(BATTLE_MIGRATION, 503, "migration_pending");
+    try {
+      row = await query(
+        db().from("mesa_battles").select("*").eq("id", input.battleId).eq("session_id", session.id).maybeSingle(),
+        "Falha ao consultar a partida",
+      ) as BattleRow | null;
+      battleSupport = "yes";
+    } catch (error) {
+      if (missingBattleTable(error)) {
+        battleSupport = "no";
+        throw new MesaError(BATTLE_MIGRATION, 503, "migration_pending");
+      }
+      throw error;
+    }
+  }
+  if (!row) throw new MesaError("Partida não encontrada.", 404, "battle_not_found");
+  return toBattle(row);
 }
 
 /**

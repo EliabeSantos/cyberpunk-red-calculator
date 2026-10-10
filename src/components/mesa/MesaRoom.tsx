@@ -142,7 +142,7 @@ export default function MesaRoom({ joinCode, onClose }: Props) {
               ← Voltar à ficha
             </button>
           ) : (
-            <Link className="mesa-ghost" href="/">
+            <Link className="mesa-ghost" href="/ficha">
               ← Voltar à ficha
             </Link>
           )}

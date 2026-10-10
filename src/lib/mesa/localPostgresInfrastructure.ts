@@ -342,6 +342,15 @@ export class LocalPostgresMesaRepository implements MesaRepository, ToolkitRepos
     return rows[0] ?? null;
   }
 
+  async findBattleById(battleId: string, sessionId: string): Promise<MesaBattleRecord | null> {
+    const rows = await this.rows<MesaBattleRecord>(
+      "select * from public.mesa_battles where id = $1 and session_id = $2 limit 1",
+      [battleId, sessionId],
+      "Falha ao consultar a partida",
+    );
+    return rows[0] ?? null;
+  }
+
   async findActiveBattle(sessionId: string): Promise<MesaBattleRecord | null> {
     const rows = await this.rows<MesaBattleRecord>(
       "select * from public.mesa_battles where session_id = $1 and status = 'active' order by started_at desc limit 1",
@@ -922,7 +931,7 @@ function jsonParameter(value: unknown): string | null {
 }
 
 function battleJsonColumn(name: string): boolean {
-  return name === "combatants" || name === "event_log";
+  return name === "combatants" || name === "event_log" || name === "tactical_map";
 }
 
 /** União das chaves dos payloads, preservando a ordem da primeira ocorrência. */

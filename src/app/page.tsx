@@ -1,5 +1,5 @@
-import CharacterToolkit from "@/components/character/CharacterToolkit";
+import LandingPage from "@/components/home/LandingPage";
 
 export default function Home() {
-  return <CharacterToolkit />;
+  return <LandingPage />;
 }

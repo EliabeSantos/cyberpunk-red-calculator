@@ -5,14 +5,16 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useRouter } from "next/navigation";
 
 import CharacterCreator from "@/components/character/CharacterCreator";
 import CharacterSheet from "@/components/sheets/CharacterSheet";
 import DiscordConsentPrompt from "@/components/discord/DiscordConsentPrompt";
 import { getDiscordConsent, setDiscordConsent, type DiscordConsent } from "@/lib/discord/consent";
 import { findNewRollEntry, notifyDiscordRoll } from "@/lib/discord/rollNotify";
-import { getActiveCharacter, upsertCharacter } from "@/lib/storage";
+import { getActiveCharacter, setActiveCharacterId, upsertCharacter } from "@/lib/storage";
 import { loadRemoteCharacters, saveRemoteCharacter } from "@/lib/toolkitClient";
+import type { Character } from "@/types/character";
 import { maybePushSheet, applyMesaHealingItem, reloadMesa, registerMesaInitiative, rollMesaDeathSave } from "@/lib/mesa/client";
 import { getMembershipSnapshot, getServerMembershipSnapshot, subscribeToMembership } from "@/lib/mesa/membershipStore";
 import { useMesaState } from "@/lib/mesa/useMesaState";
@@ -30,17 +32,18 @@ import type { PlayerAttackSetup } from "@/components/combat/AttackActions";
 import { publishMesaHp } from "@/lib/mesa/hpPublish";
 import { publishMesaRoll } from "@/lib/mesa/rollPublish";
 import { syncMesaCharacterState } from "@/lib/mesa/characterSync";
-import type { Character } from "@/types/character";
 
 type Screen = "sheet" | "creator";
+interface CharacterToolkitProps { startScreen?: Screen; forceNew?: boolean; }
 
 /**
  * A ficha é a tela principal do JOGADOR. A Mesa possui sua própria tela em
  * `/mesa/<uuid>`; o item de nav encaminha para ela depois da entrada.
  */
-export default function CharacterToolkit() {
+export default function CharacterToolkit({ startScreen = "sheet", forceNew = false }: CharacterToolkitProps) {
+  const router = useRouter();
   const [character, setCharacter] = useState<Character | null>(null);
-  const [screen, setScreen] = useState<Screen>("creator");
+  const [screen, setScreen] = useState<Screen>(startScreen);
   const [ready, setReady] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [discordConsent, setDiscordConsentState] = useState<DiscordConsent | null>(null);
@@ -209,22 +212,22 @@ export default function CharacterToolkit() {
     void loadRemoteCharacters().then((characters) => {
       if (disposed) return;
       const activeId = getActiveCharacter()?.id;
-      const savedCharacter = characters.find((entry) => entry.id === activeId) ?? characters[0] ?? null;
-      setCharacter(savedCharacter);
-      setScreen(savedCharacter ? "sheet" : "creator");
+       const savedCharacter = forceNew ? null : characters.find((entry) => entry.id === activeId) ?? characters[0] ?? null;
+       setCharacter(savedCharacter);
+       setScreen(forceNew ? "creator" : savedCharacter ? startScreen : "creator");
       setDiscordConsentState(getDiscordConsent());
       setReady(true);
     }).catch((error: unknown) => {
       if (disposed) return;
-      const savedCharacter = getActiveCharacter();
-      setCharacter(savedCharacter);
-      setScreen(savedCharacter ? "sheet" : "creator");
+       const savedCharacter = forceNew ? null : getActiveCharacter();
+       setCharacter(savedCharacter);
+       setScreen(forceNew ? "creator" : savedCharacter ? startScreen : "creator");
       setSaveError(error instanceof Error ? error.message : "Não foi possível carregar as fichas do servidor.");
       setDiscordConsentState(getDiscordConsent());
       setReady(true);
     });
     return () => { disposed = true; };
-  }, []);
+   }, [forceNew, startScreen]);
 
   // O snapshot já foi validado pelo servidor. Esta convergência local não usa
   // handleUpdate, portanto não gera um POST de retorno nem loop de espelho.
@@ -275,7 +278,7 @@ export default function CharacterToolkit() {
              try { await saveRemoteCharacter(next); }
              catch (error: unknown) { setSaveError(error instanceof Error ? error.message : "Não foi possível salvar a ficha."); return; }
            setCharacter(next);
-          setScreen("sheet");
+           router.replace("/ficha");
         }}
       />
     ) : character ? (
@@ -292,8 +295,19 @@ export default function CharacterToolkit() {
         mesaMovement={mesaMovement}
         sheetMesaMode={sheetMode}
         playerReload={playerReload}
-        onEdit={() => setScreen("creator")}
-        onNewCharacter={() => { setCharacter(null); setScreen("creator"); }}
+         onEdit={() => router.push("/ficha/editar")}
+         onNewCharacter={() => router.push("/ficha/criar")}
+        onImport={async (imported) => {
+          setActiveCharacterId(imported.id);
+          upsertCharacter(imported);
+          try {
+            await saveRemoteCharacter(imported);
+            setSaveError(null);
+          } catch (error: unknown) {
+            setSaveError(error instanceof Error ? error.message : "Não foi possível sincronizar a ficha importada.");
+          }
+          setCharacter(imported);
+        }}
       />
     ) : null;
 

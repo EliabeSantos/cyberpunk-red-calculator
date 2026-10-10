@@ -73,7 +73,7 @@ export default function MesaHeader({ state, realtime, leaving, busy, onNotice, o
             {busy ? "Encerrando..." : "Encerrar combate"}
           </button>
         )}
-        <Link className="mesa-ghost" href="/">
+        <Link className="mesa-ghost" href="/ficha">
           Ficha
         </Link>
         <button

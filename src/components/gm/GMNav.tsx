@@ -4,7 +4,7 @@ import type { ComponentType, SVGProps } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import MesaEntry from "@/components/mesa/MesaEntry";
-import { ArrowLeftIcon, PlusIcon, SwordsIcon, TargetIcon } from "@/components/icons";
+import { ArrowLeftIcon, ClockIcon, PlusIcon, SwordsIcon, TargetIcon } from "@/components/icons";
 
 const navItems: Array<{
   href: string;
@@ -16,6 +16,7 @@ const navItems: Array<{
   { href: "/gm", label: "Inimigos", description: "Catálogo e fichas", icon: TargetIcon },
   { href: "/gm/create", label: "Criar inimigo", description: "Montar uma ameaça", icon: PlusIcon },
   { href: "/gm/encounters", label: "Combate", description: "Rodar um encontro", icon: SwordsIcon },
+  { href: "/gm/history", label: "Histórico", description: "Rever partidas", icon: ClockIcon },
 ];
 
 export default function GMNav() {

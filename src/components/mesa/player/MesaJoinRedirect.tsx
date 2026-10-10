@@ -177,7 +177,7 @@ export default function MesaJoinRedirect({ joinCode }: Props) {
           <button type="button" className="mesa-secondary" onClick={handleResetSignature}>
             Entrar de novo
           </button>
-          <Link className="mesa-ghost" href="/">
+          <Link className="mesa-ghost" href="/ficha">
             Voltar para a ficha
           </Link>
         </div>
@@ -206,7 +206,7 @@ export default function MesaJoinRedirect({ joinCode }: Props) {
         </button>
       </form>
 
-      <Link className="mesa-ghost" href="/">
+      <Link className="mesa-ghost" href="/ficha">
         ← Voltar para a ficha
       </Link>
     </JoinShell>

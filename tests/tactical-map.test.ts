@@ -16,9 +16,11 @@ test("distância usa o espaço lógico do mapa, não pixels renderizados", () =>
   assert.equal(tacticalDistance({ x: 0, y: 0 }, { x: 0.5, y: 0 }, { ...map, width: 2000 }), 20);
 });
 
-test("tokens não podem ocupar o mesmo espaço lógico", () => {
+test("tokens não podem ocupar o mesmo espaço lógico sem criar uma margem excessiva", () => {
   const map = { imageUrl: "", enabled: true, width: 1000, height: 600, pixelsPerMeter: 50 };
   assert.equal(tacticalPositionsOverlap({ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, map), true);
+  assert.equal(tacticalPositionsOverlap({ x: 0.5, y: 0.5 }, { x: 0.549, y: 0.5 }, map), true);
+  assert.equal(tacticalPositionsOverlap({ x: 0.5, y: 0.5 }, { x: 0.55, y: 0.5 }, map), false);
   assert.equal(tacticalPositionsOverlap({ x: 0.1, y: 0.5 }, { x: 0.2, y: 0.5 }, map), false);
 });
 

@@ -129,7 +129,7 @@ export default function PlayerStatusPanel({
                 <>
                   Ficha vinculada: <b>{characterName}</b>
                   {" · "}
-                  <Link href="/">abrir ficha</Link>
+              <Link href="/ficha">abrir ficha</Link>
                 </>
               ) : (
                 "Nenhuma ficha local correspondente — os dados acima vêm só da Mesa."

@@ -26,6 +26,7 @@ export function startBattleSnapshot(combatants: MesaCombatant[]): MesaBattleComb
     removed: false,
     initiative: combatant.initiative,
     sourceKey: combatant.sourceKey,
+    ...(combatant.position ? { position: combatant.position } : {}),
   }));
 }
 
@@ -55,6 +56,7 @@ export function mergeBattleRoster(
       isDead: row.isDead,
       initiative: row.initiative ?? entry.initiative,
       removed: false,
+      ...(row.position || entry.position ? { positionEnd: row.position ?? entry.position } : {}),
     };
   });
 
@@ -72,6 +74,7 @@ export function mergeBattleRoster(
       removed: false,
       initiative: row.initiative,
       sourceKey: row.sourceKey,
+      ...(row.position ? { position: row.position, positionEnd: row.position } : {}),
     });
   }
 

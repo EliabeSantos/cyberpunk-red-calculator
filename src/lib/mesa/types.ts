@@ -474,6 +474,9 @@ export interface MesaBattleCombatant {
   removed: boolean;
   initiative: number | null;
   sourceKey: string | null;
+  /** Posição inicial e final no mapa, quando o combate usou mapa tático. */
+  position?: TacticalPosition | null;
+  positionEnd?: TacticalPosition | null;
 }
 
 /**
@@ -492,6 +495,8 @@ export interface MesaBattle {
   endedAt: string | null;
   finalRound: number | null;
   combatants: MesaBattleCombatant[];
+  eventLog?: MesaEvent[];
+  tacticalMap?: TacticalMap | null;
 }
 
 /** Estado completo devolvido ao cliente pelo GET autenticado. */

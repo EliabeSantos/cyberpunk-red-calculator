@@ -51,16 +51,14 @@ import {
 } from "@/lib/mesa/gmRollPublish";
 import { publishMesaEnemyHp, publishMesaEnemySupplies, publishMesaEngineDamage } from "@/lib/mesa/hpPublish";
 import { getEnemyBodySP } from "@/lib/enemyCyberware";
-import { attackMesa, fetchMesaBattles, listMemberships, MesaApiError, rollInitiative } from "@/lib/mesa/client";
-import { applyMesaStateToEncounter, reconcileEncountersWithBattles } from "@/lib/mesa/encounterSync";
+import { attackMesa, MesaApiError, rollInitiative } from "@/lib/mesa/client";
+import { applyMesaStateToEncounter } from "@/lib/mesa/encounterSync";
 import { findParticipantById, toggleParticipantSelection } from "@/lib/participantSelection";
 import { useMesaState } from "@/lib/mesa/useMesaState";
-import type { MesaBattle } from "@/lib/mesa/types";
 import type { AttackResult, DamageResult } from "@/lib/combat/contract";
 import type { DiceResult } from "@/lib/dice";
 import MesaEncounterStart, { type MesaEnemySeed } from "@/components/mesa/MesaEncounterStart";
 import {
-  ClockIcon,
   ListIcon,
   PlayIcon,
   RotateCwIcon,
@@ -97,12 +95,7 @@ function threatToLevel(threatLevel: string): number {
 
 /** Selo do vínculo do encontro com uma partida (na lista e nos cartões). */
 function battleBadge(battle: EncounterBattle | undefined) {
-  if (!battle) return null;
-  if (battle.status === "completed") {
-    const when = battle.completedAt ? new Date(battle.completedAt) : null;
-    const date = when && !Number.isNaN(when.getTime()) ? when.toLocaleDateString("pt-BR") : "";
-    return <span className="encounter-badge encounter-badge-done">Concluído{date ? ` · ${date}` : ""}</span>;
-  }
+  if (!battle || battle.status === "completed") return null;
   // Partida viva = acento, igual a todo o resto do sistema.
   return (
     <span className="encounter-badge encounter-badge-live">
@@ -110,12 +103,6 @@ function battleBadge(battle: EncounterBattle | undefined) {
       Mesa {battle.joinCode}
     </span>
   );
-}
-
-function formatDateTime(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
 
 interface ServerAttackFeedback {
@@ -153,8 +140,6 @@ export default function EncountersPageClient() {
   const [minLevel, setMinLevel] = useState(1);
   const [maxLevel, setMaxLevel] = useState(4);
   const [previewSeed, setPreviewSeed] = useState(0);
-  const [battles, setBattles] = useState<MesaBattle[]>([]);
-  const [historyNotice, setHistoryNotice] = useState<string | null>(null);
   const [toolkitError, setToolkitError] = useState<string | null>(null);
 
   const persistEncounter = useCallback((value: EncounterData) => {
@@ -168,8 +153,6 @@ export default function EncountersPageClient() {
   const [attackFeedback, setAttackFeedback] = useState<Record<string, ServerAttackFeedback>>({});
   const [attackError, setAttackError] = useState<string | null>(null);
   const [initiativeBusy, setInitiativeBusy] = useState(false);
-  // Só um contador: o ↻ do histórico reexecuta o efeito abaixo sem duplicar lógica.
-  const [historyTick, setHistoryTick] = useState(0);
 
   // Combate vinculado a este encontro e ainda em andamento → a MANDA é da
   // mesa: este hook traz o estado (Realtime + polling) para a volta de vida
@@ -211,60 +194,6 @@ export default function EncountersPageClient() {
       .catch((error: unknown) => { if (!disposed) { setSavedEncounters(loadEncounters()); setToolkitError(error instanceof Error ? error.message : "Não foi possível carregar os encontros do servidor."); } });
     return () => { disposed = true; };
   }, [phase]);
-
-  /**
-   * Busca o histórico nas mesas deste navegador em que o papel é Mestre.
-   * Só LÊ: aplicar (setters + reconciliação) fica no efeito abaixo, que é quem
-   * decide se o resultado ainda importa.
-   */
-  const fetchHistory = useCallback(async (): Promise<{ list: MesaBattle[]; notice: string | null }> => {
-    const gmMesas = listMemberships().filter((entry) => entry.role === "gm");
-    let notice: string | null = null;
-    const lists = await Promise.all(
-      gmMesas.map((entry) =>
-        fetchMesaBattles(entry.sessionId).catch((caught: unknown) => {
-          // Migração pendente é o único caso que vale explicar ao Mestre.
-          if (caught instanceof MesaApiError && caught.code === "migration_pending") notice = caught.message;
-          return null;
-        }),
-      ),
-    );
-
-    const list = lists
-      .filter((result): result is MesaBattle[] => result !== null)
-      .flat()
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    return { list, notice };
-  }, []);
-
-  /**
-   * Histórico do servidor → lista da tela + RECONCILIAÇÃO do vínculo local de
-   * cada encontro: partida concluída com a tela fechada, encontro lançado
-   * noutro separador, ou lançamento feito sem o vínculo registrado aqui.
-   * Roda na montagem, quando a aba muda e quando o Mestre pede ↻ (`historyTick`).
-   */
-  useEffect(() => {
-    let disposed = false;
-    const refresh = async () => {
-      const { list, notice } = await fetchHistory();
-      if (disposed) return; // separador fechado no meio do caminho
-      setBattles(list);
-      setHistoryNotice(notice);
-
-      const stored = reconcileEncountersWithBattles(loadEncounters(), list);
-      if (stored.changed) {
-        stored.encounters.forEach((entry) => persistEncounter(entry));
-        setSavedEncounters(stored.encounters);
-      }
-      setEncounter((current) =>
-        current ? reconcileEncountersWithBattles([current], list).encounters[0] ?? current : null,
-      );
-    };
-    void refresh();
-    return () => {
-      disposed = true;
-    };
-  }, [fetchHistory, persistEncounter, phase, historyTick]);
 
   // Voltou da mesa: vida dos inimigos (morte inclusive) e fim da partida
   // descem para o encontro, que é o registro permanente do Mestre. Só este
@@ -1425,66 +1354,6 @@ export default function EncountersPageClient() {
         </div>
       )}
 
-      {(battles.length > 0 || historyNotice) && (
-        <section className="encounter-history">
-          <div className="encounter-history-header">
-            <div className="encounter-history-header-left">
-              <ClockIcon className="encounter-history-icon" />
-              <div>
-                <h2 className="encounter-history-title">Histórico de partidas</h2>
-                <span className="encounter-history-count">
-                  {battles.length} partida{battles.length !== 1 ? "s" : ""} registrada{battles.length !== 1 ? "s" : ""}
-                </span>
-              </div>
-            </div>
-            <button className="gm-button gm-button-small" onClick={() => setHistoryTick((tick) => tick + 1)}>
-              <RotateCwIcon />
-              Atualizar
-            </button>
-          </div>
-
-          {historyNotice && <p className="mesa-notice error">{historyNotice}</p>}
-
-          <div className="encounter-history-list">
-            {battles.map((battle) => (
-              <article key={battle.id} className="encounter-history-card">
-                <div className="encounter-history-card-header">
-                  <span className="encounter-history-name">{battle.encounterName}</span>
-                  <span className={`encounter-history-status ${battle.status}`}>
-                    <span className="encounter-status-dot" aria-hidden="true" />
-                    {battle.status === "completed" ? "Concluída" : "Em andamento"}
-                  </span>
-                </div>
-                <p className="encounter-history-meta">
-                  Mesa {battle.joinCode} · {formatDateTime(battle.startedAt)}
-                  {battle.endedAt && <> → {formatDateTime(battle.endedAt)}</>}
-                  {battle.finalRound ? <> · {battle.finalRound}ª rodada</> : null}
-                </p>
-                {battle.combatants.length > 0 && (
-                  <ul className="encounter-history-rows">
-                    {battle.combatants.map((row) => (
-                      <li key={row.id} className={row.isDead ? "is-dead" : undefined}>
-                        <span className="encounter-history-combatant">{row.name}</span>
-                        <span className="encounter-history-hp">
-                          {row.removed
-                            ? `${row.hpStart}/${row.hpMax} · saiu`
-                            : row.hpEnd === null
-                              ? `${row.hpStart}/${row.hpMax}`
-                              : `${row.hpEnd}/${row.hpMax}`}
-                          {row.hpEnd !== null && !row.removed && row.hpEnd !== row.hpStart
-                            ? ` (${row.hpStart} no início)`
-                            : null}
-                        </span>
-                        {row.isDead && <span className="encounter-history-dead">Morto</span>}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
     </div>
   );
 }

@@ -145,7 +145,7 @@ export default function MesaEncounterStart({ enemies, encounter, battle, onStart
         <p className="mesa-hint">
           Para jogar online, crie uma mesa pela ficha (<b>🌐 Mesa online</b>) e volte aqui como Mestre.
         </p>
-        <Link className="gm-button gm-button-small" href="/">
+          <Link className="gm-button gm-button-small" href="/ficha">
           Ir para a ficha
         </Link>
       </div>

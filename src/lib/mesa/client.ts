@@ -250,6 +250,11 @@ export async function fetchMesaBattles(sessionId: string): Promise<MesaBattle[]>
   return Array.isArray(result.battles) ? result.battles : [];
 }
 
+export async function fetchMesaBattle(sessionId: string, battleId: string): Promise<MesaBattle> {
+  const result = await api<{ battle: MesaBattle }>(`/api/mesa/${sessionId}/battles/${battleId}`);
+  return result.battle;
+}
+
 export async function finishSession(sessionId: string): Promise<void> {
   await api(`/api/mesa/${sessionId}`, { method: "DELETE" });
 }

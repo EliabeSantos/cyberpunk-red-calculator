@@ -160,7 +160,7 @@ function PlayerStateShell({
               Tentar novamente
             </button>
           )}
-          <Link className="mesa-ghost" href="/">
+          <Link className="mesa-ghost" href="/ficha">
             Voltar para a ficha
           </Link>
         </div>

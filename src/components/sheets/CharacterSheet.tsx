@@ -64,12 +64,14 @@ import FloatingUpdateCard, { type FloatingUpdate } from "@/components/FloatingUp
 import { getCombatAwarenessTotal, getMakerSpecialtyPoints, getMedicineSpecialtyPoints, getNetActionsPerTurn, getRoleAbilityIPCost, spendIPOnRoleAbility } from "@/lib/roles";
 import { roleDefinitions } from "@/data/roles";
 import type { RoleAbilityData, RoleAbilityId } from "@/data/roles";
+import { downloadCharacterFile, parseCharacterTransferFile } from "@/lib/characterTransfer";
 
 type CharacterSheetProps = {
   character: Character;
   onUpdate: (character: Character) => void;
   onEdit: () => void;
   onNewCharacter: () => void;
+  onImport: (character: Character) => void | Promise<void>;
   /** Consentimento do usuário para enviar rolagens ao Discord ("null" = ainda não respondeu). */
   discordConsent: DiscordConsent | null;
   onDiscordConsentChange: (consent: DiscordConsent) => void;
@@ -138,6 +140,7 @@ export default function CharacterSheet({
   onUpdate,
   onEdit,
   onNewCharacter,
+  onImport,
   discordConsent,
   onDiscordConsentChange,
   playerAttack,
@@ -174,6 +177,8 @@ export default function CharacterSheet({
   const [lastQuickhack, setLastQuickhack] = useState<QuickhackRollResult | null>(null);
   const [lastInitiative, setLastInitiative] = useState<InitiativeRollResult | null>(null);
   const [floatingUpdates, setFloatingUpdates] = useState<FloatingUpdate[]>([]);
+  const [transferError, setTransferError] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   /**
    * F1.14.2 — erro do registro de iniciativa na Mesa. O valor exibido nunca é
    * este: ele vem do estado da Mesa (`character.combat.initiative`).
@@ -841,6 +846,26 @@ export default function CharacterSheet({
             ⚔️ Encontros
           </Link>
           <button onClick={onEdit}>Editar ficha</button>
+          <button type="button" onClick={() => downloadCharacterFile(character)}>Exportar ficha</button>
+          <button type="button" onClick={() => importInputRef.current?.click()}>Importar ficha</button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json,.cyberpunk-red-character.json"
+            hidden
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (!file) return;
+              try {
+                const imported = parseCharacterTransferFile(JSON.parse(await file.text()));
+                setTransferError(null);
+                await onImport(imported);
+              } catch (error) {
+                setTransferError(error instanceof Error ? error.message : "Não foi possível importar a ficha.");
+              }
+            }}
+          />
           <button className="nav-accent" onClick={onNewCharacter}>
             Novo personagem
           </button>
@@ -857,6 +882,7 @@ export default function CharacterSheet({
           <span />
         </button>
       </nav>
+      {transferError && <div role="alert" className="gm-access-denied">{transferError}</div>}
       <div
         className={`nav-drawer-backdrop${navDrawerOpen ? " is-open" : ""}`}
         onClick={() => setNavDrawerOpen(false)}

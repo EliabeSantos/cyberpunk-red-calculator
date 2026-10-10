@@ -239,7 +239,12 @@ export function tacticalWeaponRangeFeedback(
 export function tacticalPositionsOverlap(a: TacticalPosition, b: TacticalPosition, map: TacticalMap): boolean {
   const dx = (a.x - b.x) * map.width;
   const dy = (a.y - b.y) * map.height;
-  return Math.sqrt(dx * dx + dy * dy) < 64;
+  // O token padrão ocupa um círculo de `DEFAULT_TACTICAL_TOKEN_RADIUS` em
+  // coordenadas normalizadas. O antigo valor fixo de 64px deixava uma margem
+  // maior que o próprio token e impedia personagens visualmente separados de
+  // ocuparem posições próximas.
+  const tokenDiameter = DEFAULT_TACTICAL_TOKEN_RADIUS * 2 * map.width;
+  return Math.sqrt(dx * dx + dy * dy) < tokenDiameter;
 }
 
 /** Converte metros lógicos em pixels renderizados; nunca é persistido. */

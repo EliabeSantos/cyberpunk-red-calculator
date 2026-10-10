@@ -14,7 +14,7 @@ import { createId } from "@/lib/id";
 
 import { useRef, useState } from "react";
 
-import { attackMesa, formatAttackGatewayError, moveMesa } from "@/lib/mesa/client";
+import { attackMesa, endTurn, formatAttackGatewayError, moveMesa } from "@/lib/mesa/client";
 import { evaluateMesaAction } from "@/lib/mesa/actionGate";
 import { findCombatant } from "@/lib/mesa/playerScreen";
 import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
@@ -167,6 +167,17 @@ export default function PlayerActionsPanel({
       {myTurn && me?.isDead && <p className="mesa-hint">Seu personagem está derrotado e não age mais.</p>}
       {myTurn && me && !me.isDead && me.actionsRemaining <= 0 && (
         <p className="mesa-hint">Sem Actions restantes — finalize o turno.</p>
+      )}
+      {initiativeReady && myTurn && me && (
+        <button
+          type="button"
+          className="mesa-ghost mesa-end-turn"
+          disabled={busy}
+          onClick={() => void run(() => endTurn(state.session.id), { success: "Seu turno foi passado." })}
+          title="Passar o seu turno para o próximo combatente."
+        >
+          [ PASSAR MEU TURNO ]
+        </button>
       )}
 
        {/* --- Seleção de alvo + ataque ------------------------------------- */}

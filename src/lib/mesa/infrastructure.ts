@@ -116,6 +116,7 @@ export interface MesaBattleRecord {
   final_round: number | null;
   combatants: unknown;
   event_log: unknown;
+  tactical_map?: unknown;
   [column: string]: unknown;
 }
 
@@ -216,6 +217,7 @@ export interface MesaRepository {
   /** Appends atomically and deduplicates by event resolutionId in the database. */
   appendCombatEvent(combatId: string, sessionId: string, event: unknown, maxEvents: number): Promise<MesaCombatRecord[]>;
   findBattleByEncounter(encounterId: string): Promise<MesaBattleRecord | null>;
+  findBattleById(battleId: string, sessionId: string): Promise<MesaBattleRecord | null>;
   findActiveBattle(sessionId: string): Promise<MesaBattleRecord | null>;
   createBattle(input: MesaBattleCreate): Promise<MesaBattleRecord>;
   updateBattle(battleId: string, sessionId: string, patch: Readonly<Record<string, unknown>>): Promise<MesaBattleRecord[]>;
