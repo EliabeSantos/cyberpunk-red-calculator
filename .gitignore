@@ -36,6 +36,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# WSL-local PostgreSQL cluster and host credentials
+/.local/
+
 # vercel
 .vercel
 
