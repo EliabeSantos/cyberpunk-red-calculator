@@ -3099,17 +3099,20 @@ export async function linkCharacter(input: {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireActiveSession(session);
 
-  // F1.14.6 — durante `mesa-combat`, a ficha enviada pelo navegador não pode
+  // F1.14.6 — depois que a iniciativa foi rolada, a ficha enviada pelo
+  // navegador não pode
   // virar um bypass para estado mecânico. Embora esta rota grave
   // `mesa_characters.sheet` (e não diretamente `mesa_combatants`), o snapshot
   // server-side da ficha é a fonte de cálculos para resoluções futuras. Player
   // não pode reenviar HP, armor, CI, Death Save, ammo, atributos ou qualquer
   // outro estado de combate enquanto a Mesa estiver resolvendo o combate.
-  // Fora de combate, o fluxo de vinculação/salvamento permanece inalterado;
+  // Durante a preparação (combate criado, mas iniciativa ainda não rolada), o
+  // jogador pode escolher/trocar a ficha normalmente. Fora de combate, o fluxo
+  // de vinculação/salvamento permanece inalterado;
   // GM também preserva o comportamento existente.
   const repository = await mesaRepository();
   const combat = await repository.findCombatBySession(session.id);
-  if (participant.role === "player" && combat?.status === "active") {
+  if (participant.role === "player" && combat?.status === "active" && combat.initiative_started) {
     throw new MesaError(
       "A ficha está bloqueada durante o combate da Mesa; o estado de combate é atualizado pelos gateways.",
       409,
@@ -3121,6 +3124,7 @@ export async function linkCharacter(input: {
     const clearedRows = await repository.updateParticipant(participant.id, session.id, { character_id: null });
     const cleared = (clearedRows[0] ?? null) as ParticipantRow | null;
     if (!cleared) throw new MesaError("Participante não encontrado.", 404, "participant_not_found");
+    await syncPreparationCharacter(repository, session.id, combat as CombatRow | null, cleared, null);
     return toParticipant(cleared as ParticipantRow);
   }
 
@@ -3151,6 +3155,8 @@ export async function linkCharacter(input: {
   const updatedRows = await repository.updateParticipant(participant.id, session.id, { character_id: input.characterId });
   const updated = (updatedRows[0] ?? null) as ParticipantRow | null;
   if (!updated) throw new MesaError("Participante não encontrado.", 404, "participant_not_found");
+
+  await syncPreparationCharacter(repository, session.id, combat as CombatRow | null, updated, sheet);
 
   return toParticipant(updated as ParticipantRow);
 }
@@ -3244,6 +3250,60 @@ function movementBudgetFor(sheet: Character): number {
   const injuries = getCriticalInjuryModifiers({ combat: sheet.combat });
   if (injuries.moveZero) return 0;
   return movementMetersPerTurn(move + getCyberwareMoveModifier({ cyberware }) + injuries.moveModifier);
+}
+
+/** Mantém o elenco de preparação sincronizado enquanto a iniciativa aguarda. */
+async function syncPreparationCharacter(
+  repository: MesaRepository,
+  sessionId: string,
+  combat: CombatRow | null,
+  participant: ParticipantRow,
+  sheet: Character | null,
+): Promise<void> {
+  if (!combat || combat.status !== "active" || combat.initiative_started) return;
+  const rows = await repository.listCombatantsByCombat(combat.id, sessionId) as unknown as CombatantRow[];
+  const existing = rows.find((row) => row.kind === "character" && row.participant_id === participant.id);
+  if (!sheet) {
+    if (existing) await repository.deleteCombatants({ id: existing.id, combatId: combat.id, sessionId }, "Falha ao remover ficha da preparação");
+    return;
+  }
+
+  const snapshot = toCombatParticipant(sheet);
+  const movement = movementBudgetFor(sheet);
+  const patch = {
+    character_id: participant.character_id,
+    name: (sheet.identity?.name || participant.display_name).slice(0, 60),
+    actions_max: ACTIONS_PER_TURN,
+    actions_remaining: ACTIONS_PER_TURN,
+    movement_max: movement,
+    movement_remaining: movement,
+    hp_current: sheet.combat.hp.current,
+    hp_max: sheet.combat.hp.max,
+    is_dead: Boolean(sheet.combat.isDead),
+    death_save_dc: Math.max(0, Math.floor(sheet.combat.deathSaveDC)),
+    death_save_failures: Math.max(0, Math.floor(sheet.combat.deathSaveFailures)),
+    combat_snapshot: snapshot,
+    combat_ammo: ammoStateForParticipant(snapshot),
+    supplies: suppliesForCharacter(sheet, snapshot),
+    combat_armor: { ...snapshot.combat.armor },
+    critical_injuries: Array.isArray(snapshot.combat.criticalInjuries) ? [...snapshot.combat.criticalInjuries] : [],
+    position: existing?.position ?? { x: 0.22, y: 0.2 + (rows.filter((row) => row.kind === "character").length % 5) * 0.14 },
+    avatar_url: typeof sheet.identity?.photoUrl === "string" ? sheet.identity.photoUrl.slice(0, 2_000_000) : null,
+  };
+  if (existing) {
+    const written = await repository.updateCombatant({ id: existing.id, sessionId, combatId: combat.id, patch });
+    if (written.length !== 1) throw new DatabaseQueryError("Falha ao atualizar ficha da preparação");
+    return;
+  }
+  await repository.insertCombatants([{
+    id: createId(),
+    combat_id: combat.id,
+    session_id: sessionId,
+    kind: "character",
+    participant_id: participant.id,
+    sort_order: Math.max(-1, ...rows.map((row) => row.sort_order)) + 1,
+    ...patch,
+  }], "Falha ao adicionar ficha à preparação");
 }
 
 /**
