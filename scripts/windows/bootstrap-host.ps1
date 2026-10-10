@@ -34,6 +34,17 @@ function Test-ListeningPort([int] $port) {
   return @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -gt 0
 }
 
+function Find-FreeAppPort([int] $preferredPort) {
+  $candidate = $preferredPort
+  while (Test-ListeningPort $candidate) {
+    $candidate++
+    if ($candidate -gt ($preferredPort + 100)) {
+      throw "No free application port was found near $preferredPort."
+    }
+  }
+  return $candidate
+}
+
 function Start-Postgres {
   & $pgCtl -D $cluster status *> $null
   if ($LASTEXITCODE -eq 0) { return }
@@ -58,7 +69,9 @@ function Start-App {
       if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { return }
     } catch { Start-Sleep -Seconds 1 }
   }
-  & taskkill.exe /PID $process.Id /T /F *> $null
+  if (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) {
+    & taskkill.exe /PID $process.Id /T /F *> $null
+  }
   Remove-Item (Join-Path $config "host.pid") -Force -ErrorAction SilentlyContinue
   throw "Application did not become healthy on port $appPort. See $logs\host.log and $logs\host-error.log."
 }
@@ -86,6 +99,8 @@ if (-not (Test-Path $adminTokenFile) -or [string]::IsNullOrWhiteSpace((Get-Conte
 }
 $hostEnvExists = Test-Path $envFile
 if ($hostEnvExists) {
+  $portLine = Get-Content $envFile | Where-Object { $_ -match '^PORT=(\d+)$' } | Select-Object -First 1
+  if ($portLine) { $appPort = [int]($portLine -replace '^PORT=', '') }
   # Keep the database credential stable across restarts. The bootstrap
   # password file is intentionally removed after first setup, so generating
   # a new password here would make the persisted host.env and PostgreSQL
@@ -101,6 +116,7 @@ if ($hostEnvExists) {
   }
   Get-Content $envFile | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } }
 }
+$appPort = if ($hostEnvExists) { $appPort } else { Find-FreeAppPort $appPort }
 $configuredMode = if ($env:MESA_HOSTING_MODE) { $env:MESA_HOSTING_MODE.Trim().ToLowerInvariant() } else { $null }
 if (-not $configuredMode) { $configuredMode = "local" }
 if ($configuredMode -ne "local" -and $configuredMode -ne "supabase") {
