@@ -315,10 +315,10 @@ export class LocalPostgresMesaRepository implements MesaRepository, ToolkitRepos
     return this.updateRecord(
       "mesa_combats",
       combatId,
-      { event_log: eventLog, updated_at: new Date().toISOString() },
+      { event_log: jsonParameter(eventLog), updated_at: new Date().toISOString() },
       "Falha ao registrar o evento",
       sessionId,
-      expectedEventLog === undefined ? {} : { event_log: expectedEventLog },
+      expectedEventLog === undefined ? {} : { event_log: jsonParameter(expectedEventLog) },
     );
   }
 
