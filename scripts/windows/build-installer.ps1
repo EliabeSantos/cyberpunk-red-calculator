@@ -63,7 +63,7 @@ Copy-Item "$root\package.json","$root\package-lock.json" "$stage\app"
 Copy-Item "$root\node_modules" "$stage\app\node_modules" -Recurse
 Copy-Item "$root\scripts" "$stage\app\scripts" -Recurse
 Copy-Item "$root\desktop" "$stage\app\desktop" -Recurse
-Copy-Item "$root\src\app\favicon.ico" "$stage\app\favicon.ico"
+Copy-Item "$root\src\app\favicon.ico","$root\src\app\icon.ico","$root\src\app\icon.svg" "$stage\app"
 Remove-Item "$stage\app\scripts\windows" -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\supabase" "$stage\app\supabase" -Recurse
 Push-Location $root

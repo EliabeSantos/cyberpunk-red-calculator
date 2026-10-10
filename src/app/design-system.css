@@ -1575,6 +1575,205 @@ select:focus-visible {
   }
 }
 
+/* --------------------------------------------------------------------------
+ * REDLINE / desktop finish
+ * A restrained workshop-console layer shared by the sheet, GM area and Mesa.
+ */
+:root {
+  --redline-surface-0: #070b0d;
+  --redline-surface-1: #0d1518;
+  --redline-surface-2: #142125;
+  --redline-border-soft: rgb(126 231 215 / 16%);
+  --redline-border-hot: rgb(255 105 92 / 46%);
+  --redline-text-dim: #9aa9a5;
+}
+
+::selection {
+  background: var(--redline-coral);
+  color: var(--redline-void);
+}
+
+body {
+  background:
+    linear-gradient(90deg, rgb(255 105 92 / 3%) 1px, transparent 1px),
+    radial-gradient(circle at 88% 0, rgb(255 105 92 / 10%), transparent 25rem),
+    var(--redline-void);
+  background-size: 64px 100%, auto, auto;
+}
+
+button,
+input,
+select,
+textarea {
+  border-radius: var(--redline-radius-sm);
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  filter: saturate(0.35);
+}
+
+.loading-screen {
+  position: relative;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--redline-void);
+  color: var(--redline-soft);
+  font: 0.72rem var(--font-geist-mono), monospace;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.loading-screen::before {
+  width: 2.6rem;
+  height: 2.6rem;
+  margin-bottom: 5rem;
+  border: 1px solid var(--redline-line-bright);
+  border-top-color: var(--redline-coral);
+  border-radius: 50%;
+  animation: redline-spin 0.9s linear infinite;
+  content: "";
+}
+
+@keyframes redline-spin {
+  to { transform: rotate(360deg); }
+}
+
+.gm-page,
+.mesa-shell,
+.sheet-shell {
+  position: relative;
+}
+
+.gm-page::before,
+.mesa-shell::before,
+.sheet-shell::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2.5rem;
+  height: 2px;
+  background: var(--redline-coral);
+  content: "";
+}
+
+.gm-page-header,
+.mesa-header,
+.sheet-nav {
+  background: linear-gradient(90deg, rgb(126 231 215 / 4%), transparent 65%);
+}
+
+.gm-page-title,
+.mesa-title h1,
+.sheet-hero h1 {
+  text-wrap: balance;
+}
+
+.gm-button,
+.mesa-primary,
+.save-button,
+.player-mesa-attack-button,
+.player-mesa-skillcheck-button {
+  min-height: 2.55rem;
+  border: 1px solid var(--redline-coral);
+  border-radius: var(--redline-radius-sm);
+  background: var(--redline-coral);
+  color: var(--redline-void);
+  font-weight: 750;
+  letter-spacing: 0.01em;
+  box-shadow: 0 8px 24px rgb(255 105 92 / 10%);
+}
+
+.gm-button:hover:not(:disabled),
+.mesa-primary:hover:not(:disabled),
+.save-button:hover:not(:disabled),
+.player-mesa-attack-button:hover:not(:disabled),
+.player-mesa-skillcheck-button:hover:not(:disabled) {
+  border-color: var(--redline-coral-soft);
+  background: var(--redline-coral-soft);
+  color: var(--redline-void);
+  transform: translateY(-1px);
+}
+
+.gm-button-secondary,
+.mesa-ghost,
+.secondary-button {
+  border-color: var(--redline-border-soft);
+  background: rgb(126 231 215 / 3%);
+  color: var(--redline-soft);
+}
+
+.gm-button-secondary:hover:not(:disabled),
+.mesa-ghost:hover:not(:disabled),
+.secondary-button:hover:not(:disabled) {
+  border-color: var(--redline-teal);
+  background: rgb(126 231 215 / 9%);
+  color: var(--redline-paper);
+}
+
+.gm-form-input,
+.gm-form-select,
+.mesa-form input,
+.mesa-form select,
+.mesa-form textarea,
+.player-mesa-page input,
+.player-mesa-page select,
+.player-mesa-page textarea {
+  border-color: var(--redline-border-soft);
+  background: var(--redline-surface-0);
+  color: var(--redline-paper);
+}
+
+.gm-form-input:focus,
+.gm-form-select:focus,
+.mesa-form input:focus,
+.mesa-form select:focus,
+.mesa-form textarea:focus,
+.player-mesa-page input:focus,
+.player-mesa-page select:focus,
+.player-mesa-page textarea:focus {
+  border-color: var(--redline-teal);
+  box-shadow: var(--redline-focus);
+  outline: none;
+}
+
+.gm-access-denied,
+.mesa-error {
+  border: 1px solid rgb(255 119 112 / 42%);
+  border-left: 3px solid var(--redline-danger);
+  background: rgb(255 119 112 / 7%);
+  color: #ffc1b8;
+}
+
+.floating-update-card {
+  border-color: var(--redline-border-soft);
+  border-left: 3px solid var(--redline-teal);
+  border-radius: var(--redline-radius-sm);
+  background: var(--redline-surface-2);
+  box-shadow: var(--redline-shadow);
+}
+
+.floating-update-card.error {
+  border-left-color: var(--redline-danger);
+}
+
+@media (max-width: 720px) {
+  .gm-page,
+  .mesa-shell,
+  .sheet-shell {
+    width: min(100% - 1.25rem, 76rem);
+  }
+
+  .gm-page-header,
+  .mesa-header,
+  .sheet-nav {
+    gap: 0.75rem;
+  }
+}
+
 /* Combate ativo: participação + iniciativa compartilham a mesma faixa. */
 .encounter-combat-actions {
   display: grid;

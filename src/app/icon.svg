@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Cyberpunk RED Calculator</title>
+  <desc id="desc">Marca angular vermelha sobre um painel escuro</desc>
+  <rect width="256" height="256" rx="32" fill="#070b0d"/>
+  <path d="M48 38h160l22 22v136l-22 22H48l-22-22V60z" fill="#101a1d" stroke="#294149" stroke-width="6"/>
+  <path d="M68 82 92 58h74l22 22v26h-28V88h-53l-10 10v60l10 10h53v-18h28v26l-22 22H92l-24-24z" fill="#ff695c"/>
+  <path d="M106 108h42v40h-42z" fill="#7ee7d7"/>
+  <path d="M115 117h24v22h-24z" fill="#070b0d"/>
+  <path d="M68 202h120" stroke="#f3c969" stroke-width="6" stroke-linecap="square"/>
+</svg>

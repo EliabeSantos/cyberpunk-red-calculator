@@ -43,7 +43,7 @@
     "appId": "com.cyberpunkred.calculator",
     "productName": "Cyberpunk RED Calculator",
     "asar": false,
-    "icon": "src/app/favicon.ico",
+    "icon": "src/app/icon.ico",
     "directories": {
       "output": "installer/windows/electron-output"
     },
@@ -57,6 +57,14 @@
       {
         "from": "src/app/favicon.ico",
         "to": "favicon.ico"
+      },
+      {
+        "from": "src/app/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "src/app/icon.svg",
+        "to": "icon.svg"
       }
     ],
     "extraResources": [

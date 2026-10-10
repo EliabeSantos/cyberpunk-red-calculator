@@ -39,3 +39,14 @@ test("encerramento continua limitado ao host validado e sua árvore", async () =
   assert.match(source, /\$isExpectedScript/);
   assert.match(source, /taskkill\.exe \/PID \$hostPid \/T \/F/);
 });
+
+test("o ícone da janela e da distribuição usam o asset oficial", async () => {
+  const main = await readFile(new URL("../desktop/main.cjs", import.meta.url), "utf8");
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { build?: { icon?: string } };
+  const installer = await readFile(new URL("../installer/windows/CyberpunkRedCalculator.iss", import.meta.url), "utf8");
+
+  assert.match(main, /path\.join\(installRoot, "app", "icon\.ico"\)/);
+  assert.equal(packageJson.build?.icon, "src/app/icon.ico");
+  assert.match(installer, /SetupIconFile=.*src\\app\\icon\.ico/);
+  assert.match(installer, /IconFilename: "\{app\}\\app\\icon\.ico"/);
+});

@@ -16,7 +16,7 @@ process.env.MESA_DATA_DIR = dataRoot;
 const configFile = path.join(dataRoot, "config", "host.env");
 const bootstrapScript = path.join(installRoot, "windows", "bootstrap-host.ps1");
 const stopScript = path.join(installRoot, "windows", "stop-host.ps1");
-const iconFile = path.join(installRoot, "app", "favicon.ico");
+const iconFile = path.join(installRoot, "app", "icon.ico");
 
 let mainWindow;
 let isStopping = false;
