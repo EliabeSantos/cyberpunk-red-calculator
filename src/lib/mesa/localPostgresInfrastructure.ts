@@ -215,7 +215,7 @@ export class LocalPostgresMesaRepository implements MesaRepository, ToolkitRepos
     const rows = await this.rows<ToolkitRecord>(
       `insert into public.mesa_toolkit_records (id,owner_token,kind,name,payload)
        values ($1,$2,$3,$4,$5::jsonb)
-       on conflict (id) do update set name = excluded.name, payload = excluded.payload,
+       on conflict (id,owner_token,kind) do update set name = excluded.name, payload = excluded.payload,
          version = public.mesa_toolkit_records.version + 1, updated_at = now()
        where public.mesa_toolkit_records.owner_token = $2 and public.mesa_toolkit_records.kind = $3${where}
        returning *`,

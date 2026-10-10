@@ -5876,21 +5876,21 @@ async function advanceActiveTurnLocal(
   const advance = advanceTurn(order, combat.active_combatant_id, combat.round, (id) => alive.has(id));
   const now = new Date().toISOString();
 
-  // Supabase does not provide the local adapter's surrounding transaction.
-  // Claim this exact turn before any side effect; a second request with the
-  // same stale snapshot receives a conflict instead of resetting budgets or
-  // appending a second turn event.
-  let turnClaimRequest = db().from("mesa_combats").update({ updated_at: now })
-    .eq("id", combat.id)
-    .eq("session_id", sessionId)
-    .eq("active_combatant_id", combat.active_combatant_id)
-    .eq("round", combat.round);
-  if (combat.updated_at) turnClaimRequest = turnClaimRequest.eq("updated_at", combat.updated_at);
-  const turnClaim = await query(
-    turnClaimRequest.select("id"),
-    "Falha ao reservar o turno",
-  ) as Array<{ id: string }> | null;
-  if (!turnClaim || turnClaim.length !== 1) {
+  // O contexto local já mantém o lock da linha de combate. Ainda assim, o CAS
+  // preserva a mesma garantia de domínio: uma requisição com snapshot obsoleto
+  // não pode resetar orçamentos nem registrar um segundo evento de turno.
+  const turnClaimExpected: Record<string, unknown> = {
+    active_combatant_id: combat.active_combatant_id,
+    round: combat.round,
+  };
+  if (combat.updated_at) turnClaimExpected.updated_at = combat.updated_at;
+  const turnClaim = await repository.updateCombat(
+    combat.id,
+    sessionId,
+    { updated_at: now },
+    turnClaimExpected,
+  );
+  if (turnClaim.length !== 1) {
     throw new MesaError("O turno mudou enquanto esta ação era processada; atualize a Mesa.", 409, "turn_conflict");
   }
 

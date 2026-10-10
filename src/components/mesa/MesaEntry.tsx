@@ -42,7 +42,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { resolveActiveMesa } from "@/lib/mesa/activeMesa";
-import { closeMesa, createMesa, joinMesa, leaveMesa, MesaApiError } from "@/lib/mesa/client";
+import { closeMesa, createMesa, getHostingConfig, joinMesa, leaveMesa, MesaApiError, setHostingMode, type HostingConfig, type HostingMode } from "@/lib/mesa/client";
 import { defaultMesaDisplayName } from "@/lib/mesa/displayName";
 import { JOIN_CODE_PLACEHOLDER, normalizeJoinCode } from "@/lib/mesa/joinCode";
 import {
@@ -65,6 +65,10 @@ export default function MesaEntry() {
   const [joinCode, setJoinCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [hostingConfig, setHostingConfig] = useState<HostingConfig | null>(null);
+  const [hostingMode, setHostingModeChoice] = useState<HostingMode | "">("");
+  const [adminToken, setAdminToken] = useState("");
+  const [hostingNotice, setHostingNotice] = useState<string | null>(null);
 
   // Lista REATIVA das mesas deste navegador (mudou → re-render, sem efeito).
   const membershipStore = useSyncExternalStore(
@@ -148,14 +152,47 @@ export default function MesaEntry() {
   async function handleCreate(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
+    setHostingNotice(null);
     setBusy(true);
     try {
+      if (!hostingConfig || !hostingMode) {
+        setError("Selecione o ambiente da mesa.");
+        setBusy(false);
+        return;
+      }
+      if (hostingMode !== hostingConfig.mode) {
+        if (!adminToken.trim()) {
+          setError("Informe o token administrativo para trocar o ambiente do host.");
+          setBusy(false);
+          return;
+        }
+        const changed = await setHostingMode(hostingMode, adminToken.trim());
+        setHostingNotice(`Ambiente alterado para ${hostingMode === "local" ? "PostgreSQL local" : "Supabase"}. Reinicie o aplicativo para aplicar a mudança.`);
+        setHostingConfig(changed);
+        setHostingModeChoice(hostingMode);
+        setAdminToken("");
+        setBusy(false);
+        return;
+      }
       const result = await createMesa({ name: sessionName, displayName });
       setPanel("closed");
       router.push(playerMesaHref(result.session.id));
     } catch (caught) {
       setError(caught instanceof MesaApiError ? caught.message : "Não foi possível criar a mesa.");
       setBusy(false);
+    }
+  }
+
+  async function openCreatePanel() {
+    setPanel("create");
+    setError(null);
+    setHostingNotice(null);
+    try {
+      const config = await getHostingConfig();
+      setHostingConfig(config);
+      setHostingModeChoice(config.mode ?? config.availableModes[0] ?? "");
+    } catch {
+      setError("Não foi possível consultar os ambientes disponíveis.");
     }
   }
 
@@ -245,7 +282,7 @@ export default function MesaEntry() {
 
               {panel === "home" && (
                 <div className="mesa-home">
-                  <button type="button" className="mesa-route" onClick={() => setPanel("create")}>
+                  <button type="button" className="mesa-route" onClick={() => void openCreatePanel()}>
                     <span className="mesa-route-icon">
                       <PlusIcon />
                     </span>
@@ -307,6 +344,38 @@ export default function MesaEntry() {
 
               {panel === "create" && (
                 <form className="mesa-form" onSubmit={handleCreate}>
+                  {hostingConfig && (
+                    <fieldset className="mesa-hosting-options">
+                      <legend>Ambiente do host</legend>
+                      {hostingConfig.availableModes.map((mode) => (
+                        <label key={mode} className={hostingMode === mode ? "is-selected" : undefined}>
+                          <input
+                            type="radio"
+                            name="hosting-mode"
+                            value={mode}
+                            checked={hostingMode === mode}
+                            onChange={() => setHostingModeChoice(mode)}
+                            disabled={busy}
+                          />
+                          <span>
+                            <strong>{mode === "local" ? "PostgreSQL local" : "Supabase"}</strong>
+                            <small>{mode === hostingConfig.mode ? "Ambiente ativo" : "Troca global · requer reinício"}</small>
+                          </span>
+                        </label>
+                      ))}
+                      {hostingMode && hostingMode !== hostingConfig.mode && (
+                        <input
+                          type="password"
+                          value={adminToken}
+                          onChange={(event) => setAdminToken(event.target.value)}
+                          placeholder="Token administrativo do host"
+                          autoComplete="off"
+                          aria-label="Token administrativo do host"
+                        />
+                      )}
+                    </fieldset>
+                  )}
+                  {hostingNotice && <p className="mesa-hosting-notice" role="status">{hostingNotice}</p>}
                   <label>
                     Nome da mesa
                     <input
@@ -329,7 +398,7 @@ export default function MesaEntry() {
                   <button
                     type="submit"
                     className="mesa-primary"
-                    disabled={busy || !sessionName.trim() || !displayName.trim()}
+                    disabled={busy || Boolean(hostingNotice) || !sessionName.trim() || !displayName.trim()}
                   >
                     {busy ? "Criando..." : "Criar mesa"}
                   </button>

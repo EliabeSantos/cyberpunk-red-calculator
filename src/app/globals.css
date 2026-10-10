@@ -3861,6 +3861,16 @@
 .mesa-modal .mesa-form label { gap: .4rem; font: 700 .6rem var(--font-geist-mono), monospace; letter-spacing: .14em; }
 .mesa-modal .mesa-form input { padding: .7rem .75rem; border-radius: 0; font: 400 .92rem var(--font-geist-sans), sans-serif; transition: border-color .15s ease; }
 .mesa-modal .mesa-form input::placeholder { color: #7b8582; } /* 5:1 sobre o campo */
+
+.mesa-hosting-options { display: grid; gap: .45rem; margin: 0; padding: 0; border: 0; }
+.mesa-hosting-options legend { margin-bottom: .35rem; color: var(--muted); font: 700 .6rem var(--font-geist-mono), monospace; letter-spacing: .14em; text-transform: uppercase; }
+.mesa-hosting-options label { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: .65rem; padding: .65rem .7rem; border: 1px solid var(--line); background: rgb(255 255 255 / 2%); cursor: pointer; }
+.mesa-hosting-options label.is-selected { border-color: var(--accent); background: rgb(190 255 0 / 7%); }
+.mesa-hosting-options label span { display: grid; gap: .18rem; }
+.mesa-hosting-options label strong { color: var(--foreground); font-size: .78rem; }
+.mesa-hosting-options label small { color: var(--muted); font-size: .68rem; text-transform: none; letter-spacing: 0; }
+.mesa-hosting-options input[type="password"] { width: 100%; margin-top: .25rem; }
+.mesa-hosting-notice { margin: 0; padding: .65rem .7rem; border: 1px solid var(--accent); color: var(--foreground); font-size: .75rem; line-height: 1.45; }
 .mesa-modal .mesa-form input:focus-visible { outline: none; }
 .mesa-modal .mesa-code-input { font: 700 1.7rem var(--font-geist-mono), monospace !important; letter-spacing: .4em; text-indent: .4em; text-transform: uppercase; text-align: center; min-height: 3.4rem; }
 .mesa-modal .mesa-primary { width: 100%; min-height: 2.85rem; font-size: .74rem; letter-spacing: .12em; text-transform: uppercase; }

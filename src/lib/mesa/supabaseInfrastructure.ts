@@ -204,7 +204,7 @@ export class SupabaseMesaRepository implements MesaRepository, ToolkitRepository
     const row = await result(this.client.from("mesa_toolkit_records").upsert({
       id: input.id, owner_token: input.ownerToken, kind: input.kind, name: input.name,
       payload: input.payload,
-    }, { onConflict: "id", ignoreDuplicates: false }).select("*").single(), "Falha ao salvar dado do toolkit");
+    }, { onConflict: "id,owner_token,kind", ignoreDuplicates: false }).select("*").single(), "Falha ao salvar dado do toolkit");
     if (!row) throw new DatabaseQueryError("Falha ao salvar dado do toolkit: versão obsoleta ou registro não encontrado");
     return row as ToolkitRecord;
   }
