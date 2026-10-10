@@ -15,7 +15,12 @@ const command = join(process.cwd(), "node_modules", ".bin", platform() === "win3
 const args = ["start", "--hostname", process.env.MESA_HOSTNAME ?? "0.0.0.0", "--port", process.env.PORT ?? "3000"];
 
 function startServer() {
-  const server = spawn(command, args, { stdio: "inherit", env: process.env });
+  const server = spawn(command, args, {
+    stdio: "inherit",
+    env: process.env,
+    // Windows cannot spawn a .cmd shim without a shell.
+    shell: platform() === "win32",
+  });
   const stop = () => server.kill("SIGTERM");
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
