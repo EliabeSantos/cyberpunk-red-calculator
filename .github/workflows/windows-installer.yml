@@ -67,10 +67,16 @@ jobs:
           $size = (Get-Item $artifact).Length
           if ($size -lt 1MB) { throw "Installer artifact is unexpectedly small: $size bytes" }
           Write-Host "Created $artifact ($size bytes)"
+          $electronArtifact = Get-ChildItem "installer\windows\electron-output\*Setup*.exe" -File | Select-Object -First 1
+          if (-not $electronArtifact) { throw "Electron NSIS artifact was not created." }
+          if ($electronArtifact.Length -lt 1MB) { throw "Electron artifact is unexpectedly small: $($electronArtifact.Length) bytes" }
+          Write-Host "Created $($electronArtifact.FullName) ($($electronArtifact.Length) bytes)"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: CyberpunkRedCalculator-Windows-${{ github.sha }}
-          path: installer/windows/output/CyberpunkRedCalculator-Setup.exe
+          path: |
+            installer/windows/output/CyberpunkRedCalculator-Setup.exe
+            installer/windows/electron-output/*Setup*.exe
           if-no-files-found: error

@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$data = Join-Path $env:ProgramData "Cyberpunk RED Calculator"
+$data = if ($env:MESA_DATA_DIR) { $env:MESA_DATA_DIR } else { Join-Path $env:ProgramData "Cyberpunk RED Calculator" }
 $config = Join-Path $data "config"
 $logs = Join-Path $data "logs"
 $envFile = Join-Path $config "host.env"

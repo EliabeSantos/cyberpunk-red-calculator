@@ -15,7 +15,7 @@ New-Item $stage -ItemType Directory | Out-Null
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw "npm is required on the Windows build runner." }
 if (-not (Test-Path $InnoSetup)) { throw "Inno Setup compiler not found: $InnoSetup" }
 Push-Location $root
-try { npm ci; npm run build; npm prune --omit=dev } finally { Pop-Location }
+try { npm ci; npm run build } finally { Pop-Location }
 $cache = Join-Path $env:TEMP "cyberpunk-red-installer-cache"
 New-Item $cache -ItemType Directory -Force | Out-Null
 foreach ($item in @(
@@ -40,6 +40,12 @@ Copy-Item "$root\desktop" "$stage\app\desktop" -Recurse
 Copy-Item "$root\src\app\favicon.ico" "$stage\app\favicon.ico"
 Remove-Item "$stage\app\scripts\windows" -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\supabase" "$stage\app\supabase" -Recurse
+Push-Location $root
+try { npm run dist:windows -- --publish never } finally { Pop-Location }
+Push-Location $root
+try { npm prune --omit=dev } finally { Pop-Location }
+Remove-Item "$stage\app\node_modules" -Recurse -Force
+Copy-Item "$root\node_modules" "$stage\app\node_modules" -Recurse
 & $InnoSetup "$root\installer\windows\CyberpunkRedCalculator.iss"
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE." }
 if (-not (Test-Path (Join-Path $output "CyberpunkRedCalculator-Setup.exe"))) {

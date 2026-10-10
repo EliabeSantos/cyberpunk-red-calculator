@@ -1,12 +1,18 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { app, BrowserWindow, dialog, Menu, shell } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
 const installRoot = path.resolve(__dirname, "..", "..");
-const dataRoot = path.join(process.env.ProgramData || "C:\\ProgramData", "Cyberpunk RED Calculator");
+const programDataRoot = path.join(process.env.ProgramData || "C:\\ProgramData", "Cyberpunk RED Calculator");
+const localDataRoot = path.join(process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || "C:\\Users\\Public", "AppData", "Local"), "Cyberpunk RED Calculator");
+const dataRoot = fs.existsSync(path.join(programDataRoot, "config", "host.env")) || fs.existsSync(path.join(programDataRoot, "postgres", "PG_VERSION"))
+  ? programDataRoot
+  : localDataRoot;
+process.env.MESA_DATA_DIR = dataRoot;
 const configFile = path.join(dataRoot, "config", "host.env");
 const bootstrapScript = path.join(installRoot, "windows", "bootstrap-host.ps1");
 const stopScript = path.join(installRoot, "windows", "stop-host.ps1");
@@ -14,6 +20,9 @@ const iconFile = path.join(installRoot, "app", "favicon.ico");
 
 let mainWindow;
 let isStopping = false;
+let updateState = "disabled";
+let updateVersion = "";
+let updateProgress = 0;
 app.setName("Cyberpunk RED Calculator");
 app.setAppUserModelId("com.cyberpunkred.calculator");
 
@@ -155,6 +164,84 @@ function createWindow() {
   void mainWindow.loadURL(localUrl());
 }
 
+function setUpdateTitle() {
+  if (!mainWindow) return;
+  const suffix = updateState === "downloading"
+    ? ` — Atualizando ${Math.round(updateProgress)}%`
+    : updateState === "ready"
+      ? " — Atualização pronta"
+      : updateState === "available"
+        ? " — Atualização disponível"
+        : "";
+  mainWindow.setTitle(`Cyberpunk RED Calculator${suffix}`);
+}
+
+async function installDownloadedUpdate() {
+  if (updateState !== "ready") return;
+  try {
+    await stopHost();
+    autoUpdater.quitAndInstall(false, true);
+  } catch {
+    void dialog.showMessageBox(mainWindow, {
+      type: "error",
+      title: "Atualização não instalada",
+      message: "A atualização foi baixada, mas não pôde ser instalada agora.",
+      detail: "O aplicativo continuará usando a versão atual. Tente novamente ao reiniciar.",
+      buttons: ["OK"],
+    });
+  }
+}
+
+function configureAutoUpdater() {
+  const manifest = path.join(process.resourcesPath, "app-update.yml");
+  if (!app.isPackaged || !fs.existsSync(manifest)) return;
+
+  updateState = "checking";
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.allowDowngrade = false;
+  autoUpdater.on("checking-for-update", () => {
+    updateState = "checking";
+    setUpdateTitle();
+  });
+  autoUpdater.on("update-available", (info) => {
+    updateState = "available";
+    updateVersion = info.version;
+    setUpdateTitle();
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    updateState = "downloading";
+    updateProgress = progress.percent;
+    setUpdateTitle();
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    updateState = "ready";
+    updateVersion = info.version;
+    setUpdateTitle();
+    void dialog.showMessageBox(mainWindow, {
+      type: "info",
+      title: "Atualização pronta",
+      message: `A versão ${info.version} foi baixada.`,
+      detail: "Você pode reiniciar agora para instalar ou continuar usando a versão atual.",
+      buttons: ["Reiniciar e atualizar", "Depois"],
+      defaultId: 0,
+      cancelId: 1,
+    }).then((result) => {
+      if (result.response === 0) return installDownloadedUpdate();
+      return undefined;
+    });
+  });
+  autoUpdater.on("error", () => {
+    updateState = "offline";
+    setUpdateTitle();
+  });
+
+  const check = () => autoUpdater.checkForUpdates().catch(() => undefined);
+  void check();
+  const interval = setInterval(check, 6 * 60 * 60 * 1000);
+  interval.unref();
+}
+
 function installApplicationMenu() {
   const addresses = Object.values(os.networkInterfaces())
     .flatMap((entries) => entries || [])
@@ -168,6 +255,10 @@ function installApplicationMenu() {
       label: "Ajuda",
       submenu: [
         { label: "Como conectar jogadores", click: () => void dialog.showMessageBox({ type: "info", title: "Conexão de jogadores", message: connectionText }) },
+        { label: "Atualizações", enabled: updateState !== "disabled", click: () => {
+          if (updateState === "ready") return installDownloadedUpdate();
+          return dialog.showMessageBox({ type: "info", title: "Atualizações", message: updateState === "offline" ? "A verificação será repetida quando houver conexão." : "O aplicativo verifica atualizações automaticamente em segundo plano." });
+        } },
         { role: "about" },
       ],
     },
@@ -177,8 +268,9 @@ function installApplicationMenu() {
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   try {
     await startHostWithRetry();
-    installApplicationMenu();
     createWindow();
+    configureAutoUpdater();
+    installApplicationMenu();
   } catch {
     app.quit();
   }

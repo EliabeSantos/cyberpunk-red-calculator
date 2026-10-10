@@ -17,6 +17,16 @@ O atalho **Cyberpunk RED Calculator** abre a janela desktop e inicia o host se n
 
 O modo de hospedagem não é uma configuração da mesa e não aparece na UI de jogadores ou mestres. Para consultar ou alterar `/api/hosting/config`, use o token do arquivo protegido somente no cabeçalho `Authorization: Bearer <token>` ou `x-host-admin-token`; `x-mesa-token`, `Host`, `Origin` e loopback não concedem administração. A troca entre Local e Supabase grava somente `MESA_HOSTING_MODE` no `host.env` protegido e exige reiniciar o servidor; o processo atual não muda de adapter no meio da execução e a alteração não é permitida enquanto há mesas ativas. O Supabase só aparece se `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` já estiverem configuradas no ambiente do host.
 
+## Aplicativo desktop e atualizações
+
+Novas instalações desktop são geradas com Electron Builder/NSIS em modo por usuário. O instalador NSIS fica em `installer/windows/electron-output`; ele instala o aplicativo em uma pasta do usuário e não solicita UAC durante a abertura, execução, migrations normais ou atualização. O instalador Inno Setup em `installer/windows/output` permanece como caminho legado compatível com instalações existentes; ele continua exigindo elevação somente para instalar/atualizar em `Program Files`.
+
+O Electron verifica atualizações somente quando o pacote contém `resources/app-update.yml`, baixa o artefato em segundo plano e oferece reinicialização quando a versão está pronta. Falhas de rede são ignoradas até a próxima tentativa e não impedem o modo local offline. A atualização substitui somente os arquivos do aplicativo; o banco, configurações, token administrativo, mesas e backups ficam em `ProgramData` para instalações legadas ou em `LOCALAPPDATA` para uma instalação desktop nova. Uma instalação nova detecta e reutiliza os dados legados existentes quando eles já estão presentes.
+
+O canal de publicação é GitHub Releases, configurado pelo `publish` do `package.json`. Para publicar uma versão real, faça bump de `version`, crie uma tag/release versionada e execute o build com `npm run dist:windows -- --publish always` em um runner Windows. Configure `GH_TOKEN` somente como secret do CI; nunca o coloque no aplicativo. Para distribuição segura, configure também assinatura de código via `CSC_LINK` e `CSC_KEY_PASSWORD` como secrets. Sem uma release NSIS publicada e assinada, a atualização automática não deve ser considerada operacional nem testada.
+
+O instalador Inno legado não é um alvo seguro para `electron-updater`: seu mecanismo de atualização é diferente do NSIS e ele fica em `Program Files`. A migração para atualizações automáticas ocorre ao instalar uma versão NSIS por usuário; a pasta de dados é preservada, mas essa transição precisa ser validada em Windows real antes de distribuição.
+
 ## Toolkit persistido no servidor
 
 Personagens independentes, inimigos personalizados e encontros salvos são gravados pelo servidor em `mesa_toolkit_records`, no PostgreSQL local quando `MESA_HOSTING_MODE=local`. O payload JSON mantém o formato atual (`Character` v2, `Enemy` v1 e `EncounterData`), enquanto `version`, `created_at` e `updated_at` controlam atualizações obsoletas. Encontros continuam sendo registros de preparação; o histórico de batalhas permanece em `mesa_battles` e seus snapshots não são substituídos.
