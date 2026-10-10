@@ -1,8 +1,8 @@
 /**
  * POST /api/mesa/[id]/combat/turn — finaliza o turno atual.
  *
- * Permitido para o dono do combatente ativo ou para o GM. Avança a lista,
- * sobe a rodada ao fim e reabre 2 ações / 6 m do próximo (Combat Engine).
+ * Permitido para o GM. Avança a lista, sobe a rodada ao fim e reabre 2 ações /
+ * MOVE × 2 m do próximo combatente.
  */
 import { errorResponse, ok, tokenFrom } from "@/lib/mesa/http";
 import { endTurn } from "@/lib/mesa/store";

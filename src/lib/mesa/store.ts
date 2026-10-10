@@ -3923,7 +3923,10 @@ async function updateCombatantLocalTransactional(
       [row.combat_id, session.id],
     );
   const combat = await repository.findCombatById(row.combat_id, session.id) as unknown as CombatRow | null;
-    const activeCombat = combat?.status === "active" ? combat : null;
+    // Um combate em lobby/preparação já pode existir com status `active`, mas
+    // ainda não possui turnos. O GM precisa posicionar os personagens nesse
+    // intervalo; o Movement Gateway só passa a valer depois da iniciativa.
+    const activeCombat = combat?.status === "active" && combat.initiative_started ? combat : null;
     const patch = (typeof rawPatch === "object" && rawPatch !== null ? rawPatch : {}) as Record<string, unknown>;
     const update: Record<string, unknown> = {};
 
@@ -7390,7 +7393,7 @@ export async function registerRoll(input: {
   return { registered: true, debited };
 }
 
-/** Finaliza o turno atual (somente GM; Player apenas solicita ações). */
+/** Finaliza o turno atual (somente GM; o avanço é autoritativo no servidor). */
 export async function endTurn(input: { sessionId: unknown; token: unknown }): Promise<void> {
   const { session, participant } = await authenticate(input.sessionId, input.token);
   requireGM({ session, participant });
