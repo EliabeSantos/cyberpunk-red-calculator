@@ -85,6 +85,19 @@ if (-not (Test-Path $adminTokenFile) -or [string]::IsNullOrWhiteSpace((Get-Conte
 }
 $hostEnvExists = Test-Path $envFile
 if ($hostEnvExists) {
+  # Keep the database credential stable across restarts. The bootstrap
+  # password file is intentionally removed after first setup, so generating
+  # a new password here would make the persisted host.env and PostgreSQL
+  # credentials diverge on the next launch.
+  $databaseUrlLine = Get-Content $envFile | Where-Object { $_ -match '^MESA_LOCAL_DATABASE_URL=' } | Select-Object -First 1
+  if ($databaseUrlLine) {
+    $databaseUrl = $databaseUrlLine.Substring('MESA_LOCAL_DATABASE_URL='.Length)
+    $databaseUri = [Uri]$databaseUrl
+    $separator = $databaseUri.UserInfo.IndexOf(':')
+    if ($separator -lt 0) { throw "MESA_LOCAL_DATABASE_URL has no database password." }
+    $password = [Uri]::UnescapeDataString($databaseUri.UserInfo.Substring($separator + 1))
+    $encodedPassword = [uri]::EscapeDataString($password)
+  }
   Get-Content $envFile | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } }
 }
 $configuredMode = if ($env:MESA_HOSTING_MODE) { $env:MESA_HOSTING_MODE.Trim().ToLowerInvariant() } else { $null }
