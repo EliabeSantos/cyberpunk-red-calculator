@@ -25,6 +25,7 @@ import {
 } from "@/lib/mesa/membershipStore";
 import { finishMesaTelemetry, markMesaTelemetry, startMesaTelemetry } from "@/lib/mesa/telemetry";
 import { createId } from "@/lib/id";
+import { getConfiguredMesaServerUrl } from "@/lib/mesa/remoteServer";
 
 const TOKEN_HEADER = "x-mesa-token";
 
@@ -56,13 +57,15 @@ async function api<T>(
   const body = options.body as Record<string, unknown> | undefined;
   const action = actionName(path, body);
   const sessionId = path.match(/\/api\/mesa\/([^/]+)/)?.[1];
+  const membership = sessionId ? listMemberships().find((entry) => entry.sessionId === decodeURIComponent(sessionId)) : undefined;
+  const serverUrl = membership?.serverUrl ?? getConfiguredMesaServerUrl();
   const resolutionId = typeof body?.resolutionId === "string" ? body.resolutionId : undefined;
   const traceId = startMesaTelemetry({ action, sessionId, resolutionId });
   const requestStartedAt = performance.now();
   markMesaTelemetry(traceId, { action, stage: "T1" });
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await fetch(serverUrl ? `${serverUrl}${path}` : path, {
       method: options.method ?? "GET",
       headers: {
         "content-type": "application/json",
@@ -124,23 +127,27 @@ export interface JoinResult {
 }
 
 export async function createMesa(input: { name: string; displayName: string }): Promise<JoinResult> {
+  const serverUrl = getConfiguredMesaServerUrl();
   const result = await api<JoinResult>("/api/mesa", { method: "POST", body: input });
   rememberMembership(result.session.joinCode, {
     sessionId: result.session.id,
     participantId: result.participant.id,
     displayName: result.participant.displayName,
     role: result.participant.role,
+    ...(serverUrl ? { serverUrl } : {}),
   });
   return result;
 }
 
 export async function joinMesa(input: { joinCode: string; displayName: string }): Promise<JoinResult> {
+  const serverUrl = getConfiguredMesaServerUrl();
   const result = await api<JoinResult>("/api/mesa/join", { method: "POST", body: input });
   rememberMembership(result.session.joinCode, {
     sessionId: result.session.id,
     participantId: result.participant.id,
     displayName: result.participant.displayName,
     role: result.participant.role,
+    ...(serverUrl ? { serverUrl } : {}),
   });
   return result;
 }

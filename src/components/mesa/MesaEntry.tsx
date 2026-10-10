@@ -53,6 +53,7 @@ import {
 import { playerMesaHref } from "@/lib/mesa/mesaRoute";
 import { ArrowLeftIcon, ChevronRightIcon, PlusIcon, RadioIcon, XIcon } from "@/components/icons";
 import AppDialog from "@/components/AppDialog";
+import { getConfiguredMesaServerUrl, isElectronRenderer, setConfiguredMesaServerUrl } from "@/lib/mesa/remoteServer";
 
 type Panel = "closed" | "home" | "create" | "join";
 
@@ -64,9 +65,16 @@ export default function MesaEntry() {
   // da ficha no cliente, então não há risco de divergência de hidratação.
   const [displayName, setDisplayName] = useState(defaultMesaDisplayName);
   const [joinCode, setJoinCode] = useState("");
+  const [serverUrl, setServerUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [leaveTarget, setLeaveTarget] = useState<{ sessionId: string; joinCode: string; role: "gm" | "player" } | null>(null);
+  const [electronRenderer, setElectronRenderer] = useState(false);
+
+  useEffect(() => {
+    setElectronRenderer(isElectronRenderer());
+    setServerUrl(getConfiguredMesaServerUrl() ?? "");
+  }, []);
 
   // Lista REATIVA das mesas deste navegador (mudou → re-render, sem efeito).
   const membershipStore = useSyncExternalStore(
@@ -176,6 +184,14 @@ export default function MesaEntry() {
     setError(null);
     setBusy(true);
     try {
+      if (electronRenderer) {
+        const configuredServerUrl = setConfiguredMesaServerUrl(serverUrl);
+        if (serverUrl.trim() && !configuredServerUrl) {
+          setError("Servidor remoto inválido. Use uma URL HTTP ou HTTPS, sem usuário ou senha.");
+          setBusy(false);
+          return;
+        }
+      }
       const result = await joinMesa({ joinCode: code, displayName });
       setPanel("closed");
       router.push(playerMesaHref(result.session.id));
@@ -333,6 +349,19 @@ export default function MesaEntry() {
                       maxLength={40}
                     />
                   </label>
+                  {electronRenderer && (
+                    <label>
+                      Servidor remoto (opcional)
+                      <input
+                        value={serverUrl}
+                        onChange={(event) => setServerUrl(event.target.value)}
+                        placeholder="http://26.50.194.224:3001"
+                        inputMode="url"
+                        autoComplete="url"
+                      />
+                      <small>Deixe vazio para usar o host local deste aplicativo.</small>
+                    </label>
+                  )}
                   <button
                     type="submit"
                     className="mesa-primary"

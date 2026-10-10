@@ -17,6 +17,8 @@ export interface MesaEntry {
   participantId: string;
   displayName: string;
   role: "gm" | "player";
+  /** Origem explícita quando a Mesa está hospedada em outro servidor. */
+  serverUrl?: string;
 }
 
 export interface StoredMembership {

@@ -140,6 +140,19 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=   # Project Settings → API → anon public
 7. Sem abrir o painel, role um ataque na ficha (**🎲 Rolar ataque**, card 03) e reabra a mesa: a rolagem já está em **Dados na mesa** e as Actions do turno foram debitadas.
 8. Repita o teste publicando em dois dispositivos (mesma LAN ou via túnel/ngrok).
 
+### Electron entrando em uma Mesa hospedada remotamente
+
+O Electron inicia um host local por projeto e, por isso, um código digitado
+nele consulta o PostgreSQL local por padrão. Códigos não são globais entre
+hosts. Para entrar em uma Mesa hospedada em outro servidor, informe a origem
+explicitamente no campo **Servidor remoto** do formulário de entrada, por
+exemplo `http://26.50.194.224:3001`. A origem fica salva apenas no perfil local
+do aplicativo e não há fallback automático para outro banco.
+
+O servidor remoto precisa estar atualizado com a versão que contém `src/proxy.ts`;
+isso permite as chamadas autenticadas do renderer Electron sem expor o
+PostgreSQL. O `x-mesa-token` continua sendo obrigatório para as rotas de Mesa.
+
 > O **código da mesa do Discord** (`🎲 Dados`) é uma coisa diferente do **código de convite da Mesa** (`joinCode`, 5 caracteres). Convite = quem entra na sessão; Discord = para onde a rolagem é publicada.
 
 ### Onde a mesa vive na interface
