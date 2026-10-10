@@ -5,7 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { LocalPostgresMesaRepository, LocalPostgresResolutionStore } from "@/lib/mesa/localPostgresInfrastructure";
 import { LocalMesaEventTransport } from "@/lib/mesa/localEventTransport";
-import type { MesaEventTransport, MesaRepository, ResolutionStore } from "@/lib/mesa/infrastructure";
+import type { MesaEventTransport, MesaRepository, ResolutionStore, ToolkitRepository } from "@/lib/mesa/infrastructure";
 
 export type MesaHostingMode = "supabase" | "local";
 
@@ -14,6 +14,7 @@ export interface MesaHostingInfrastructure {
   readonly repository: MesaRepository;
   readonly resolutionStore: ResolutionStore;
   readonly eventTransport: MesaEventTransport;
+  readonly toolkitRepository: ToolkitRepository;
   /** Disponível somente no modo local; Supabase não é simulado como transacional. */
   readonly beginLocalTransaction?: () => Promise<LocalPostgresTransactionContext>;
 }
@@ -387,6 +388,7 @@ export async function createMesaHostingInfrastructure(
     return {
       mode,
       repository: new LocalPostgresMesaRepository(pool),
+      toolkitRepository: new LocalPostgresMesaRepository(pool),
       resolutionStore: new LocalPostgresResolutionStore(pool),
       eventTransport,
       ...(lifecycle ? { beginLocalTransaction: () => lifecycle.beginTransaction() } : {}),
@@ -396,5 +398,5 @@ export async function createMesaHostingInfrastructure(
   // Import tardio: selecionar local não importa nem inicializa Supabase.
   const { SupabaseMesaEventTransport, SupabaseMesaRepository, SupabaseResolutionStore } = await import("@/lib/mesa/supabaseInfrastructure");
   const client = options.supabaseClient ?? (await import("@/lib/supabaseAdmin")).getSupabaseAdmin();
-  return { mode, repository: new SupabaseMesaRepository(client), resolutionStore: new SupabaseResolutionStore(client), eventTransport: new SupabaseMesaEventTransport() };
+  return { mode, repository: new SupabaseMesaRepository(client), toolkitRepository: new SupabaseMesaRepository(client), resolutionStore: new SupabaseResolutionStore(client), eventTransport: new SupabaseMesaEventTransport() };
 }

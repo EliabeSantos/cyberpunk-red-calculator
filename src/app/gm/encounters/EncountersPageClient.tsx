@@ -10,7 +10,6 @@ import {
   saveEncounter,
   loadEncounters,
   deleteEncounter,
-  getEncounter,
   ensureEncounterIds,
   updateParticipantHP,
   rollDamage,
@@ -36,6 +35,7 @@ import {
   type EncounterBattle,
   type EncounterData,
 } from "@/lib/gmStorage";
+import { loadRemoteEncounters, removeRemote, saveRemoteEncounter } from "@/lib/toolkitClient";
 import { gmEnemyCatalog, availableFactions } from "@/data/gm-enemies";
 import {
   buildEncounterRoster,
@@ -155,6 +155,12 @@ export default function EncountersPageClient() {
   const [previewSeed, setPreviewSeed] = useState(0);
   const [battles, setBattles] = useState<MesaBattle[]>([]);
   const [historyNotice, setHistoryNotice] = useState<string | null>(null);
+  const [toolkitError, setToolkitError] = useState<string | null>(null);
+
+  const persistEncounter = useCallback((value: EncounterData) => {
+    saveEncounter(value);
+    void saveRemoteEncounter(value).catch((error: unknown) => setToolkitError(error instanceof Error ? error.message : "Não foi possível salvar o encontro no servidor."));
+  }, []);
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [attackMode, setAttackMode] = useState<"normal" | "aimed">("aimed");
   const [aimedTarget, setAimedTarget] = useState<"head" | "leg" | "held_item">("head");
@@ -200,7 +206,10 @@ export default function EncountersPageClient() {
 
   // Load saved encounters
   useEffect(() => {
-    setSavedEncounters(loadEncounters());
+    let disposed = false;
+    void loadRemoteEncounters().then((entries) => { if (!disposed) setSavedEncounters(entries); })
+      .catch((error: unknown) => { if (!disposed) { setSavedEncounters(loadEncounters()); setToolkitError(error instanceof Error ? error.message : "Não foi possível carregar os encontros do servidor."); } });
+    return () => { disposed = true; };
   }, [phase]);
 
   /**
@@ -244,8 +253,8 @@ export default function EncountersPageClient() {
 
       const stored = reconcileEncountersWithBattles(loadEncounters(), list);
       if (stored.changed) {
-        stored.encounters.forEach((entry) => saveEncounter(entry));
-        setSavedEncounters(loadEncounters());
+        stored.encounters.forEach((entry) => persistEncounter(entry));
+        setSavedEncounters(stored.encounters);
       }
       setEncounter((current) =>
         current ? reconcileEncountersWithBattles([current], list).encounters[0] ?? current : null,
@@ -255,7 +264,7 @@ export default function EncountersPageClient() {
     return () => {
       disposed = true;
     };
-  }, [fetchHistory, phase, historyTick]);
+  }, [fetchHistory, persistEncounter, phase, historyTick]);
 
   // Voltou da mesa: vida dos inimigos (morte inclusive) e fim da partida
   // descem para o encontro, que é o registro permanente do Mestre. Só este
@@ -267,11 +276,11 @@ export default function EncountersPageClient() {
       const next = applyMesaStateToEncounter(encounter, mesaState);
       if (!next) return;
       setEncounter(next);
-      saveEncounter(next);
-      setSavedEncounters(loadEncounters());
+      persistEncounter(next);
+      setSavedEncounters((current) => current.map((entry) => entry.id === next.id ? next : entry));
     };
     apply();
-  }, [mesaState, encounter]);
+  }, [mesaState, encounter, persistEncounter]);
 
   const handleFactionChange = (f: string) => {
     setFaction(f);
@@ -316,12 +325,12 @@ export default function EncountersPageClient() {
   };
 
   const handleLoadEncounter = (id: string) => {
-    const found = getEncounter(id);
+    const found = savedEncounters.find((entry) => entry.id === id) ?? null;
     if (!found) return;
     // Encontros salvos antes do espelho de HP não têm id por participante:
     // completa aqui e guarda, para a chave não mudar entre uma carga e outra.
     const loaded = ensureEncounterIds(found);
-    if (loaded !== found) saveEncounter(loaded);
+    if (loaded !== found) persistEncounter(loaded);
     setEncounter(loaded);
     setPhase("combat");
     setActiveTab("list");
@@ -332,8 +341,8 @@ export default function EncountersPageClient() {
 
   const handleSaveEncounter = () => {
     if (!encounter) return;
-    saveEncounter(encounter);
-    setSavedEncounters(loadEncounters());
+    persistEncounter(encounter);
+    setSavedEncounters((current) => current.some((entry) => entry.id === encounter.id) ? current.map((entry) => entry.id === encounter.id ? encounter : entry) : [...current, encounter]);
   };
 
   /**
@@ -345,21 +354,23 @@ export default function EncountersPageClient() {
     if (!encounter) return;
     const next = { ...encounter, battle };
     setEncounter(next);
-    saveEncounter(next);
-    setSavedEncounters(loadEncounters());
+    persistEncounter(next);
+    setSavedEncounters((current) => current.map((entry) => entry.id === next.id ? next : entry));
   };
 
   const handleDeleteEncounter = (id: string) => {
-    deleteEncounter(id);
-    setSavedEncounters(loadEncounters());
+    void removeRemote("encounter", id).then(() => { deleteEncounter(id); setSavedEncounters((current) => current.filter((entry) => entry.id !== id)); })
+      .catch((error: unknown) => setToolkitError(error instanceof Error ? error.message : "Não foi possível excluir o encontro."));
     setShowConfirmDelete(null);
   };
 
   const handleClearAll = () => {
-    clearEncounters();
-    setSavedEncounters([]);
-    setPhase("setup");
-    setEncounter(null);
+    void Promise.all(savedEncounters.map((entry) => removeRemote("encounter", entry.id))).then(() => {
+      clearEncounters();
+      setSavedEncounters([]);
+      setPhase("setup");
+      setEncounter(null);
+    }).catch((error: unknown) => setToolkitError(error instanceof Error ? error.message : "Não foi possível remover os encontros."));
   };
 
   const handleHeal = (participantIndex: number) => {
@@ -629,6 +640,7 @@ export default function EncountersPageClient() {
 
   return (
     <div className="gm-page gm-encounters-page">
+      {toolkitError && <div role="alert" className="gm-access-denied">{toolkitError}</div>}
       <header className="gm-page-header">
         <div className="gm-page-header-main">
           <span className="gm-page-eyebrow">OPERAÇÃO // ENCONTROS</span>

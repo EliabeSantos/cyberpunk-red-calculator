@@ -25,6 +25,10 @@ import type {
   MesaSessionCreate,
   MesaRepository,
   MesaSessionRecord,
+  ToolkitRecord,
+  ToolkitRecordKind,
+  ToolkitRecordWrite,
+  ToolkitRepository,
   ResolutionClaim,
   ResolutionCommit,
   MoveResolutionCommitResult,
@@ -47,7 +51,7 @@ async function result<T>(
 }
 
 /** Adapter inicial. Reutiliza o cliente memoizado e validado já existente. */
-export class SupabaseMesaRepository implements MesaRepository {
+export class SupabaseMesaRepository implements MesaRepository, ToolkitRepository {
   private readonly client: SupabaseClient;
 
   constructor(client: SupabaseClient = getSupabaseAdmin()) {
@@ -69,9 +73,11 @@ export class SupabaseMesaRepository implements MesaRepository {
     return row?.net_architectures ?? null;
   }
 
-  updateSessionNetArchitectures(sessionId: string, architectures: unknown): Promise<MesaSessionRecord[]> {
+  updateSessionNetArchitectures(sessionId: string, architectures: unknown, expected?: unknown): Promise<MesaSessionRecord[]> {
+    let request = this.client.from("mesa_sessions").update({ net_architectures: architectures, updated_at: new Date().toISOString() }).eq("id", sessionId);
+    if (expected !== undefined) request = request.eq("net_architectures", typeof expected === "object" ? JSON.stringify(expected) : expected);
     return result(
-      this.client.from("mesa_sessions").update({ net_architectures: architectures, updated_at: new Date().toISOString() }).eq("id", sessionId).select("*"),
+      request.select("*"),
       "Falha ao atualizar a Architecture",
     ) as Promise<MesaSessionRecord[]>;
   }
@@ -172,6 +178,41 @@ export class SupabaseMesaRepository implements MesaRepository {
     ) as Promise<MesaCharacterRecord>;
   }
 
+  async listToolkitRecords(ownerToken: string, kind: ToolkitRecordKind): Promise<ToolkitRecord[]> {
+    return (await result(
+      this.client.from("mesa_toolkit_records").select("*").eq("owner_token", ownerToken).eq("kind", kind).order("updated_at", { ascending: false }),
+      "Falha ao listar dados do toolkit",
+    ) ?? []) as ToolkitRecord[];
+  }
+
+  findToolkitRecord(id: string, ownerToken: string, kind: ToolkitRecordKind): Promise<ToolkitRecord | null> {
+    return result(
+      this.client.from("mesa_toolkit_records").select("*").eq("id", id).eq("owner_token", ownerToken).eq("kind", kind).maybeSingle(),
+      "Falha ao consultar dado do toolkit",
+    ) as Promise<ToolkitRecord | null>;
+  }
+
+  async upsertToolkitRecord(input: ToolkitRecordWrite): Promise<ToolkitRecord> {
+    if (input.expectedVersion !== undefined) {
+      const row = await result(this.client.from("mesa_toolkit_records").update({ name: input.name, payload: input.payload })
+        .eq("id", input.id).eq("owner_token", input.ownerToken).eq("kind", input.kind).eq("version", input.expectedVersion).select("*").single(),
+        "Falha ao salvar dado do toolkit",
+      );
+      if (!row) throw new DatabaseQueryError("Falha ao salvar dado do toolkit: versão obsoleta ou registro não encontrado");
+      return row as ToolkitRecord;
+    }
+    const row = await result(this.client.from("mesa_toolkit_records").upsert({
+      id: input.id, owner_token: input.ownerToken, kind: input.kind, name: input.name,
+      payload: input.payload,
+    }, { onConflict: "id", ignoreDuplicates: false }).select("*").single(), "Falha ao salvar dado do toolkit");
+    if (!row) throw new DatabaseQueryError("Falha ao salvar dado do toolkit: versão obsoleta ou registro não encontrado");
+    return row as ToolkitRecord;
+  }
+
+  async deleteToolkitRecord(id: string, ownerToken: string, kind: ToolkitRecordKind): Promise<void> {
+    await result(this.client.from("mesa_toolkit_records").delete().eq("id", id).eq("owner_token", ownerToken).eq("kind", kind), "Falha ao remover dado do toolkit");
+  }
+
   findCombatBySession(sessionId: string): Promise<MesaCombatRecord | null> {
     return result(
       this.client.from("mesa_combats").select("*").eq("session_id", sessionId).maybeSingle(),
@@ -198,9 +239,11 @@ export class SupabaseMesaRepository implements MesaRepository {
     ) as Promise<MesaCombatRecord>;
   }
 
-  updateCombat(combatId: string, sessionId: string, patch: Readonly<Record<string, unknown>>): Promise<MesaCombatRecord[]> {
+  updateCombat(combatId: string, sessionId: string, patch: Readonly<Record<string, unknown>>, expected: Readonly<Record<string, unknown>> = {}): Promise<MesaCombatRecord[]> {
+    let request = this.client.from("mesa_combats").update(patch).eq("id", combatId).eq("session_id", sessionId);
+    for (const [name, value] of Object.entries(expected)) request = value === null ? request.is(name, null) : request.eq(name, typeof value === "object" ? JSON.stringify(value) : value);
     return result(
-      this.client.from("mesa_combats").update(patch).eq("id", combatId).eq("session_id", sessionId).select("*"),
+      request.select("*"),
       "Falha ao atualizar o combate",
     ) as Promise<MesaCombatRecord[]>;
   }
@@ -222,6 +265,18 @@ export class SupabaseMesaRepository implements MesaRepository {
       request.select("*"),
       "Falha ao registrar o evento",
     ) as Promise<MesaCombatRecord[]>;
+  }
+
+  async appendCombatEvent(combatId: string, sessionId: string, event: unknown, maxEvents: number): Promise<MesaCombatRecord[]> {
+    return (await result(
+      this.client.rpc("append_mesa_combat_event", {
+        p_combat_id: combatId,
+        p_session_id: sessionId,
+        p_event: event,
+        p_max_events: maxEvents,
+      }),
+      "Falha ao registrar o evento",
+    ) ?? []) as MesaCombatRecord[];
   }
 
   async findBattleByEncounter(encounterId: string): Promise<MesaBattleRecord | null> {

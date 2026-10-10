@@ -27,7 +27,7 @@ function poolConfig(url: string): { host?: string; database?: string; connection
 }
 
 function isLocalUrl(url: string): boolean {
-  return /^(?:postgres|postgresql):\/\/(?:[^/@]*@)?(?:localhost|127\.0\.0\.1|\[::1\])\//.test(url)
+  return /^(?:postgres|postgresql):\/\/(?:[^/@]*@)?(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\//.test(url)
     || /^(?:postgres|postgresql):\/\/(?:[^/@]*@)?\//.test(url);
 }
 
@@ -70,6 +70,9 @@ const tables = {
     "id", "session_id", "combat_id", "resolution_id", "claim_token", "status", "result",
     "created_at", "updated_at", "committed_at",
   ],
+  mesa_toolkit_records: [
+    "id", "owner_token", "kind", "name", "payload", "version", "created_at", "updated_at",
+  ],
 } as const;
 
 const indexes = [
@@ -80,6 +83,7 @@ const indexes = [
   "mesa_attack_resolutions_lookup_idx",
   "mesa_reload_resolutions_lookup_idx",
   "mesa_item_consume_resolutions_lookup_idx",
+  "mesa_toolkit_records_owner_kind_updated_idx",
 ];
 
 const constraints = [
@@ -106,6 +110,7 @@ const functions = [
   ["commit_mesa_quickhack_resolution", 19],
   ["commit_mesa_net_action_resolution", 16],
   ["commit_mesa_move_resolution_atomic", 12],
+  ["append_mesa_combat_event", 4],
 ];
 
 test("schema local contém tabelas, colunas, índices, constraints e funções dos adapters", {

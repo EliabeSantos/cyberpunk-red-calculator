@@ -36,6 +36,10 @@ import type {
   MesaRepository,
   MesaSessionCreate,
   MesaSessionRecord,
+  ToolkitRecord,
+  ToolkitRecordKind,
+  ToolkitRecordWrite,
+  ToolkitRepository,
   MoveResolutionCommitResult,
   ResolutionClaim,
   ResolutionCommit,
@@ -59,7 +63,7 @@ function column(name: string): string {
   return name;
 }
 
-export class LocalPostgresMesaRepository implements MesaRepository {
+export class LocalPostgresMesaRepository implements MesaRepository, ToolkitRepository {
   private readonly pool: Queryable;
 
   constructor(pool: Queryable) {
@@ -94,11 +98,11 @@ export class LocalPostgresMesaRepository implements MesaRepository {
     return rows[0]?.net_architectures ?? null;
   }
 
-  async updateSessionNetArchitectures(sessionId: string, architectures: unknown): Promise<MesaSessionRecord[]> {
+  async updateSessionNetArchitectures(sessionId: string, architectures: unknown, expected?: unknown): Promise<MesaSessionRecord[]> {
     return this.updateSession(sessionId, {
       net_architectures: architectures,
       updated_at: new Date().toISOString(),
-    });
+    }, expected === undefined ? {} : { net_architectures: expected });
   }
 
   async findSessionByJoinCode(joinCode: string): Promise<MesaSessionRecord | null> {
@@ -186,6 +190,50 @@ export class LocalPostgresMesaRepository implements MesaRepository {
     return rows[0];
   }
 
+  async listToolkitRecords(ownerToken: string, kind: ToolkitRecordKind): Promise<ToolkitRecord[]> {
+    return this.rows<ToolkitRecord>(
+      "select * from public.mesa_toolkit_records where owner_token = $1 and kind = $2 order by updated_at desc",
+      [ownerToken, kind],
+      "Falha ao listar dados do toolkit",
+    );
+  }
+
+  async findToolkitRecord(id: string, ownerToken: string, kind: ToolkitRecordKind): Promise<ToolkitRecord | null> {
+    const rows = await this.rows<ToolkitRecord>(
+      "select * from public.mesa_toolkit_records where id = $1 and owner_token = $2 and kind = $3 limit 1",
+      [id, ownerToken, kind],
+      "Falha ao consultar dado do toolkit",
+    );
+    return rows[0] ?? null;
+  }
+
+  async upsertToolkitRecord(input: ToolkitRecordWrite): Promise<ToolkitRecord> {
+    const params: unknown[] = [input.id, input.ownerToken, input.kind, input.name, jsonParameter(input.payload)];
+    const expected = input.expectedVersion;
+    const where = expected === undefined ? "" : " and version = $6";
+    if (expected !== undefined) params.push(expected);
+    const rows = await this.rows<ToolkitRecord>(
+      `insert into public.mesa_toolkit_records (id,owner_token,kind,name,payload)
+       values ($1,$2,$3,$4,$5::jsonb)
+       on conflict (id) do update set name = excluded.name, payload = excluded.payload,
+         version = public.mesa_toolkit_records.version + 1, updated_at = now()
+       where public.mesa_toolkit_records.owner_token = $2 and public.mesa_toolkit_records.kind = $3${where}
+       returning *`,
+      params,
+      "Falha ao salvar dado do toolkit",
+    );
+    if (!rows[0]) throw new DatabaseQueryError("Falha ao salvar dado do toolkit: versão obsoleta ou registro não encontrado");
+    return rows[0];
+  }
+
+  async deleteToolkitRecord(id: string, ownerToken: string, kind: ToolkitRecordKind): Promise<void> {
+    await this.rows(
+      "delete from public.mesa_toolkit_records where id = $1 and owner_token = $2 and kind = $3",
+      [id, ownerToken, kind],
+      "Falha ao remover dado do toolkit",
+    );
+  }
+
   private async updateRecord<T extends Record<string, unknown>>(
     table: "mesa_sessions" | "mesa_participants" | "mesa_combats",
     id: string,
@@ -244,8 +292,8 @@ export class LocalPostgresMesaRepository implements MesaRepository {
     return rows[0];
   }
 
-  async updateCombat(combatId: string, sessionId: string, patch: Readonly<Record<string, unknown>>): Promise<MesaCombatRecord[]> {
-    return this.updateRecord("mesa_combats", combatId, patch, "Falha ao atualizar o combate", sessionId);
+  async updateCombat(combatId: string, sessionId: string, patch: Readonly<Record<string, unknown>>, expected: Readonly<Record<string, unknown>> = {}): Promise<MesaCombatRecord[]> {
+    return this.updateRecord("mesa_combats", combatId, patch, "Falha ao atualizar o combate", sessionId, expected);
   }
 
   async findCombatEventLog(combatId: string, sessionId: string): Promise<unknown[]> {
@@ -271,6 +319,14 @@ export class LocalPostgresMesaRepository implements MesaRepository {
       "Falha ao registrar o evento",
       sessionId,
       expectedEventLog === undefined ? {} : { event_log: expectedEventLog },
+    );
+  }
+
+  async appendCombatEvent(combatId: string, sessionId: string, event: unknown, maxEvents: number): Promise<MesaCombatRecord[]> {
+    return this.rows<MesaCombatRecord>(
+      "select * from public.append_mesa_combat_event($1::uuid, $2::uuid, $3::jsonb, $4::integer)",
+      [combatId, sessionId, jsonParameter(event), maxEvents],
+      "Falha ao registrar o evento",
     );
   }
 

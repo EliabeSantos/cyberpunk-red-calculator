@@ -8,6 +8,7 @@ import type { Enemy } from "@/types/enemy";
 import { loadEnemies, removeEnemy, importCatalogEnemies } from "@/lib/gmStorage";
 import { threatLevelLabels } from "@/data/enemies";
 import { gmEnemyCatalog } from "@/data/gm-enemies";
+import { loadRemoteEnemies, removeRemote, saveRemoteEnemy } from "@/lib/toolkitClient";
 
 interface EnemyListProps {
   onEdit?: (enemy: Enemy) => void;
@@ -23,30 +24,31 @@ export default function EnemyList({ onEdit }: EnemyListProps) {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
 
-  const loadData = () => {
+  const loadData = async () => {
     setLoading(true);
-    const data = loadEnemies();
-    setEnemies(data);
-    setLoading(false);
+    try { setEnemies(await loadRemoteEnemies()); }
+    catch (error) { setEnemies(loadEnemies()); alert(error instanceof Error ? error.message : "Não foi possível carregar o catálogo."); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => {
-    loadData();
+    void loadData();
   }, []);
 
-  const handleDelete = (enemyId: string) => {
+  const handleDelete = async (enemyId: string) => {
     if (!confirm("Tem certeza que deseja excluir este inimigo? Esta ação não pode ser desfeita.")) return;
     setDeletingId(enemyId);
-    removeEnemy(enemyId);
-    setEnemies((prev) => prev.filter((e) => e.id !== enemyId));
-    setDeletingId(null);
+    try { await removeRemote("enemy", enemyId); removeEnemy(enemyId); setEnemies((prev) => prev.filter((e) => e.id !== enemyId)); }
+    catch (error) { alert(error instanceof Error ? error.message : "Não foi possível excluir o inimigo."); }
+    finally { setDeletingId(null); }
   };
 
   const handleImportCatalog = async () => {
     setImporting(true);
     try {
       const imported = importCatalogEnemies();
-      setEnemies(imported);
+      await Promise.all(imported.map((enemy) => saveRemoteEnemy(enemy)));
+      setEnemies(await loadRemoteEnemies());
     } catch (err) {
       console.error("Erro ao importar catálogo:", err);
     } finally {

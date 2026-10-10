@@ -1198,7 +1198,8 @@ async function syncActiveNetIceCombatants(
   providedRepository?: MesaRepository,
 ): Promise<void> {
   const repository = providedRepository ?? await mesaRepository();
-  const architectures = normalizeNetArchitectures(await repository.findSessionNetArchitectures(sessionId));
+  const rawArchitectures = await repository.findSessionNetArchitectures(sessionId);
+  const architectures = normalizeNetArchitectures(rawArchitectures);
   const nodes = architectures.flatMap((architecture) => architecture.floors.flatMap((floor) => floor.nodes
     .map((rawNode) => rawNode as NetBasicNode)
     .filter((node) => node.type === "black_ice" && node.blackIce && (node.blackIceState === "active" || node.blackIceState === "destroyed"))
@@ -1250,7 +1251,8 @@ async function clearNetIceEngagement(
 ): Promise<void> {
   const repository = providedRepository ?? await mesaRepository();
   if (!architectureId) return;
-  const architectures = normalizeNetArchitectures(await repository.findSessionNetArchitectures(sessionId));
+  const rawArchitectures = await repository.findSessionNetArchitectures(sessionId);
+  const architectures = normalizeNetArchitectures(rawArchitectures);
   let changed = false;
   const next = architectures.map((architecture) => architecture.id !== architectureId ? architecture : {
     ...architecture,
@@ -1264,7 +1266,7 @@ async function clearNetIceEngagement(
     })),
   });
   if (!changed) return;
-  const written = await repository.updateSessionNetArchitectures(sessionId, next);
+  const written = await repository.updateSessionNetArchitectures(sessionId, next, rawArchitectures);
   if (written.length !== 1) throw new MesaError("Falha ao limpar vínculo da ICE.", 409, "session_conflict");
 }
 
@@ -1291,7 +1293,7 @@ async function clearNetIceEngagementWithRepository(
     })),
   });
   if (!changed) return;
-  const written = await repository.updateSessionNetArchitectures(sessionId, next);
+  const written = await repository.updateSessionNetArchitectures(sessionId, next, raw);
   if (written.length !== 1) throw new DatabaseQueryError("Falha ao limpar vínculo da ICE: sessão não encontrada");
 }
 
@@ -2891,13 +2893,13 @@ export async function updateNetArchitectures(input: {
     architectures.push(architecture);
   }
   const repository = await mesaRepository();
-  const mapRow = await repository.findSessionById(session.id) as { tactical_map?: unknown } | null;
+  const mapRow = await repository.findSessionById(session.id) as { tactical_map?: unknown; net_architectures?: unknown } | null;
   const map = sanitizeTacticalMap(mapRow?.tactical_map);
   const architectureIds = new Set(architectures.map((architecture) => architecture.id));
   if ((map.accessPoints ?? []).some((accessPoint) => accessPoint.architectureId !== null && !architectureIds.has(accessPoint.architectureId))) {
     throw new MesaError("Remova ou reconfigure Access Points que apontam para arquiteturas removidas.", 409, "architecture_in_use");
   }
-  const written = await repository.updateSessionNetArchitectures(session.id, architectures);
+  const written = await repository.updateSessionNetArchitectures(session.id, architectures, mapRow?.net_architectures);
   if (written.length !== 1) throw new MesaError("Falha ao salvar arquiteturas NET.", 409, "session_conflict");
   return architectures;
 }
@@ -2931,7 +2933,9 @@ export async function positionCombatantPreparation(input: { sessionId: unknown; 
     map = sanitizeTacticalMap(sessionMap?.tactical_map);
   } catch { /* migration ainda não aplicada: usa escala padrão */ }
   await ensurePositionAvailable(session.id, combat.id, id, position, map, repository);
-  const written = await repository.updateCombatant({ id, sessionId: session.id, combatId: combat.id, patch: { position } });
+  const current = await repository.findCombatantById(id, { sessionId: session.id, combatId: combat.id });
+  if (!current) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
+  const written = await repository.updateCombatant({ id, sessionId: session.id, combatId: combat.id, patch: { position }, expected: { position: current.position ?? null } });
   if (written.length !== 1) throw new MesaError("Combatente não encontrado.", 404, "combatant_not_found");
 }
 
@@ -3159,38 +3163,11 @@ async function getActiveCombat(sessionId: string): Promise<CombatRow | null> {
  */
 export async function appendEvent(combatId: string, event: Omit<MesaEvent, "at">): Promise<void> {
   const infrastructure = await createMesaHostingInfrastructure();
-  if (infrastructure.mode === "supabase") {
-    const row = (await query(
-      getSupabaseAdmin().from("mesa_combats").select("event_log").eq("id", combatId).maybeSingle(),
-      "Falha ao consultar o histórico do combate",
-    )) as { event_log: MesaEvent[] | null } | null;
-    const currentLog = Array.isArray(row?.event_log) ? row.event_log : [];
-    if (event.resolutionId && currentLog.some((entry) => entry.resolutionId === event.resolutionId)) return;
-    const next = [...currentLog, { at: new Date().toISOString(), ...event }].slice(-MAX_EVENT_LOG);
-    await query(
-      getSupabaseAdmin().from("mesa_combats").update({ event_log: next, updated_at: new Date().toISOString() }).eq("id", combatId),
-      "Falha ao registrar o evento",
-    );
-    return;
-  }
   const repository = infrastructure.repository;
   const combat = await repository.findCombatById(combatId) as CombatRow | null;
   if (!combat) throw new MesaError("Combate não encontrado.", 404, "combat_not_found");
-
-  // O transporte local não tem um RPC de evento. O CAS no event_log fecha a
-  // janela de read-modify-write para ações concorrentes que já passaram pelo
-  // commit autoritativo da resolução. Em caso de corrida, relê o log e tenta
-  // novamente sem descartar silenciosamente nenhum evento.
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const currentLog = await repository.findCombatEventLog(combatId, combat.session_id);
-    if (event.resolutionId && currentLog.some((entry) => (
-      typeof entry === "object" && entry !== null && (entry as MesaEvent).resolutionId === event.resolutionId
-    ))) return;
-    const next = [...currentLog, { at: new Date().toISOString(), ...event }].slice(-MAX_EVENT_LOG);
-    const written = await repository.replaceCombatEventLog(combatId, combat.session_id, next, currentLog);
-    if (written.length === 1) return;
-  }
-  throw new MesaError("O histórico do combate mudou durante o registro do evento.", 409, "event_conflict");
+  const written = await repository.appendCombatEvent(combatId, combat.session_id, { at: new Date().toISOString(), ...event }, MAX_EVENT_LOG);
+  if (written.length !== 1) throw new MesaError("O histórico do combate não pôde ser atualizado.", 409, "event_conflict");
 }
 
 /**
@@ -3204,12 +3181,7 @@ async function appendEventWithRepository(
   sessionId: string,
   event: Omit<MesaEvent, "at">,
 ): Promise<void> {
-  const currentLog = await repository.findCombatEventLog(combatId, sessionId);
-  if (event.resolutionId && currentLog.some((entry) => (
-    typeof entry === "object" && entry !== null && (entry as MesaEvent).resolutionId === event.resolutionId
-  ))) return;
-  const next = [...currentLog, { at: new Date().toISOString(), ...event }].slice(-MAX_EVENT_LOG);
-  const written = await repository.replaceCombatEventLog(combatId, sessionId, next, currentLog);
+  const written = await repository.appendCombatEvent(combatId, sessionId, { at: new Date().toISOString(), ...event }, MAX_EVENT_LOG);
   if (written.length !== 1) throw new DatabaseQueryError("Falha ao registrar o evento: combate não encontrado");
 }
 
@@ -4083,18 +4055,11 @@ async function addEnemiesLocalTransactional(
     });
 
     await repository.insertCombatants(rows, "Falha ao adicionar inimigos");
-    const currentLog = await repository.findCombatEventLog(combat.id, session.id);
-    const event: MesaEvent = {
+    const updated = await repository.appendCombatEvent(combat.id, session.id, {
       at: new Date().toISOString(),
       kind: "enemy",
       text: `${rows.length} inimigo(s) adicionado(s)`,
-    };
-    const updated = await repository.replaceCombatEventLog(
-      combat.id,
-      session.id,
-      [...currentLog, event].slice(-MAX_EVENT_LOG),
-      currentLog,
-    );
+    }, MAX_EVENT_LOG);
     if (updated.length === 0) {
       throw new MesaError("Combate não encontrado.", 404, "combat_not_found");
     }
@@ -5910,6 +5875,24 @@ async function advanceActiveTurnLocal(
   const alive = new Set(ordered.filter((entry) => !entry.isDead).map((entry) => entry.id));
   const advance = advanceTurn(order, combat.active_combatant_id, combat.round, (id) => alive.has(id));
   const now = new Date().toISOString();
+
+  // Supabase does not provide the local adapter's surrounding transaction.
+  // Claim this exact turn before any side effect; a second request with the
+  // same stale snapshot receives a conflict instead of resetting budgets or
+  // appending a second turn event.
+  let turnClaimRequest = db().from("mesa_combats").update({ updated_at: now })
+    .eq("id", combat.id)
+    .eq("session_id", sessionId)
+    .eq("active_combatant_id", combat.active_combatant_id)
+    .eq("round", combat.round);
+  if (combat.updated_at) turnClaimRequest = turnClaimRequest.eq("updated_at", combat.updated_at);
+  const turnClaim = await query(
+    turnClaimRequest.select("id"),
+    "Falha ao reservar o turno",
+  ) as Array<{ id: string }> | null;
+  if (!turnClaim || turnClaim.length !== 1) {
+    throw new MesaError("O turno mudou enquanto esta ação era processada; atualize a Mesa.", 409, "turn_conflict");
+  }
 
   if (advance.kind === "finished") {
     if (options.removeActiveCombatantId) {

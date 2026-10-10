@@ -12,6 +12,7 @@ import DiscordConsentPrompt from "@/components/discord/DiscordConsentPrompt";
 import { getDiscordConsent, setDiscordConsent, type DiscordConsent } from "@/lib/discord/consent";
 import { findNewRollEntry, notifyDiscordRoll } from "@/lib/discord/rollNotify";
 import { getActiveCharacter, upsertCharacter } from "@/lib/storage";
+import { loadRemoteCharacters, saveRemoteCharacter } from "@/lib/toolkitClient";
 import { maybePushSheet, applyMesaHealingItem, reloadMesa, registerMesaInitiative, rollMesaDeathSave } from "@/lib/mesa/client";
 import { getMembershipSnapshot, getServerMembershipSnapshot, subscribeToMembership } from "@/lib/mesa/membershipStore";
 import { useMesaState } from "@/lib/mesa/useMesaState";
@@ -41,6 +42,7 @@ export default function CharacterToolkit() {
   const [character, setCharacter] = useState<Character | null>(null);
   const [screen, setScreen] = useState<Screen>("creator");
   const [ready, setReady] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [discordConsent, setDiscordConsentState] = useState<DiscordConsent | null>(null);
   const memberships = useSyncExternalStore(subscribeToMembership, getMembershipSnapshot, getServerMembershipSnapshot);
   // F1.12.7 — mesma detecção de "Mesa ativa" do botão "Mesa": candidata do
@@ -203,11 +205,25 @@ export default function CharacterToolkit() {
   }, [character, mesa.refresh, mesa.state, mesaCombatActive]);
 
   useEffect(() => {
-    const savedCharacter = getActiveCharacter();
-    setCharacter(savedCharacter);
-    setScreen(savedCharacter ? "sheet" : "creator");
-    setDiscordConsentState(getDiscordConsent());
-    setReady(true);
+    let disposed = false;
+    void loadRemoteCharacters().then((characters) => {
+      if (disposed) return;
+      const activeId = getActiveCharacter()?.id;
+      const savedCharacter = characters.find((entry) => entry.id === activeId) ?? characters[0] ?? null;
+      setCharacter(savedCharacter);
+      setScreen(savedCharacter ? "sheet" : "creator");
+      setDiscordConsentState(getDiscordConsent());
+      setReady(true);
+    }).catch((error: unknown) => {
+      if (disposed) return;
+      const savedCharacter = getActiveCharacter();
+      setCharacter(savedCharacter);
+      setScreen(savedCharacter ? "sheet" : "creator");
+      setSaveError(error instanceof Error ? error.message : "Não foi possível carregar as fichas do servidor.");
+      setDiscordConsentState(getDiscordConsent());
+      setReady(true);
+    });
+    return () => { disposed = true; };
   }, []);
 
   // O snapshot já foi validado pelo servidor. Esta convergência local não usa
@@ -217,6 +233,7 @@ export default function CharacterToolkit() {
     const synchronized = syncMesaCharacterState(character, mesa.state);
     if (synchronized === character) return;
     upsertCharacter(synchronized);
+    void saveRemoteCharacter(synchronized).catch((error: unknown) => setSaveError(error instanceof Error ? error.message : "Não foi possível salvar a ficha."));
     setCharacter(synchronized);
   }, [character, mesa.state, sheetMode]);
 
@@ -234,6 +251,7 @@ export default function CharacterToolkit() {
     publishMesaRoll(newRoll);
     if (!mesaCombatActive) publishMesaHp(character, next);
     upsertCharacter(next);
+    void saveRemoteCharacter(next).catch((error: unknown) => setSaveError(error instanceof Error ? error.message : "Não foi possível salvar a ficha."));
     setCharacter(next);
     if (!mesaCombatActive) void maybePushSheet(next);
   }
@@ -246,14 +264,16 @@ export default function CharacterToolkit() {
     screen === "creator" ? (
       <CharacterCreator
         initialCharacter={character ?? undefined}
-        onSaved={(saved) => {
+        onSaved={async (saved) => {
           // Editar a ficha também muda vida (HP máximo, morte): espelha igual ao
           // caminho normal, sem depender de nenhuma outra parte do salvamento.
            const next = mesaCombatActive && mesa.state
              ? syncMesaCharacterState(saved, mesa.state)
              : saved;
            if (!mesaCombatActive) publishMesaHp(character, next);
-           upsertCharacter(next);
+             upsertCharacter(next);
+             try { await saveRemoteCharacter(next); }
+             catch (error: unknown) { setSaveError(error instanceof Error ? error.message : "Não foi possível salvar a ficha."); return; }
            setCharacter(next);
           setScreen("sheet");
         }}
@@ -279,7 +299,8 @@ export default function CharacterToolkit() {
 
   return (
     <>
-      {discordConsent === null && <DiscordConsentPrompt onDecide={handleDiscordConsent} />}
+       {saveError && <div role="alert" className="gm-access-denied">{saveError}</div>}
+       {discordConsent === null && <DiscordConsentPrompt onDecide={handleDiscordConsent} />}
       {content}
     </>
   );

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { upsertEnemy, getEnemy } from "@/lib/gmStorage";
+import { loadRemoteEnemies, saveRemoteEnemy } from "@/lib/toolkitClient";
 import { normalizeSkillId } from "@/data/skills";
 import { createEmptyEnemy, getEnemySkill, newEnemySkillId } from "@/types/enemy";
 import { archetypeOptions, threatLevels, threatLevelLabels } from "@/data/enemies";
@@ -79,12 +80,10 @@ export default function CreateEnemyPageClient() {
   // Load enemy data when editing
   useEffect(() => {
     if (isEditing && editingId) {
-      const existing = getEnemy(editingId);
-      if (existing) {
-        setEnemy(existing);
-      } else {
-        setError("Inimigo não encontrado");
-      }
+      void loadRemoteEnemies().then((enemies) => {
+        const existing = enemies.find((entry) => entry.id === editingId);
+        if (existing) setEnemy(existing); else setError("Inimigo não encontrado");
+      }).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Não foi possível carregar o inimigo."));
     }
   }, [editingId, isEditing]);
 
@@ -164,6 +163,7 @@ export default function CreateEnemyPageClient() {
     setSaving(true);
     setError(null);
     try {
+      await saveRemoteEnemy(enemy);
       upsertEnemy(enemy);
       router.push("/gm");
     } catch (err) {

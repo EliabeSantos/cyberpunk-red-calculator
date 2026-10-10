@@ -37,7 +37,7 @@ function disposableDatabaseName(url: string): string | null {
 }
 
 function isLocalUrl(url: string): boolean {
-  return /^(postgresql|postgres):\/\/(localhost|127\.0\.0\.1|\[::1\])\//.test(url)
+  return /^(?:postgresql|postgres):\/\/(?:[^/@]*@)?(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\//.test(url)
     || /^(postgresql|postgres):\/\//.test(url) && !/\/\/[^/@]*@/.test(url);
 }
 

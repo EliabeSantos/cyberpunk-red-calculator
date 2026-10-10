@@ -60,6 +60,35 @@ export interface MesaCharacterUpsert {
   updatedAt: string;
 }
 
+export type ToolkitRecordKind = "character" | "enemy" | "encounter";
+
+export interface ToolkitRecord {
+  id: string;
+  owner_token: string;
+  kind: ToolkitRecordKind;
+  name: string;
+  payload: unknown;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ToolkitRecordWrite {
+  id: string;
+  ownerToken: string;
+  kind: ToolkitRecordKind;
+  name: string;
+  payload: unknown;
+  expectedVersion?: number;
+}
+
+export interface ToolkitRepository {
+  listToolkitRecords(ownerToken: string, kind: ToolkitRecordKind): Promise<ToolkitRecord[]>;
+  findToolkitRecord(id: string, ownerToken: string, kind: ToolkitRecordKind): Promise<ToolkitRecord | null>;
+  upsertToolkitRecord(input: ToolkitRecordWrite): Promise<ToolkitRecord>;
+  deleteToolkitRecord(id: string, ownerToken: string, kind: ToolkitRecordKind): Promise<void>;
+}
+
 export interface MesaCombatRecord {
   id: string;
   session_id: string;
@@ -161,7 +190,7 @@ export interface MesaRepository {
   findSessionById(sessionId: string): Promise<MesaSessionRecord | null>;
   /** Leitura/escrita do snapshot NET da sessão; projeção permanece no store. */
   findSessionNetArchitectures(sessionId: string): Promise<unknown | null>;
-  updateSessionNetArchitectures(sessionId: string, architectures: unknown): Promise<MesaSessionRecord[]>;
+  updateSessionNetArchitectures(sessionId: string, architectures: unknown, expected?: unknown): Promise<MesaSessionRecord[]>;
   findSessionByJoinCode(joinCode: string): Promise<MesaSessionRecord | null>;
   createSession(input: MesaSessionCreate): Promise<MesaSessionRecord>;
   updateSession(sessionId: string, patch: Readonly<Record<string, unknown>>, expected?: Readonly<Record<string, unknown>>): Promise<MesaSessionRecord[]>;
@@ -176,7 +205,7 @@ export interface MesaRepository {
   findCombatBySession(sessionId: string): Promise<MesaCombatRecord | null>;
   findCombatById(combatId: string, sessionId?: string): Promise<MesaCombatRecord | null>;
   createCombat(input: MesaCombatCreate): Promise<MesaCombatRecord>;
-  updateCombat(combatId: string, sessionId: string, patch: Readonly<Record<string, unknown>>): Promise<MesaCombatRecord[]>;
+  updateCombat(combatId: string, sessionId: string, patch: Readonly<Record<string, unknown>>, expected?: Readonly<Record<string, unknown>>): Promise<MesaCombatRecord[]>;
   findCombatEventLog(combatId: string, sessionId: string): Promise<unknown[]>;
   replaceCombatEventLog(
     combatId: string,
@@ -184,6 +213,8 @@ export interface MesaRepository {
     eventLog: unknown,
     expectedEventLog?: unknown,
   ): Promise<MesaCombatRecord[]>;
+  /** Appends atomically and deduplicates by event resolutionId in the database. */
+  appendCombatEvent(combatId: string, sessionId: string, event: unknown, maxEvents: number): Promise<MesaCombatRecord[]>;
   findBattleByEncounter(encounterId: string): Promise<MesaBattleRecord | null>;
   findActiveBattle(sessionId: string): Promise<MesaBattleRecord | null>;
   createBattle(input: MesaBattleCreate): Promise<MesaBattleRecord>;

@@ -17,6 +17,14 @@ O atalho **Cyberpunk RED Calculator** inicia o host e abre `http://localhost:300
 
 O modo de hospedagem não é uma configuração da mesa e não aparece na UI de jogadores ou mestres. Para consultar ou alterar `/api/hosting/config`, use o token do arquivo protegido somente no cabeçalho `Authorization: Bearer <token>` ou `x-host-admin-token`; `x-mesa-token`, `Host`, `Origin` e loopback não concedem administração. A troca entre Local e Supabase grava somente `MESA_HOSTING_MODE` no `host.env` protegido e exige reiniciar o servidor; o processo atual não muda de adapter no meio da execução e a alteração não é permitida enquanto há mesas ativas. O Supabase só aparece se `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` já estiverem configuradas no ambiente do host.
 
+## Toolkit persistido no servidor
+
+Personagens independentes, inimigos personalizados e encontros salvos são gravados pelo servidor em `mesa_toolkit_records`, no PostgreSQL local quando `MESA_HOSTING_MODE=local`. O payload JSON mantém o formato atual (`Character` v2, `Enemy` v1 e `EncounterData`), enquanto `version`, `created_at` e `updated_at` controlam atualizações obsoletas. Encontros continuam sendo registros de preparação; o histórico de batalhas permanece em `mesa_battles` e seus snapshots não são substituídos.
+
+As rotas `/api/toolkit/characters`, `/api/toolkit/enemies` e `/api/toolkit/encounters` não expõem credenciais ao navegador. Personagens usam o token de identidade da Mesa; inimigos e encontros exigem um participante GM autenticado pelo servidor (`sessionId` e `x-mesa-token`). Um jogador comum não consegue listar ou alterar o catálogo privado. Na primeira carga, registros válidos existentes no `localStorage` são importados somente se o ID ainda não existir no servidor; a origem local não é removida antes da confirmação e novas tentativas são idempotentes. Depois da sincronização, `localStorage` funciona apenas como cache/compatibilidade, não como fonte autoritativa.
+
+O acesso aos dados de um navegador diferente ainda requer uma identidade de Mesa válida; a persistência não elimina a necessidade de autenticação. Não copie tokens para URLs, logs ou repositórios.
+
 O token inicial é gerado por fonte criptográfica do Windows, não é fixo nem impresso em respostas HTTP ou logs. Um administrador local pode lê-lo diretamente no arquivo protegido para uma operação administrativa, por exemplo:
 
 ```powershell
