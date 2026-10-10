@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { hasGMAccess, enableGMAccessForDevelopment, setGMSession } from "@/lib/gmStorage";
+import AppDialog from "@/components/AppDialog";
 
 interface GMAccessGateProps {
   children: React.ReactNode;
@@ -16,6 +17,7 @@ export default function GMAccessGate({ children, fallback }: GMAccessGateProps) 
   const [checking, setChecking] = useState(true);
   const [showDevLogin, setShowDevLogin] = useState(false);
   const [devPassword, setDevPassword] = useState("");
+  const [loginError, setLoginError] = useState(false);
 
   useEffect(() => {
     // Check if user has GM access
@@ -32,7 +34,7 @@ export default function GMAccessGate({ children, fallback }: GMAccessGateProps) 
       setAuthorized(true);
       setShowDevLogin(false);
     } else {
-      alert("Senha incorreta. Dica: gm2024 ou cyberpunk");
+      setLoginError(true);
     }
   };
 
@@ -52,13 +54,14 @@ export default function GMAccessGate({ children, fallback }: GMAccessGateProps) 
 
   if (!authorized) {
     return (
-      <section className="gm-access-denied" role="alert">
-        <div className="gm-access-card">
-          <div className="gm-access-icon" aria-hidden="true">🔒</div>
-          <h1>Área Restrita do GM</h1>
-          <p className="gm-access-description">
-            Esta área é exclusiva para Mestres de Jogo. O acesso requer autenticação.
-          </p>
+      <>
+        <section className="gm-access-denied" role="alert">
+          <div className="gm-access-card">
+            <div className="gm-access-icon" aria-hidden="true">🔒</div>
+            <h1>Área Restrita do GM</h1>
+            <p className="gm-access-description">
+              Esta área é exclusiva para Mestres de Jogo. O acesso requer autenticação.
+            </p>
           
           {!showDevLogin ? (
             <div className="gm-access-actions">
@@ -111,8 +114,15 @@ export default function GMAccessGate({ children, fallback }: GMAccessGateProps) 
               <p>A estrutura está preparada para receber <code>userId</code>, <code>role</code>, <code>permissions</code>, etc.</p>
             </div>
           </details>
-        </div>
-      </section>
+          </div>
+        </section>
+        <AppDialog
+          open={loginError}
+          title="Senha incorreta"
+          message="A senha informada não confere. Use uma senha de desenvolvimento válida para continuar."
+          onConfirm={() => setLoginError(false)}
+        />
+      </>
     );
   }
 

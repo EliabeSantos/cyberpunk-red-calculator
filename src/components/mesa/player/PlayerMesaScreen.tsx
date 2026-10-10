@@ -56,6 +56,7 @@ import TurnStatus from "./TurnStatus";
 import TacticalView from "./TacticalView";
 import type { NoticeFn, RunAction, RunOptions } from "./types";
 import FloatingUpdateCard, { type FloatingUpdate } from "@/components/FloatingUpdateCard";
+import AppDialog from "@/components/AppDialog";
 
 const EMPTY_WEAPONS: Character["weapons"] = [];
 
@@ -72,6 +73,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
   const [notice, setNotice] = useState<FloatingUpdate[]>([]);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const [targetDraft, setTargetDraft] = useState("");
   const [gmTargetDraft, setGmTargetDraft] = useState("");
   const [selectedWeaponId, setSelectedWeaponId] = useState("");
@@ -187,10 +189,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
   const playerSelectedAttack = attacks.find((attack) => attack.id === selectedAttackId) ?? attacks[0] ?? null;
 
   async function handleLeave() {
-    const message = isGM
-      ? "Encerrar a mesa? O estado será salvo no banco e a sessão ficará disponível apenas para histórico."
-      : "Sair da mesa? Para voltar você vai precisar do código de novo.";
-    if (!window.confirm(message)) return;
+    setLeaveDialogOpen(false);
     setLeaving(true);
     try {
       if (isGM) await closeMesa(state.session.id, state.session.joinCode);
@@ -231,7 +230,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
         leaving={leaving}
         busy={busy}
         onNotice={onNotice}
-        onLeave={() => void handleLeave()}
+        onLeave={() => setLeaveDialogOpen(true)}
         onEndCombat={() => void run(() => endCombat(state.session.id), { success: "Combate encerrado." })}
       />
 
@@ -240,6 +239,16 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
       )}
 
       <FloatingUpdateCard updates={notice} />
+
+      <AppDialog
+        open={leaveDialogOpen}
+        kind="confirm"
+        title={isGM ? "Encerrar mesa?" : "Sair da mesa?"}
+        message={isGM ? "O estado será salvo e a sessão ficará disponível apenas para histórico." : "Para voltar, você precisará do código novamente."}
+        confirmLabel={isGM ? "Encerrar mesa" : "Sair da mesa"}
+        onConfirm={() => void handleLeave()}
+        onCancel={() => setLeaveDialogOpen(false)}
+      />
 
       <ActionFeedback busy={busy} />
 

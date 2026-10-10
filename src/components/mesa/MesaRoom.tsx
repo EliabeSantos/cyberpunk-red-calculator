@@ -39,6 +39,7 @@ import type { MesaState } from "@/lib/mesa/types";
 import { useAutoLinkCharacter } from "@/lib/mesa/useAutoLinkCharacter";
 import { useMesaState } from "@/lib/mesa/useMesaState";
 import FloatingUpdateCard, { type FloatingUpdate } from "@/components/FloatingUpdateCard";
+import AppDialog from "@/components/AppDialog";
 
 interface Props {
   joinCode: string;
@@ -202,6 +203,7 @@ interface ViewProps {
 
 function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onChanged, onRefresh, onClose }: ViewProps) {
   const [leaving, setLeaving] = useState(false);
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const [inviteLink] = useState(() => `${window.location.origin}/mesa/${joinCode}`);
 
   const isGM = state.viewer.role === "gm";
@@ -220,12 +222,9 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
    * Desconexão manual — um dos dois caminhos de saída da mesa (o outro é o
    * Mestre encerrar a sessão). Sai no servidor e apaga a assinatura local.
    */
-  async function handleLeave() {
-    const message = isGM && !sessionFinished
-      ? "Encerrar a mesa? O estado será salvo no banco e a sessão ficará disponível apenas para histórico."
-      : "Sair da mesa? Para voltar você vai precisar do código de novo.";
-    if (!window.confirm(message)) return;
+  async function confirmLeave() {
     setLeaving(true);
+    setLeaveDialogOpen(false);
     try {
       if (isGM) await closeMesa(sessionId, joinCode);
       else await leaveMesa(sessionId, joinCode);
@@ -237,6 +236,7 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
   }
 
   return (
+    <>
     <div className="mesa-shell">
       <header className="mesa-header">
         <div className="mesa-title">
@@ -317,12 +317,22 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
             type="button"
             className="mesa-ghost mesa-leave"
             disabled={leaving}
-            onClick={() => void handleLeave()}
+            onClick={() => setLeaveDialogOpen(true)}
           >
             {leaving ? "Saindo..." : "Sair da mesa"}
           </button>
         )}
       </footer>
     </div>
+    <AppDialog
+      open={leaveDialogOpen}
+      kind="confirm"
+      title={isGM && !sessionFinished ? "Encerrar mesa?" : "Sair da mesa?"}
+      message={isGM && !sessionFinished ? "O estado será salvo e a sessão ficará disponível apenas para histórico." : "Para voltar, você precisará do código novamente."}
+      confirmLabel={isGM && !sessionFinished ? "Encerrar mesa" : "Sair da mesa"}
+      onConfirm={() => void confirmLeave()}
+      onCancel={() => setLeaveDialogOpen(false)}
+    />
+    </>
   );
 }

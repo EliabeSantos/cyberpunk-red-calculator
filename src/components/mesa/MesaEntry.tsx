@@ -52,6 +52,7 @@ import {
 } from "@/lib/mesa/membershipStore";
 import { playerMesaHref } from "@/lib/mesa/mesaRoute";
 import { ArrowLeftIcon, ChevronRightIcon, PlusIcon, RadioIcon, XIcon } from "@/components/icons";
+import AppDialog from "@/components/AppDialog";
 
 type Panel = "closed" | "home" | "create" | "join";
 
@@ -65,6 +66,7 @@ export default function MesaEntry() {
   const [joinCode, setJoinCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [leaveTarget, setLeaveTarget] = useState<{ sessionId: string; joinCode: string; role: "gm" | "player" } | null>(null);
 
   // Lista REATIVA das mesas deste navegador (mudou → re-render, sem efeito).
   const membershipStore = useSyncExternalStore(
@@ -190,11 +192,10 @@ export default function MesaEntry() {
   }
 
   /** Um dos dois caminhos de saída da mesa: o próprio jogador pede. */
-  async function handleLeave(mesa: { sessionId: string; joinCode: string; role: "gm" | "player" }) {
-    const message = mesa.role === "gm"
-      ? `Encerrar a mesa ${mesa.joinCode}? O estado será salvo e ficará disponível apenas para histórico.`
-      : `Sair da mesa ${mesa.joinCode}? Para voltar você vai precisar do código.`;
-    if (!window.confirm(message)) return;
+  async function confirmLeave() {
+    if (!leaveTarget) return;
+    const mesa = leaveTarget;
+    setLeaveTarget(null);
     setError(null);
     setBusy(true);
     try {
@@ -296,7 +297,7 @@ export default function MesaEntry() {
                               type="button"
                               className="mesa-known-leave"
                               disabled={busy}
-                              onClick={() => void handleLeave(mesa)}
+                               onClick={() => setLeaveTarget(mesa)}
                             >
                               Sair
                             </button>
@@ -392,6 +393,15 @@ export default function MesaEntry() {
       </button>
 
       {modal}
+      <AppDialog
+        open={leaveTarget !== null}
+        kind="confirm"
+        title={leaveTarget?.role === "gm" ? "Encerrar mesa?" : "Sair da mesa?"}
+        message={leaveTarget?.role === "gm" ? `O estado de ${leaveTarget.joinCode} será salvo e ficará disponível apenas para histórico.` : `Para voltar à mesa ${leaveTarget?.joinCode}, você precisará do código novamente.`}
+        confirmLabel={leaveTarget?.role === "gm" ? "Encerrar mesa" : "Sair da mesa"}
+        onConfirm={() => void confirmLeave()}
+        onCancel={() => setLeaveTarget(null)}
+      />
     </>
   );
 }

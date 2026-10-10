@@ -13,7 +13,7 @@ partir de `app\node_modules` e não deve ser o artefato usado para testar
 atualização automática do `electron-updater`. Para releases com atualização
 automática, distribua o `*Setup.exe` de `installer/windows/electron-output`.
 
-## Publicar uma versão
+## Publicar uma versão manualmente
 
 1. Atualize `version` em `package.json` para uma versão semver maior que a
    publicada anteriormente. Atualize também `installer/windows/CyberpunkRedCalculator.iss`
@@ -64,6 +64,40 @@ Os eventos do atualizador ficam em:
 Os logs do host e do PostgreSQL continuam nos arquivos existentes no mesmo
 diretório. Falhas de internet, download ou instalação mantêm a versão atual
 funcionando e podem ser repetidas pelo menu de atualizações.
+
+## Publicação automática pelo GitHub Actions
+
+O workflow `.github/workflows/release.yml` publica somente tags SemVer estáveis
+no formato `vX.Y.Z`, cujo commit já esteja na branch `main`. Ele valida a
+versão, executa lint e os testes focados de host/updater/migrations/combate
+local; o processo de empacotamento Windows executa o build da aplicação, gera
+o instalador NSIS e então cria a GitHub Release com o token oficial do
+workflow.
+
+Para publicar uma nova versão:
+
+1. Incremente `version` em `package.json` para uma versão SemVer ainda não
+   publicada.
+2. Faça merge do commit na branch `main`.
+3. Crie e envie a tag correspondente:
+
+   ```bash
+   git tag v0.2.0
+   git push origin main v0.2.0
+   ```
+
+O workflow compara a tag com `package.json`, verifica a ancestralidade em
+`main` e para sem sobrescrever nada se a release já existir. Não publique tags
+de `master`, `develop`, `staging` ou pull requests. O repositório precisa ter
+`main` como a branch de código que recebe as versões; a tag é o acionamento
+explícito para evitar uma release por commit.
+
+O job de publicação é o único com `contents: write`; os jobs de validação e
+empacotamento usam somente `contents: read`. O `GITHUB_TOKEN` oficial é
+suficiente, portanto nenhum token pessoal deve ser configurado. A release
+recebe o instalador NSIS, `latest.yml` e os `.blockmap` gerados pelo
+electron-builder. O instalador legado do Inno Setup não é anexado ao canal de
+atualização automática.
 
 ## Limitações de validação
 

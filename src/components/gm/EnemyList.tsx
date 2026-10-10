@@ -9,6 +9,7 @@ import { loadEnemies, removeEnemy, importCatalogEnemies } from "@/lib/gmStorage"
 import { threatLevelLabels } from "@/data/enemies";
 import { gmEnemyCatalog } from "@/data/gm-enemies";
 import { loadRemoteEnemies, removeRemote, saveRemoteEnemy } from "@/lib/toolkitClient";
+import AppDialog from "@/components/AppDialog";
 
 interface EnemyListProps {
   onEdit?: (enemy: Enemy) => void;
@@ -23,11 +24,16 @@ export default function EnemyList({ onEdit }: EnemyListProps) {
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [dialog, setDialog] = useState<{ title: string; message: string; kind: "alert" | "confirm" } | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   const loadData = async () => {
     setLoading(true);
     try { setEnemies(await loadRemoteEnemies()); }
-    catch (error) { setEnemies(loadEnemies()); alert(error instanceof Error ? error.message : "Não foi possível carregar o catálogo."); }
+    catch (error) {
+      setEnemies(loadEnemies());
+      setDialog({ title: "Catálogo indisponível", message: error instanceof Error ? error.message : "Não foi possível carregar o catálogo.", kind: "alert" });
+    }
     finally { setLoading(false); }
   };
 
@@ -36,10 +42,19 @@ export default function EnemyList({ onEdit }: EnemyListProps) {
   }, []);
 
   const handleDelete = async (enemyId: string) => {
-    if (!confirm("Tem certeza que deseja excluir este inimigo? Esta ação não pode ser desfeita.")) return;
+    setPendingDeleteId(enemyId);
+    setDialog({ title: "Excluir inimigo?", message: "Esta ação não pode ser desfeita.", kind: "confirm" });
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDeleteId) return;
+    const enemyId = pendingDeleteId;
+    setDialog(null);
     setDeletingId(enemyId);
     try { await removeRemote("enemy", enemyId); removeEnemy(enemyId); setEnemies((prev) => prev.filter((e) => e.id !== enemyId)); }
-    catch (error) { alert(error instanceof Error ? error.message : "Não foi possível excluir o inimigo."); }
+    catch (error) {
+      setDialog({ title: "Não foi possível excluir", message: error instanceof Error ? error.message : "Não foi possível excluir o inimigo.", kind: "alert" });
+    }
     finally { setDeletingId(null); }
   };
 
@@ -65,8 +80,14 @@ export default function EnemyList({ onEdit }: EnemyListProps) {
     );
   }
 
+  const closeDialog = () => {
+    setDialog(null);
+    setPendingDeleteId(null);
+  };
+
   if (enemies.length === 0 && !importing) {
     return (
+      <>
       <div className="enemy-list-empty">
         <div className="enemy-list-empty-icon" aria-hidden="true">👥</div>
         <h3>Nenhum inimigo cadastrado</h3>
@@ -79,10 +100,13 @@ export default function EnemyList({ onEdit }: EnemyListProps) {
           <span>+</span> Criar Inimigo Manualmente
         </a>
       </div>
+      <AppDialog open={dialog?.kind === "alert"} title={dialog?.title ?? "Aviso"} message={dialog?.message ?? ""} onConfirm={closeDialog} />
+      </>
     );
   }
 
   return (
+    <>
     <div className="enemy-list-container">
       <div className="enemy-list-toolbar">
         <span className="enemy-list-count">{enemies.length} inimigo(s)</span>
@@ -217,5 +241,15 @@ export default function EnemyList({ onEdit }: EnemyListProps) {
         })}
       </div>
     </div>
+    <AppDialog
+      open={dialog !== null}
+      title={dialog?.title ?? "Aviso"}
+      message={dialog?.message ?? ""}
+      kind={dialog?.kind ?? "alert"}
+      onConfirm={dialog?.kind === "confirm" ? () => void confirmDelete() : closeDialog}
+      onCancel={dialog?.kind === "confirm" ? closeDialog : undefined}
+      confirmLabel={dialog?.kind === "confirm" ? "Excluir" : "Entendi"}
+    />
+    </>
   );
 }

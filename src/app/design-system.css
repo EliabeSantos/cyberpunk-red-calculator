@@ -1072,6 +1072,113 @@ select:focus-visible {
   }
 }
 
+/* Shared confirmation/notice dialog. Native alert/confirm dialogs interrupt
+ * the desktop shell and look different in every browser; this keeps the same
+ * visual language and preserves keyboard/ESC behavior. */
+.app-dialog-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(3 6 7 / 78%);
+  backdrop-filter: blur(8px);
+}
+
+.app-dialog {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1rem;
+  width: min(100%, 30rem);
+  padding: 1.25rem;
+  border: 1px solid var(--redline-line-bright);
+  border-top: 2px solid var(--redline-coral);
+  border-radius: var(--redline-radius-md);
+  background: linear-gradient(145deg, rgb(21 35 38 / 96%), rgb(8 13 15 / 98%));
+  box-shadow: 0 2rem 6rem rgb(0 0 0 / 56%), 0 0 32px rgb(255 105 92 / 10%);
+}
+
+.app-dialog-confirm {
+  border-top-color: var(--redline-yellow);
+}
+
+.app-dialog-mark {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border: 1px solid var(--redline-coral);
+  border-radius: 50%;
+  color: var(--redline-coral);
+  font: 700 1rem var(--font-geist-mono), monospace;
+}
+
+.app-dialog-confirm .app-dialog-mark {
+  border-color: var(--redline-yellow);
+  color: var(--redline-yellow);
+}
+
+.app-dialog-content h2 {
+  margin: 0;
+  color: var(--redline-paper);
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.app-dialog-content p {
+  margin: 0.55rem 0 0;
+  color: var(--redline-soft);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.app-dialog-actions {
+  grid-column: 2;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+}
+
+.app-dialog-button {
+  min-height: 2.4rem;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--redline-line-bright);
+  border-radius: var(--redline-radius-sm);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.app-dialog-button-primary {
+  border-color: var(--redline-coral);
+  background: var(--redline-coral);
+  color: var(--redline-void);
+}
+
+.app-dialog-button-secondary {
+  background: transparent;
+  color: var(--redline-soft);
+}
+
+.app-dialog-button:hover,
+.app-dialog-button:focus-visible {
+  border-color: var(--redline-teal);
+  box-shadow: var(--redline-focus);
+  outline: none;
+}
+
+@media (max-width: 520px) {
+  .app-dialog {
+    grid-template-columns: 1fr;
+  }
+
+  .app-dialog-actions {
+    grid-column: 1;
+  }
+}
+
 /* --------------------------------------------------------------------------
  * Mesa / armas do Player
  *
