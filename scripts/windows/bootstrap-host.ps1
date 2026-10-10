@@ -17,8 +17,6 @@ $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 # Use well-known SIDs for SYSTEM and the local Administrators group so this
 # works on localized Windows installations (Administradores, Administrators,
 # Administrateurs, etc.).
-& icacls.exe $data /inheritance:r /grant:r "${identity}:(OI)(CI)M" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" *> (Join-Path $logs "permissions.log")
-if ($LASTEXITCODE -ne 0) { throw "Could not protect the local data directory permissions. See $logs\permissions.log." }
 $node = Get-ChildItem (Join-Path $root "node") -Filter node.exe -Recurse | Select-Object -First 1
 $pg = Get-ChildItem (Join-Path $root "postgres") -Filter initdb.exe -Recurse | Select-Object -First 1
 if (-not $node -or -not $pg) { throw "Portable Node.js/PostgreSQL payload is incomplete." }
@@ -90,6 +88,9 @@ $cluster = Join-Path $data "postgres"
 $envFile = Join-Path $config "host.env"
 $pwFile = Join-Path $config "bootstrap-password"
 $adminTokenFile = Join-Path $config "host-admin-token"
+$hostEnvExists = Test-Path $envFile
+$adminTokenExists = Test-Path $adminTokenFile
+$protectConfig = -not $hostEnvExists -or -not $adminTokenExists
 function New-RandomAdminToken {
   $bytes = New-Object byte[] 32
   $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -107,7 +108,6 @@ if ([string]::IsNullOrWhiteSpace($adminToken)) {
 if (-not (Test-Path $adminTokenFile) -or [string]::IsNullOrWhiteSpace((Get-Content $adminTokenFile -Raw))) {
   $adminToken | Set-Content $adminTokenFile -Encoding ascii
 }
-$hostEnvExists = Test-Path $envFile
 if ($hostEnvExists) {
   $portLine = Get-Content $envFile | Where-Object { $_ -match '^PORT=(\d+)$' } | Select-Object -First 1
   if ($portLine) { $appPort = [int]($portLine -replace '^PORT=', '') }
@@ -169,9 +169,13 @@ if (-not $hostEnvExists) {
   Add-Content $envFile "MESA_HOST_ADMIN_TOKEN_FILE=$adminTokenFile" -Encoding ascii
 }
 Get-Content $envFile | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } }
-& icacls.exe $envFile /inheritance:r /grant:r "${identity}:R" "*S-1-5-18:R" "*S-1-5-32-544:R" *> (Join-Path $logs "permissions.log")
-if ($LASTEXITCODE -ne 0) { throw "Could not protect host.env permissions. See $logs\permissions.log." }
-& icacls.exe $adminTokenFile /inheritance:r /grant:r "${identity}:R" "*S-1-5-18:F" "*S-1-5-32-544:F" *> (Join-Path $logs "permissions.log")
-if ($LASTEXITCODE -ne 0) { throw "Could not protect host-admin-token permissions. See $logs\permissions.log." }
+if ($protectConfig) {
+  & icacls.exe $data /inheritance:r /grant:r "${identity}:(OI)(CI)M" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" *> (Join-Path $logs "permissions.log")
+  if ($LASTEXITCODE -ne 0) { throw "Could not protect the local data directory permissions. See $logs\permissions.log." }
+  & icacls.exe $envFile /inheritance:r /grant:r "${identity}:R" "*S-1-5-18:R" "*S-1-5-32-544:R" *> (Join-Path $logs "permissions.log")
+  if ($LASTEXITCODE -ne 0) { throw "Could not protect host.env permissions. See $logs\permissions.log." }
+  & icacls.exe $adminTokenFile /inheritance:r /grant:r "${identity}:R" "*S-1-5-18:F" "*S-1-5-32-544:F" *> (Join-Path $logs "permissions.log")
+  if ($LASTEXITCODE -ne 0) { throw "Could not protect host-admin-token permissions. See $logs\permissions.log." }
+}
 if ($env:MESA_HOSTING_MODE -eq "local") { Start-Postgres }
 Start-App
