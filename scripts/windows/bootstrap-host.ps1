@@ -118,7 +118,7 @@ if ($configuredMode -eq "local" -and -not $clusterExisted) {
   $previousPgPassword = $env:PGPASSWORD
   $env:PGPASSWORD = $password
   try {
-    & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app --if-not-exists cyberpunk_red
+    & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app cyberpunk_red
   } finally {
     $env:PGPASSWORD = $previousPgPassword
   }
@@ -129,7 +129,7 @@ if ($configuredMode -eq "local" -and $clusterExisted -and -not $hostEnvExists -a
   $previousPgPassword = $env:PGPASSWORD
   $env:PGPASSWORD = $password
   try {
-    & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app --if-not-exists cyberpunk_red
+    & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app cyberpunk_red
   } finally {
     $env:PGPASSWORD = $previousPgPassword
   }
