@@ -137,6 +137,7 @@ import {
 import { applyProgramDamage, brainDamageForIce, iceAttack, resolveNetAttack, slideBlackIce } from "@/lib/mesa/netCombat";
 import { createMesaHostingInfrastructure, withLocalPostgresTransaction, type LocalPostgresTransactionContext, type MesaHostingInfrastructure } from "@/lib/mesa/hostingInfrastructure";
 import type { MesaRepository } from "@/lib/mesa/infrastructure";
+import { applyCombatantState } from "@/lib/mesa/characterSync";
 export { isValidTacticalCoverDV, normalizeTacticalPosition, resolveMeleeRange, tacticalDistance, tacticalPositionsOverlap } from "@/lib/mesa/tacticalMap";
 
 /** Erro de domínio com status HTTP correspondente. */
@@ -594,6 +595,97 @@ async function completeActiveBattle(sessionId: string): Promise<void> {
          event_log: Array.isArray(combat?.event_log) ? combat.event_log : [],
          tactical_map: session?.tactical_map ?? null,
   });
+}
+
+type CombatConsequenceFingerprint = {
+  hp: { current: number; max: number };
+  isDead: boolean;
+  deathSaveDC: number;
+  deathSaveFailures: number;
+  armor: { head: number; body: number };
+  criticalInjuries: unknown;
+  initiative: number | null;
+  weapons: Record<string, number>;
+  inventory: Record<string, number>;
+};
+
+function combatConsequenceFingerprint(character: Character, row: CombatantRow): CombatConsequenceFingerprint {
+  const weaponIds = new Set(Object.keys(row.combat_ammo ?? {}));
+  const inventoryIds = new Set((row.supplies?.inventory ?? []).map((item) => item.itemId ?? stableItemId(item.item)));
+  return {
+    hp: { current: character.combat.hp.current, max: character.combat.hp.max },
+    isDead: Boolean(character.combat.isDead),
+    deathSaveDC: character.combat.deathSaveDC ?? 0,
+    deathSaveFailures: character.combat.deathSaveFailures ?? 0,
+    armor: { ...character.combat.armor },
+    criticalInjuries: character.combat.criticalInjuries,
+    initiative: character.combat.initiative ?? null,
+    weapons: Object.fromEntries(character.weapons.filter((weapon) => weaponIds.has(weapon.id)).map((weapon) => [weapon.id, weapon.ammo ?? 0])),
+    inventory: Object.fromEntries(character.inventory.filter((item) => inventoryIds.has(stableItemId(item.name))).map((item) => [stableItemId(item.name), item.quantity])),
+  };
+}
+
+function combatSnapshotFingerprint(snapshot: CombatState["participants"][number] | null | undefined, row: CombatantRow): CombatConsequenceFingerprint {
+  const weaponIds = new Set(Object.keys(row.combat_ammo ?? {}));
+  return {
+    hp: { current: snapshot?.combat?.hp?.current ?? row.hp_current, max: snapshot?.combat?.hp?.max ?? row.hp_max },
+    isDead: Boolean(snapshot?.combat?.isDead),
+    deathSaveDC: snapshot?.combat?.deathSave?.dc ?? 0,
+    deathSaveFailures: snapshot?.combat?.deathSave?.failures ?? 0,
+    armor: { ...(snapshot?.combat?.armor ?? row.combat_armor ?? { head: 0, body: 0 }) },
+    criticalInjuries: snapshot?.combat?.criticalInjuries ?? [],
+    initiative: snapshot?.combat?.initiative ?? null,
+    weapons: Object.fromEntries((snapshot?.weapons ?? []).filter((weapon): weapon is typeof weapon & { id: string } => typeof weapon.id === "string" && weaponIds.has(weapon.id)).map((weapon) => [weapon.id, weapon.ammo ?? 0])),
+    inventory: Object.fromEntries((row.supplies?.inventory ?? []).map((item) => [item.itemId ?? stableItemId(item.item ?? item.itemId ?? ""), item.quantity])),
+  };
+}
+
+function sameCombatConsequences(left: CombatConsequenceFingerprint, right: CombatConsequenceFingerprint): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
+ * Materializa o resultado autoritativo do combate nas duas cópias persistentes
+ * da ficha. O snapshot inicial permite detectar uma alteração mecânica externa:
+ * só aceitamos a ficha ainda no estado inicial ou já no estado final idempotente.
+ */
+async function finalizeCombatConsequencesWithRepository(
+  repository: MesaRepository,
+  sessionId: string,
+  combatId: string,
+): Promise<void> {
+  const [participants, rows] = await Promise.all([
+    repository.listParticipantsBySession(sessionId) as Promise<ParticipantRow[]>,
+    repository.listCombatantsByCombat(combatId, sessionId) as unknown as Promise<CombatantRow[]>,
+  ]);
+  const playerParticipants = new Map(participants.filter((entry) => entry.role === "player").map((entry) => [entry.id, entry]));
+  const updates: Array<import("@/lib/mesa/infrastructure").CombatConsequencesCharacterUpdate> = [];
+
+  for (const row of rows.filter((entry) => entry.kind === "character" && entry.participant_id && entry.character_id)) {
+    const participant = playerParticipants.get(row.participant_id!);
+    if (!participant || participant.character_id !== row.character_id) continue;
+    const persisted = await repository.findCharacterById(row.character_id!);
+    if (!persisted) throw new MesaError("A ficha de um jogador não foi encontrada.", 409, "character_not_found");
+    const toolkit = await repository.findToolkitRecord(row.character_id!, persisted.owner_token, "character");
+    const current = (toolkit?.payload ?? persisted.sheet) as Character;
+    const combatant = toCombatant(row);
+    const desired = applyCombatantState(current, combatant);
+    const initialFingerprint = combatSnapshotFingerprint(row.combat_snapshot, row);
+    const currentFingerprint = combatConsequenceFingerprint(current, row);
+    const desiredFingerprint = combatConsequenceFingerprint(desired, row);
+    if (!sameCombatConsequences(currentFingerprint, initialFingerprint) && !sameCombatConsequences(currentFingerprint, desiredFingerprint)) {
+      throw new MesaError("A ficha mudou durante o combate; atualize a Mesa antes de encerrá-la.", 409, "character_consequence_conflict");
+    }
+    updates.push({
+      characterId: row.character_id!,
+      ownerToken: persisted.owner_token,
+      name: desired.identity.name.trim().slice(0, 200) || persisted.display_name,
+      sheet: desired,
+      expectedSheet: persisted.sheet,
+      expectedToolkitVersion: toolkit?.version ?? null,
+    });
+  }
+  if (updates.length > 0) await repository.finalizeCombatConsequences({ sessionId, combatId, updates });
 }
 
 /**
@@ -6001,6 +6093,7 @@ async function advanceActiveTurnLocal(
       );
     }
     await recoverAllNetrunnerRamWithRepository(repository, sessionId, combat.id);
+    await finalizeCombatConsequencesWithRepository(repository, sessionId, combat.id);
     const finished = await repository.updateCombat(combat.id, sessionId, {
       status: "finished",
       active_combatant_id: null,
@@ -6158,6 +6251,7 @@ async function advanceActiveTurnSupabase(sessionId: string, combat: CombatRow): 
 
   if (advance.kind === "finished") {
     await recoverAllNetrunnerRam(combat.id);
+    await finalizeCombatConsequencesWithRepository((await createMesaHostingInfrastructure()).repository, sessionId, combat.id);
     await query(
       db()
         .from("mesa_combats")
@@ -7510,8 +7604,18 @@ export async function endCombat(input: { sessionId: unknown; token: unknown }): 
       await context.query("select id from public.mesa_combats where session_id = $1 for update", [session.id]);
       await context.query("select id from public.mesa_battles where session_id = $1 and status = 'active' for update", [session.id]);
       const combat = await repository.findCombatBySession(session.id) as unknown as CombatRow | null;
-      if (!combat || combat.status !== "active") throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+      if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+      if (combat.status !== "active") {
+        if (combat.status === "finished") {
+          await finalizeCombatConsequencesWithRepository(repository, session.id, combat.id);
+          await completeActiveBattleWithRepository(repository, session.id);
+          return;
+        }
+        throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+      }
+      await context.query("select id from public.mesa_combatants where combat_id = $1 and session_id = $2 for update", [combat.id, session.id]);
       await recoverAllNetrunnerRamWithRepository(repository, session.id, combat.id);
+      await finalizeCombatConsequencesWithRepository(repository, session.id, combat.id);
       const updated = await repository.updateCombat(combat.id, session.id, {
         status: "finished",
         active_combatant_id: null,
@@ -7525,10 +7629,21 @@ export async function endCombat(input: { sessionId: unknown; token: unknown }): 
     return;
   }
 
-  const combat = await getActiveCombat(session.id);
+  const infrastructure = await createMesaHostingInfrastructure();
+  const repository = infrastructure.repository;
+  const combat = await repository.findCombatBySession(session.id) as CombatRow | null;
   if (!combat) throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  if (combat.status !== "active") {
+    if (combat.status === "finished") {
+      await finalizeCombatConsequencesWithRepository(repository, session.id, combat.id);
+      await completeActiveBattle(session.id);
+      return;
+    }
+    throw new MesaError("Nenhum combate ativo.", 409, "combat_not_active");
+  }
 
   await recoverAllNetrunnerRam(combat.id);
+  await finalizeCombatConsequencesWithRepository(repository, session.id, combat.id);
   await query(
     db()
       .from("mesa_combats")
@@ -7554,7 +7669,9 @@ export async function finishSession(input: { sessionId: unknown; token: unknown 
       await context.query("select id from public.mesa_battles where session_id = $1 and status = 'active' for update", [session.id]);
       const combat = await repository.findCombatBySession(session.id) as CombatRow | null;
       if (combat?.status === "active") {
+        await context.query("select id from public.mesa_combatants where combat_id = $1 and session_id = $2 for update", [combat.id, session.id]);
         await recoverAllNetrunnerRamWithRepository(repository, session.id, combat.id);
+        await finalizeCombatConsequencesWithRepository(repository, session.id, combat.id);
         const updated = await repository.updateCombat(combat.id, session.id, {
           status: "finished",
           active_combatant_id: null,
@@ -7573,6 +7690,7 @@ export async function finishSession(input: { sessionId: unknown; token: unknown 
 
   const combat = await getActiveCombat(session.id);
   if (combat) {
+    await finalizeCombatConsequencesWithRepository((await createMesaHostingInfrastructure()).repository, session.id, combat.id);
     await query(
       db().from("mesa_combats").update({ status: "finished", active_combatant_id: null, turn_started_at: null }).eq("id", combat.id),
       "Falha ao encerrar o combate",

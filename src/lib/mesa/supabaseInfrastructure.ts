@@ -327,6 +327,21 @@ export class SupabaseMesaRepository implements MesaRepository, ToolkitRepository
     ) as Promise<MesaBattleRecord[]>;
   }
 
+  async finalizeCombatConsequences(input: {
+    sessionId: string;
+    combatId: string;
+    updates: ReadonlyArray<import("@/lib/mesa/infrastructure").CombatConsequencesCharacterUpdate>;
+  }): Promise<void> {
+    await result(
+      this.client.rpc("finalize_mesa_combat_consequences", {
+        p_session_id: input.sessionId,
+        p_combat_id: input.combatId,
+        p_updates: input.updates,
+      }),
+      "Falha ao consolidar as consequências do combate",
+    );
+  }
+
   async deleteBattle(battleId: string, sessionId: string): Promise<void> {
     await result(this.client.from("mesa_battles").delete().eq("id", battleId).eq("session_id", sessionId), "Falha ao descartar a partida");
   }

@@ -2341,10 +2341,10 @@
 }
 
 /* --- GM Sidebar Responsive ---
-   Duas faixas deliberadas: (1) marca + módulos, (2) ações alinhadas à direita.
-   O rodapé sempre quebra de linha (flex-basis 100%), então a barra nunca
-   estoura nem fica com células "caixadas" coladas umas nas outras. */
-@media (max-width: 900px) {
+   O menu novo permanece como rail até o breakpoint da gaveta (620px).
+   Manter esta regra antiga em 900px transforma a sidebar em uma barra
+   horizontal alta e conflita com o menu mobile definido abaixo. */
+@media (max-width: 620px) {
   .gm-shell { flex-direction: column; }
   .gm-sidebar { position: relative; width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--line); }
   .gm-nav { flex-direction: row; flex-wrap: wrap; align-items: stretch; min-height: 0; padding: 0; }

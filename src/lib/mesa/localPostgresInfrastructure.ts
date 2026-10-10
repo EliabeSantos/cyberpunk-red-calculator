@@ -401,6 +401,58 @@ export class LocalPostgresMesaRepository implements MesaRepository, ToolkitRepos
     );
   }
 
+  async finalizeCombatConsequences(input: {
+    sessionId: string;
+    combatId: string;
+    updates: ReadonlyArray<import("@/lib/mesa/infrastructure").CombatConsequencesCharacterUpdate>;
+  }): Promise<void> {
+    for (const update of input.updates) {
+      const ownership = await this.rows<{ id: string }>(
+        `select c.id
+           from public.mesa_combatants c
+           join public.mesa_participants p on p.id = c.participant_id and p.session_id = c.session_id
+          where c.combat_id = $1 and c.session_id = $2
+            and c.kind = 'character' and c.character_id = $3
+            and p.role = 'player' and p.character_id = c.character_id
+          limit 1`,
+        [input.combatId, input.sessionId, update.characterId],
+        "Falha ao validar a ficha do combatente",
+      );
+      if (ownership.length !== 1) throw new DatabaseQueryError("A ficha não pertence a um jogador deste combate.");
+
+      const character = await this.rows<{ id: string }>(
+        `update public.mesa_characters
+            set display_name = $1, sheet = $2::jsonb, updated_at = now()
+          where id = $3 and owner_token = $4 and sheet = $5::jsonb
+          returning id`,
+        [update.name, jsonParameter(update.sheet), update.characterId, update.ownerToken, jsonParameter(update.expectedSheet)],
+        "Falha ao consolidar a ficha da Mesa",
+      );
+      if (character.length !== 1) throw new DatabaseQueryError("A ficha mudou durante o encerramento do combate.");
+
+      if (update.expectedToolkitVersion === null) {
+        const inserted = await this.rows<{ id: string }>(
+          `insert into public.mesa_toolkit_records (id, owner_token, kind, name, payload)
+           values ($1, $2, 'character', $3, $4::jsonb)
+           returning id`,
+          [update.characterId, update.ownerToken, update.name, jsonParameter(update.sheet)],
+          "Falha ao criar a ficha persistente",
+        );
+        if (inserted.length !== 1) throw new DatabaseQueryError("A ficha persistente mudou durante o encerramento do combate.");
+      } else {
+        const toolkit = await this.rows<{ id: string }>(
+          `update public.mesa_toolkit_records
+              set name = $1, payload = $2::jsonb
+            where id = $3 and owner_token = $4 and kind = 'character' and version = $5
+            returning id`,
+          [update.name, jsonParameter(update.sheet), update.characterId, update.ownerToken, update.expectedToolkitVersion],
+          "Falha ao atualizar a ficha persistente",
+        );
+        if (toolkit.length !== 1) throw new DatabaseQueryError("A ficha persistente mudou durante o encerramento do combate.");
+      }
+    }
+  }
+
   async deleteBattle(battleId: string, sessionId: string): Promise<void> {
     await this.rows("delete from public.mesa_battles where id = $1 and session_id = $2", [battleId, sessionId], "Falha ao descartar a partida");
   }

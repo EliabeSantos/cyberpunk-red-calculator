@@ -52,6 +52,9 @@ interface LocalMove {
 
 const DEFAULT_MAP: TacticalMap = { imageUrl: "", enabled: false, width: 1000, height: 600, pixelsPerMeter: 50, grid: { enabled: false, size: DEFAULT_TACTICAL_GRID_SIZE_METERS, snap: false } };
 const ENEMY_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23301f35'/%3E%3Cpath d='M18 78 28 35 50 18l22 17 10 43H18Z' fill='%23ff695c'/%3E%3Ccircle cx='39' cy='48' r='6' fill='%230b1114'/%3E%3Ccircle cx='61' cy='48' r='6' fill='%230b1114'/%3E%3Cpath d='M35 68h30' stroke='%230b1114' stroke-width='6'/%3E%3C/svg%3E";
+const MIN_MAP_ZOOM = 1;
+const MAX_MAP_ZOOM = 2.5;
+const MAP_ZOOM_STEP = 0.25;
 
 /** Rótulos vêm do catálogo tipado; aqui ficam apenas os ícones da UI. */
 function hackableLabel(type: TacticalHackableObjectType): string {
@@ -95,6 +98,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
   const [geometryEditing, setGeometryEditing] = useState(false);
   const [geometryMode, setGeometryMode] = useState<GeometryMode>("select");
   const [showTacticalInfo, setShowTacticalInfo] = useState(true);
+  const [mapZoom, setMapZoom] = useState(MIN_MAP_ZOOM);
   const [selectedGeometryId, setSelectedGeometryId] = useState<string | null>(null);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(selectedHackableObjectId ?? null);
   const objectDragRef = useRef<string | null>(null);
@@ -189,7 +193,15 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
   function positionFromPointer(event: React.PointerEvent): TacticalPosition | null {
     const bounds = surfaceRef.current?.getBoundingClientRect();
     if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null;
-    return validPosition({ x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height });
+    const visualPosition = { x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height };
+    return validPosition({
+      x: (visualPosition.x - 0.5) / mapZoom + 0.5,
+      y: (visualPosition.y - 0.5) / mapZoom + 0.5,
+    });
+  }
+
+  function changeMapZoom(delta: number): void {
+    setMapZoom((current) => Math.min(MAX_MAP_ZOOM, Math.max(MIN_MAP_ZOOM, Number((current + delta).toFixed(2)))));
   }
 
   function overlapsAnother(id: string, target: TacticalPosition): boolean {
@@ -613,7 +625,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
            </div>}
            </>, mapToolsHost)}
            </div>
-       <div className="tactical-surface" ref={surfaceRef} style={mapStyle} onPointerUp={() => { if (objectDragRef.current) { objectDragRef.current = null; persistHackableObjects(mapDraftRef.current); } finishGeometry(); }} onPointerMove={(event) => {
+        <div className="tactical-surface" ref={surfaceRef} style={mapStyle} onWheel={(event) => { event.preventDefault(); event.stopPropagation(); changeMapZoom(event.deltaY < 0 ? MAP_ZOOM_STEP : -MAP_ZOOM_STEP); }} onPointerUp={() => { if (objectDragRef.current) { objectDragRef.current = null; persistHackableObjects(mapDraftRef.current); } finishGeometry(); }} onPointerMove={(event) => {
          if (objectDragRef.current) {
            const point = positionFromPointer(event);
            const id = objectDragRef.current;
@@ -660,8 +672,15 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
             });
           }
         });
-      }}>
-         {map.enabled && map.imageUrl ? <img className="tactical-map-image" src={map.imageUrl} alt="Mapa tático da mesa" draggable={false} /> : <div className="tactical-empty"><strong>Mapa não definido</strong><span>O Mestre pode adicionar uma imagem acima.</span></div>}
+       }}>
+          <div className="tactical-zoom-controls" role="group" aria-label="Zoom do mapa">
+            <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => changeMapZoom(MAP_ZOOM_STEP)} aria-label="Aumentar zoom">+</button>
+            <output aria-live="polite">{Math.round(mapZoom * 100)}%</output>
+            <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => changeMapZoom(-MAP_ZOOM_STEP)} aria-label="Reduzir zoom">−</button>
+            <button type="button" className="tactical-zoom-reset" onPointerDown={(event) => event.stopPropagation()} onClick={() => setMapZoom(MIN_MAP_ZOOM)}>1:1</button>
+          </div>
+          <div className="tactical-map-content" style={{ transform: `scale(${mapZoom})` }}>
+          {map.enabled && map.imageUrl ? <img className="tactical-map-image" src={map.imageUrl} alt="Mapa tático da mesa" draggable={false} /> : <div className="tactical-empty"><strong>Mapa não definido</strong><span>O Mestre pode adicionar uma imagem acima.</span></div>}
          <div className="tactical-grid" aria-hidden="true" style={{ backgroundSize: `${tacticalGridSpacingPixels(map, surfaceWidth)}px ${tacticalGridSpacingPixels(map, surfaceWidth)}px`, opacity: map.grid?.enabled ? undefined : 0 }} />
          <svg className={`tactical-geometry-layer ${geometryEditing ? "is-editing" : ""}`} viewBox="0 0 1 1" preserveAspectRatio="none" onPointerDown={startGeometryDraw} aria-label="Geometria do mapa">
             {geometry.walls.filter((wall) => wall.destroyed !== true).map((wall) => <polygon key={wall.id} className={`tactical-wall ${selectedTargetId === tacticalCoverTargetId(wall.id) ? "is-target-selected" : ""} ${selectedGeometryId === wall.id ? "is-selected" : ""}`} points={tacticalObstacleArea(wall).corners.map((point) => `${point.x},${point.y}`).join(" ")} onPointerDown={(event) => selectCoverTarget(event, wall.id)} />)}
@@ -747,7 +766,8 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
             {showTacticalInfo ? "Ocultar info" : "Mostrar info"}
           </button>
           {state.combatants.map((combatant) => { const position = positionFor(combatant); const movable = canDrag(combatant); const remote = !localMoves[combatant.id] && !movable; const move = localMoves[combatant.id]; const status = move?.status; const selected = selectedTargetId === combatant.id; const movementInvalid = move && (!move.withinMovement || !move.pathValid); return <button key={combatant.id} data-testid={`mesa-tactical-token-${combatant.id}`} type="button" className={`tactical-token ${combatant.kind === "enemy" ? "is-enemy" : "is-player"} ${combatant.id === state.combat?.activeCombatantId ? "is-active" : ""} ${selected ? "is-target-selected" : ""} ${movable ? "is-movable" : ""} ${remote ? "is-remote" : ""} ${status ? `is-${status}` : ""} ${movementInvalid ? "is-out-of-range" : ""}`} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}%` }} onPointerDown={(event) => startDrag(combatant.id, event)} onPointerUp={(event) => handleTokenPointerUp(combatant.id, event)} onPointerCancel={() => cancelDrag(combatant.id)} onClick={(event) => { if (geometryEditing) return; if (suppressClickRef.current) { suppressClickRef.current = false; return; } if (canSelectTarget(combatant) && selectedTargetId !== combatant.id) { event.preventDefault(); onSelectTarget(combatant.id); } }} aria-pressed={selected} aria-label={`${combatant.name}${canSelectTarget(combatant) ? ", selecionar alvo" : movable ? ", arraste para mover" : ""}`}><img src={combatant.kind === "enemy" ? ENEMY_AVATAR : (combatant.avatarUrl || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='38' r='24' fill='%237ee7d7'/%3E%3Cpath d='M15 95c2-28 17-40 35-40s33 12 35 40' fill='%237ee7d7'/%3E%3C/svg%3E")} alt="" draggable={false} /><span>{combatant.name}</span></button>; })}
-      </div>
+          </div>
+       </div>
       <div className="tactical-legend"><span><i className="player-dot" /> Players</span><span><i className="enemy-dot" /> Enemies</span>{dragging && <em>Movendo...</em>}</div>
     </section>
   );

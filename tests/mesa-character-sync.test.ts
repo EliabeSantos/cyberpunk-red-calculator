@@ -22,6 +22,24 @@ test("estado autoritativo da Mesa converge HP, morte, armor, CI e munição na f
   assert.equal(synced.weapons[0].ammo, 2);
 });
 
+test("estado final inclui cura e consumível usado sem dedução adicional", () => {
+  const character = createEmptyCharacter("char-resources");
+  character.combat.hp = { current: 8, max: 40 };
+  character.inventory = [{ id: "stim-1", name: "Stim", quantity: 3, category: "consumable" }];
+  const combatant: MesaCombatant = {
+    id: "combatant-resources", combatId: "combat-1", sessionId: "session-1", kind: "character",
+    characterId: character.id, participantId: "participant-1", name: "Solo", sourceKey: null,
+    supplies: { inventory: [{ itemId: "stim", item: "Stim", quantity: 2 }] },
+    armor: null, criticalInjuries: [], ammoByWeapon: null, initiative: null, initiativeDetail: null,
+    actionsMax: 2, actionsRemaining: 2, movementMax: 6, movementRemaining: 6,
+    hpCurrent: 25, hpMax: 40, isDead: false, conditions: [], sortOrder: 0,
+  };
+  const finalized = applyCombatantState(character, combatant);
+  assert.equal(finalized.combat.hp.current, 25, "cura e dano convergem para o HP final");
+  assert.equal(finalized.inventory[0]?.quantity, 2, "consumível usado é refletido uma única vez");
+  assert.equal(applyCombatantState(finalized, combatant), finalized, "repetição não deduz outra unidade");
+});
+
 test("aplicar o mesmo snapshot novamente é idempotente", () => {
   const character = createEmptyCharacter("char-sync");
   const combatant: MesaCombatant = {
@@ -65,6 +83,15 @@ test("Mesa sem viewer/participantId não projeta nada na ficha", () => {
   const state = {
     viewer: { participantId: null, role: null, displayName: null },
     combatants: [combatantFor(character.id, { hpCurrent: 3 })],
+  } as unknown as MesaState;
+  assert.equal(syncMesaCharacterState(character, state), character);
+});
+
+test("NPC ou personagem de outro participante não projeta estado na ficha", () => {
+  const character = createEmptyCharacter("char-owned");
+  const state = {
+    viewer: { participantId: "participant-owner", role: "player", displayName: "Player" },
+    combatants: [combatantFor(character.id, { participantId: "npc-owner", kind: "enemy", hpCurrent: 1 })],
   } as unknown as MesaState;
   assert.equal(syncMesaCharacterState(character, state), character);
 });

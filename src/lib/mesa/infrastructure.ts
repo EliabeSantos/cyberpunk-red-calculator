@@ -187,7 +187,16 @@ export type CombatantRowPayload = Record<string, unknown>;
  * infraestrutura quando o banco recusar. Autorização, regras e payloads
  * continuam em `store.ts`.
  */
-export interface MesaRepository {
+export interface CombatConsequencesCharacterUpdate {
+  characterId: string;
+  ownerToken: string;
+  name: string;
+  sheet: unknown;
+  expectedSheet: unknown;
+  expectedToolkitVersion: number | null;
+}
+
+export interface MesaRepository extends ToolkitRepository {
   findSessionById(sessionId: string): Promise<MesaSessionRecord | null>;
   /** Leitura/escrita do snapshot NET da sessão; projeção permanece no store. */
   findSessionNetArchitectures(sessionId: string): Promise<unknown | null>;
@@ -223,6 +232,12 @@ export interface MesaRepository {
   updateBattle(battleId: string, sessionId: string, patch: Readonly<Record<string, unknown>>): Promise<MesaBattleRecord[]>;
   /** Conclusão condicional: só uma partida ainda ativa pode ser concluída. */
   completeBattle(battleId: string, sessionId: string, patch: Readonly<Record<string, unknown>>): Promise<MesaBattleRecord[]>;
+  /** Consolida fichas e cópias do toolkit antes de fechar o combate. */
+  finalizeCombatConsequences(input: {
+    sessionId: string;
+    combatId: string;
+    updates: ReadonlyArray<CombatConsequencesCharacterUpdate>;
+  }): Promise<void>;
   deleteBattle(battleId: string, sessionId: string): Promise<void>;
   listBattles(sessionId: string, limit?: number): Promise<MesaBattleRecord[]>;
   listCombatantsByCombat(combatId: string, sessionId?: string): Promise<MesaCombatantRecord[]>;
