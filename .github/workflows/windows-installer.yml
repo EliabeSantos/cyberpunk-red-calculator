@@ -52,6 +52,7 @@ jobs:
             "installer\windows\stage\app\scripts\restore-local.mjs",
             "installer\windows\stage\app\scripts\postgres-binaries.mjs",
             "installer\windows\stage\app\desktop\main.cjs",
+            "installer\windows\stage\app\node_modules\next\dist\bin\next",
             "installer\windows\stage\app\node_modules\electron\dist\electron.exe",
             "installer\windows\stage\app\favicon.ico",
             "installer\windows\stage\node",
@@ -79,7 +80,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: CyberpunkRedCalculator-Windows-${{ github.sha }}
-          path: |
-            installer/windows/output/CyberpunkRedCalculator-Setup.exe
-            installer/windows/electron-output/*Setup*.exe
+          path: installer/windows/output/CyberpunkRedCalculator-Setup.exe
           if-no-files-found: error

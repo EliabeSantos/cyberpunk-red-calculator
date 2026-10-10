@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { platform } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 const mode = process.env.MESA_HOSTING_MODE?.trim().toLowerCase();
@@ -9,18 +9,23 @@ if (mode !== "local" && mode !== "supabase") {
   process.exit(2);
 }
 
-// Do not depend on npm adding node_modules/.bin to PATH: the Windows
-// installer launches this file directly with the bundled node.exe.
-const command = join(process.cwd(), "node_modules", ".bin", platform() === "win32" ? "next.cmd" : "next");
-const args = ["start", "--hostname", process.env.MESA_HOSTNAME ?? "0.0.0.0", "--port", process.env.PORT ?? "3000"];
+// Do not depend on the package-manager-generated node_modules/.bin shim. The
+// Windows installer keeps the Next package but electron-builder may omit the
+// .bin directory from the packaged application. Invoke the real CLI through
+// the bundled/current Node executable instead.
+const nextCli = join(process.cwd(), "node_modules", "next", "dist", "bin", "next");
+if (!existsSync(nextCli)) {
+  console.error(`Next.js CLI is missing from the installed application: ${nextCli}`);
+  process.exit(1);
+}
+const command = process.execPath;
+const args = [nextCli, "start", "--hostname", process.env.MESA_HOSTNAME ?? "0.0.0.0", "--port", process.env.PORT ?? "3000"];
 
 function startServer() {
-  const spawnCommand = platform() === "win32" ? `"${command}"` : command;
-  const server = spawn(spawnCommand, args, {
+  const server = spawn(command, args, {
     stdio: "inherit",
     env: process.env,
-    // Windows cannot spawn a .cmd shim without a shell.
-    shell: platform() === "win32",
+    shell: false,
   });
   const stop = () => server.kill("SIGTERM");
   process.once("SIGINT", stop);
