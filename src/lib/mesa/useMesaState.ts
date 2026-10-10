@@ -30,7 +30,7 @@ export interface MesaStateResult {
   errorCode: string | null;
   /** `true` quando o Realtime está entregando; `false` = modo polling. */
   realtime: boolean;
-  refresh: () => Promise<void>;
+  refresh: (force?: boolean) => Promise<void>;
   /** Incrementa quando um GET autenticado aplica um snapshot. */
   refreshVersion: number;
   getRefreshVersion: () => number;
@@ -65,6 +65,7 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
   const latestVersionRef = useRef<string | null>(null);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const refreshVersionRef = useRef(0);
+  const terminalErrorRef = useRef(false);
 
   const acceptsSnapshot = useCallback((snapshot: MesaSnapshot, expectedSessionId: string): boolean => {
     if (!shouldAcceptMesaSnapshot(snapshot, expectedSessionId, latestVersionRef.current)) return false;
@@ -88,8 +89,10 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
     return true;
   }, [acceptsSnapshot]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = false) => {
     if (!sessionId) return;
+    if (terminalErrorRef.current && !force) return;
+    if (force) terminalErrorRef.current = false;
     if (refreshPromiseRef.current) return refreshPromiseRef.current;
     const startedAt = performance.now();
     markMesaRefresh({ sessionId, stage: "T9" });
@@ -106,8 +109,19 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
         setError(null);
         setErrorCode(null);
       } catch (caught) {
+        const code = caught instanceof MesaApiError ? caught.code : "unknown";
+        const terminal = caught instanceof MesaApiError && [
+          "missing_token",
+          "not_participant",
+          "session_not_found",
+          "session_finished",
+        ].includes(caught.code);
+        if (terminal) {
+          terminalErrorRef.current = true;
+          setState(null);
+        }
         setError(caught instanceof MesaApiError ? caught.message : "Falha ao atualizar a mesa.");
-        setErrorCode(caught instanceof MesaApiError ? caught.code : "unknown");
+        setErrorCode(code);
       } finally {
         setLoading(false);
       }
@@ -130,6 +144,7 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
     let graceTimer: ReturnType<typeof setTimeout> | null = null;
     let subscription: { close: () => void } | null = null;
     latestVersionRef.current = null;
+    terminalErrorRef.current = false;
 
     const stopPolling = () => {
       if (pollTimer) {
@@ -141,7 +156,7 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
     const startPolling = () => {
       if (pollTimer || disposed) return;
       const tick = async () => {
-        if (disposed) return;
+        if (disposed || terminalErrorRef.current) return;
         if (!realtimeActiveRef.current) await refresh();
         pollTimer = setTimeout(tick, POLL_INTERVAL_MS);
       };
@@ -164,8 +179,16 @@ export function useMesaState(sessionId: string | null): MesaStateResult {
         setErrorCode(null);
       } catch (caught) {
         if (!disposed) {
+          const code = caught instanceof MesaApiError ? caught.code : "unknown";
+          const terminal = caught instanceof MesaApiError && [
+            "missing_token",
+            "not_participant",
+            "session_not_found",
+            "session_finished",
+          ].includes(caught.code);
+          if (terminal) terminalErrorRef.current = true;
           setError(caught instanceof MesaApiError ? caught.message : "Falha ao carregar a mesa.");
-          setErrorCode(caught instanceof MesaApiError ? caught.code : "unknown");
+          setErrorCode(code);
         }
       } finally {
         if (!disposed) setLoading(false);

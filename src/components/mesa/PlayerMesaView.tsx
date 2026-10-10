@@ -29,9 +29,16 @@ interface Props {
 
 function errorText(error: string | null, code: string | null): string {
   if (code === "not_participant") return "Você não está nesta Mesa.";
-  if (code === "session_not_found") return "Mesa não encontrada.";
+  if (code === "missing_token") return "Sua sessão de acesso à Mesa expirou. Entre novamente pelo código da Mesa.";
+  if (code === "session_not_found") return "Esta Mesa não está mais disponível. Ela pode ter sido removida.";
   if (code === "session_finished") return "Esta Mesa foi encerrada.";
+  if (code === "database_error" || code === "database_not_configured") return "O serviço está temporariamente indisponível. Tente novamente em instantes.";
+  if (code === "internal_error") return "Ocorreu um erro interno ao carregar a Mesa. Tente novamente.";
   return error ?? "Não foi possível carregar a Mesa.";
+}
+
+function isTerminalError(code: string | null): boolean {
+  return code === "missing_token" || code === "not_participant" || code === "session_not_found" || code === "session_finished";
 }
 
 export default function PlayerMesaView({ sessionId }: Props) {
@@ -56,7 +63,7 @@ export default function PlayerMesaView({ sessionId }: Props) {
     return <MesaLoadingSkeleton />;
   }
   if (error && !state) {
-    return <PlayerStateShell title="Mesa" message={errorText(error, errorCode)} retry={() => void refresh()} />;
+    return <PlayerStateShell title="Mesa" message={errorText(error, errorCode)} retry={isTerminalError(errorCode) ? null : () => void refresh(true)} />;
   }
   if (!state) {
     return <PlayerStateShell title="Mesa" message="Não foi possível carregar a Mesa." retry={() => void refresh()} />;

@@ -2602,6 +2602,9 @@ export async function getMesaState(sessionId: string, viewerParticipantId: strin
   if (!sessionRow) throw new MesaError("Mesa não encontrada.", 404, "session_not_found");
 
   const viewerRow = (participantsRow ?? []).find((row) => row.id === viewerParticipantId);
+  if (viewerParticipantId !== null && !viewerRow) {
+    throw new MesaError("Você não participa desta mesa.", 403, "not_participant");
+  }
   const stateVersion = [
     (sessionRow as SessionRow).updated_at,
     combatRow ? (combatRow as unknown as CombatRow).updated_at : null,
