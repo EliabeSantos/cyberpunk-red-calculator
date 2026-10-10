@@ -29,6 +29,18 @@ Remove-Item $electronOutput -Recurse -Force -ErrorAction SilentlyContinue
 New-Item $stage -ItemType Directory | Out-Null
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw "npm is required on the Windows build runner." }
 if (-not (Test-Path $InnoSetup)) { throw "Inno Setup compiler not found: $InnoSetup" }
+
+# Fail before packaging if a PowerShell payload script cannot be parsed. This
+# prevents producing an installer that only fails when the user first opens it.
+$parseErrors = @()
+foreach ($script in Get-ChildItem (Join-Path $root "scripts\windows") -Filter "*.ps1" -File) {
+  $tokens = $null
+  $errors = $null
+  [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+  if ($errors.Count -gt 0) { $parseErrors += "$($script.Name): $((($errors | ForEach-Object { $_.Message }) -join '; '))" }
+}
+if ($parseErrors.Count -gt 0) { throw "PowerShell payload syntax validation failed: $($parseErrors -join ' | ')" }
+
 Push-Location $root
 try {
   Invoke-RequiredCommand "npm" @("ci") "npm ci"
@@ -66,6 +78,18 @@ Copy-Item "$root\desktop" "$stage\app\desktop" -Recurse
 Copy-Item "$root\src\app\favicon.ico","$root\src\app\icon.ico","$root\src\app\icon.svg" "$stage\app"
 Remove-Item "$stage\app\scripts\windows" -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\supabase" "$stage\app\supabase" -Recurse
+$requiredStageFiles = @(
+  "$stage\app\.next\BUILD_ID",
+  "$stage\app\package.json",
+  "$stage\app\scripts\start-host.mjs",
+  "$stage\app\scripts\migrate-local.mjs",
+  "$stage\app\desktop\main.cjs",
+  "$stage\app\node_modules\next\dist\bin\next",
+  "$stage\app\node_modules\pg\package.json"
+)
+foreach ($path in $requiredStageFiles) {
+  if (-not (Test-Path $path)) { throw "Required packaged application file is missing: $path" }
+}
 Push-Location $root
 try {
   Invoke-RequiredCommand "npm" @("run", "dist:windows", "--", "--publish", "never") "Electron Builder"

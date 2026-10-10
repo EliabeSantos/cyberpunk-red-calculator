@@ -68,17 +68,23 @@ jobs:
           $size = (Get-Item $artifact).Length
           if ($size -lt 1MB) { throw "Installer artifact is unexpectedly small: $size bytes" }
           Write-Host "Created $artifact ($size bytes)"
-          $electronOutput = "installer\windows\electron-output"
-          if (-not (Test-Path $electronOutput -PathType Container)) { throw "Electron Builder output directory is missing: $electronOutput. The build step should have failed earlier with the original error." }
-          $electronArtifacts = @(Get-ChildItem (Join-Path $electronOutput "*Setup*.exe") -File -ErrorAction Stop)
-          if ($electronArtifacts.Count -ne 1) { throw "Expected exactly one Electron NSIS installer in $electronOutput, found $($electronArtifacts.Count)." }
-          $electronArtifact = $electronArtifacts[0]
-          if ($electronArtifact.Length -lt 1MB) { throw "Electron artifact is unexpectedly small: $($electronArtifact.Length) bytes" }
-          Write-Host "Created $($electronArtifact.FullName) ($($electronArtifact.Length) bytes)"
+           $electronOutput = "installer\windows\electron-output"
+           if (-not (Test-Path $electronOutput -PathType Container)) { throw "Electron Builder output directory is missing: $electronOutput. The build step should have failed earlier with the original error." }
+           $electronArtifacts = @(Get-ChildItem (Join-Path $electronOutput "*Setup*.exe") -File -ErrorAction Stop)
+           if ($electronArtifacts.Count -ne 1) { throw "Expected exactly one Electron NSIS installer in $electronOutput, found $($electronArtifacts.Count)." }
+           $electronArtifact = $electronArtifacts[0]
+           if ($electronArtifact.Length -lt 1MB) { throw "Electron artifact is unexpectedly small: $($electronArtifact.Length) bytes" }
+           if (-not (Test-Path (Join-Path $electronOutput "latest.yml"))) { throw "Electron updater metadata latest.yml is missing." }
+           if (@(Get-ChildItem (Join-Path $electronOutput "*.blockmap") -File -ErrorAction SilentlyContinue).Count -lt 1) { throw "Electron updater .blockmap is missing." }
+           Write-Host "Created $($electronArtifact.FullName) ($($electronArtifact.Length) bytes)"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CyberpunkRedCalculator-Windows-${{ github.sha }}
-          path: installer/windows/output/CyberpunkRedCalculator-Setup.exe
-          if-no-files-found: error
+         name: CyberpunkRedCalculator-Windows-${{ github.sha }}
+         path: |
+           installer/windows/output/CyberpunkRedCalculator-Setup.exe
+           installer/windows/electron-output/*Setup*.exe
+           installer/windows/electron-output/latest.yml
+           installer/windows/electron-output/*.blockmap
+         if-no-files-found: error

@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const mode = process.env.MESA_HOSTING_MODE?.trim().toLowerCase();
 if (mode !== "local" && mode !== "supabase") {
@@ -13,7 +16,7 @@ if (mode !== "local" && mode !== "supabase") {
 // Windows installer keeps the Next package but electron-builder may omit the
 // .bin directory from the packaged application. Invoke the real CLI through
 // the bundled/current Node executable instead.
-const nextCli = join(process.cwd(), "node_modules", "next", "dist", "bin", "next");
+const nextCli = join(appRoot, "node_modules", "next", "dist", "bin", "next");
 if (!existsSync(nextCli)) {
   console.error(`Next.js CLI is missing from the installed application: ${nextCli}`);
   process.exit(1);
@@ -23,6 +26,7 @@ const args = [nextCli, "start", "--hostname", process.env.MESA_HOSTNAME ?? "0.0.
 
 function startServer() {
   const server = spawn(command, args, {
+    cwd: appRoot,
     stdio: "inherit",
     env: process.env,
     shell: false,
@@ -34,7 +38,7 @@ function startServer() {
 }
 
 if (mode === "local") {
-  const migrate = spawn(process.execPath, ["scripts/migrate-local.mjs"], { stdio: "inherit", env: process.env });
+  const migrate = spawn(process.execPath, [join(appRoot, "scripts", "migrate-local.mjs")], { cwd: appRoot, stdio: "inherit", env: process.env });
   migrate.on("exit", (code, signal) => {
     if (code !== 0 || signal) process.exit(code ?? 1);
     startServer();
