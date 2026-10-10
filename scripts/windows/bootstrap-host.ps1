@@ -69,7 +69,8 @@ function Start-App {
   }
   $startScript = Join-Path $root "app\scripts\start-host.mjs"
   if (-not (Test-Path $startScript)) { throw "Host start script is missing from the installed application." }
-  $process = Start-Process -FilePath $node.FullName -ArgumentList @("`"$startScript`"") -WorkingDirectory (Join-Path $root "app") -RedirectStandardOutput (Join-Path $logs "host.log") -RedirectStandardError (Join-Path $logs "host-error.log") -PassThru
+  $windowStyle = if ($env:MESA_ELECTRON_PACKAGED -eq "1") { "Hidden" } else { "Normal" }
+  $process = Start-Process -FilePath $node.FullName -ArgumentList @("`"$startScript`") -WorkingDirectory (Join-Path $root "app") -WindowStyle $windowStyle -RedirectStandardOutput (Join-Path $logs "host.log") -RedirectStandardError (Join-Path $logs "host-error.log") -PassThru
   $process.Id | Set-Content (Join-Path $config "host.pid") -Encoding ascii
   for ($attempt = 1; $attempt -le 60; $attempt++) {
     try {

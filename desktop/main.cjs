@@ -20,9 +20,13 @@ const iconFile = path.join(installRoot, "app", "favicon.ico");
 
 let mainWindow;
 let isStopping = false;
+let applicationMenuReady = false;
 let updateState = "disabled";
 let updateVersion = "";
 let updateProgress = 0;
+let updateError = "";
+let updatePromptOpen = false;
+let manualUpdateCheck = false;
 app.setName("Cyberpunk RED Calculator");
 app.setAppUserModelId("com.cyberpunkred.calculator");
 
@@ -51,19 +55,48 @@ function localUrl() {
   return `http://127.0.0.1:${configuredPort()}/`;
 }
 
+const updaterLogFile = path.join(dataRoot, "logs", "updater.log");
+
+function logUpdater(event, details = {}) {
+  try {
+    fs.mkdirSync(path.dirname(updaterLogFile), { recursive: true });
+    fs.appendFileSync(updaterLogFile, `${JSON.stringify({ at: new Date().toISOString(), event, ...details })}\n`, "utf8");
+  } catch {
+    // Diagnóstico não pode impedir o aplicativo de funcionar.
+  }
+}
+
+function setUpdateState(state, details = {}) {
+  updateState = state;
+  if (details.version !== undefined) updateVersion = details.version;
+  if (details.progress !== undefined) updateProgress = details.progress;
+  if (details.error !== undefined) updateError = details.error;
+  if (mainWindow) {
+    setUpdateTitle();
+    if (state !== "downloading") mainWindow.setProgressBar(-1);
+  }
+  if (applicationMenuReady) installApplicationMenu();
+}
+
 function runPowerShell(script) {
   return new Promise((resolve, reject) => {
     const executable = path.join(process.env.WINDIR || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    const child = spawn(executable, [
+    const args = [
       "-NoProfile",
       "-ExecutionPolicy",
       "Bypass",
       "-File",
       script,
-    ], {
+    ];
+    if (app.isPackaged) args.unshift("-WindowStyle", "Hidden");
+    const child = spawn(executable, args, {
       cwd: installRoot,
-      windowsHide: true,
-      stdio: "ignore",
+      windowsHide: app.isPackaged,
+      env: {
+        ...process.env,
+        MESA_ELECTRON_PACKAGED: app.isPackaged ? "1" : "0",
+      },
+      stdio: app.isPackaged ? "ignore" : "inherit",
     });
     child.once("error", reject);
     child.once("exit", (code) => {
@@ -114,7 +147,12 @@ async function startHostWithRetry() {
 async function stopHost() {
   if (isStopping) return;
   isStopping = true;
-  await runPowerShell(stopScript);
+  try {
+    await runPowerShell(stopScript);
+  } catch (error) {
+    isStopping = false;
+    throw error;
+  }
 }
 
 function createWindow() {
@@ -173,16 +211,25 @@ function setUpdateTitle() {
       ? " — Atualização pronta"
       : updateState === "available"
         ? " — Atualização disponível"
+        : updateState === "checking"
+          ? " — Verificando atualizações"
+          : updateState === "error"
+            ? " — Falha na atualização"
         : "";
   mainWindow.setTitle(`Cyberpunk RED Calculator${suffix}`);
+  if (updateState === "downloading") mainWindow.setProgressBar(Math.max(0, Math.min(1, updateProgress / 100)));
 }
 
 async function installDownloadedUpdate() {
   if (updateState !== "ready") return;
   try {
+    logUpdater("install_requested", { version: updateVersion });
     await stopHost();
     autoUpdater.quitAndInstall(false, true);
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logUpdater("install_failed", { message });
+    setUpdateState("error", { error: message });
     void dialog.showMessageBox(mainWindow, {
       type: "error",
       title: "Atualização não instalada",
@@ -193,53 +240,136 @@ async function installDownloadedUpdate() {
   }
 }
 
+async function downloadAvailableUpdate() {
+  if (updateState !== "available") return;
+  try {
+    logUpdater("download_requested", { version: updateVersion });
+    setUpdateState("downloading", { progress: 0 });
+    await autoUpdater.downloadUpdate();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logUpdater("download_failed", { message });
+    setUpdateState("error", { error: message });
+    void dialog.showMessageBox(mainWindow, {
+      type: "error",
+      title: "Download interrompido",
+      message: "Não foi possível baixar a atualização.",
+      detail: "A versão atual continua instalada. Verifique sua conexão e tente novamente pelo menu Ajuda > Atualizações.",
+      buttons: ["OK"],
+    });
+  }
+}
+
+function promptUpdateAvailable() {
+  if (updatePromptOpen || !mainWindow) return;
+  updatePromptOpen = true;
+  void dialog.showMessageBox(mainWindow, {
+    type: "info",
+    title: "Nova versão disponível",
+    message: `A versão ${updateVersion} está disponível.`,
+    detail: `Versão instalada: ${app.getVersion()}\nVocê pode baixar em segundo plano e escolher quando reiniciar o aplicativo.`,
+    buttons: ["Baixar agora", "Depois"],
+    defaultId: 0,
+    cancelId: 1,
+  }).then((result) => {
+    updatePromptOpen = false;
+    if (result.response === 0) return downloadAvailableUpdate();
+    return undefined;
+  }).catch(() => {
+    updatePromptOpen = false;
+  });
+}
+
+function promptUpdateReady() {
+  if (updatePromptOpen || !mainWindow) return;
+  updatePromptOpen = true;
+  void dialog.showMessageBox(mainWindow, {
+    type: "info",
+    title: "Atualização pronta",
+    message: `A versão ${updateVersion} foi baixada.`,
+    detail: "Reiniciar agora encerra o host local antes de instalar. Se houver uma Mesa em andamento, escolha Depois e reinicie quando for seguro.",
+    buttons: ["Reiniciar e instalar", "Depois"],
+    defaultId: 0,
+    cancelId: 1,
+  }).then((result) => {
+    updatePromptOpen = false;
+    if (result.response === 0) return installDownloadedUpdate();
+    return undefined;
+  }).catch(() => {
+    updatePromptOpen = false;
+  });
+}
+
+async function checkForUpdates(manual = false) {
+  if (updateState === "checking" || updateState === "downloading") return;
+  manualUpdateCheck = manual;
+  setUpdateState("checking", { error: "" });
+  logUpdater("check_requested", { manual, currentVersion: app.getVersion() });
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logUpdater("check_failed", { message });
+    setUpdateState("error", { error: message });
+    if (manual) {
+      void dialog.showMessageBox(mainWindow, {
+        type: "warning",
+        title: "Atualizações indisponíveis",
+        message: "Não foi possível verificar atualizações agora.",
+        detail: "A versão atual continua funcionando. Verifique sua conexão e tente novamente mais tarde.",
+        buttons: ["OK"],
+      });
+    }
+  }
+}
+
 function configureAutoUpdater() {
   const manifest = path.join(process.resourcesPath, "app-update.yml");
   if (!app.isPackaged || !fs.existsSync(manifest)) return;
 
-  updateState = "checking";
-  autoUpdater.autoDownload = true;
+  logUpdater("configured", { currentVersion: app.getVersion() });
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowDowngrade = false;
   autoUpdater.on("checking-for-update", () => {
-    updateState = "checking";
-    setUpdateTitle();
+    setUpdateState("checking");
   });
   autoUpdater.on("update-available", (info) => {
-    updateState = "available";
-    updateVersion = info.version;
-    setUpdateTitle();
+    logUpdater("update_available", { version: info.version });
+    setUpdateState("available", { version: info.version, progress: 0, error: "" });
+    promptUpdateAvailable();
+  });
+  autoUpdater.on("update-not-available", (info) => {
+    logUpdater("up_to_date", { version: info?.version ?? app.getVersion() });
+    setUpdateState("current", { version: "", progress: 0, error: "" });
+    if (manualUpdateCheck) {
+      void dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "Aplicativo atualizado",
+        message: `Você está usando a versão ${app.getVersion()}.`,
+        detail: "Nenhuma atualização está disponível no momento.",
+        buttons: ["OK"],
+      });
+    }
+    manualUpdateCheck = false;
   });
   autoUpdater.on("download-progress", (progress) => {
-    updateState = "downloading";
-    updateProgress = progress.percent;
-    setUpdateTitle();
+    setUpdateState("downloading", { progress: progress.percent });
   });
   autoUpdater.on("update-downloaded", (info) => {
-    updateState = "ready";
-    updateVersion = info.version;
-    setUpdateTitle();
-    void dialog.showMessageBox(mainWindow, {
-      type: "info",
-      title: "Atualização pronta",
-      message: `A versão ${info.version} foi baixada.`,
-      detail: "Você pode reiniciar agora para instalar ou continuar usando a versão atual.",
-      buttons: ["Reiniciar e atualizar", "Depois"],
-      defaultId: 0,
-      cancelId: 1,
-    }).then((result) => {
-      if (result.response === 0) return installDownloadedUpdate();
-      return undefined;
-    });
+    logUpdater("download_completed", { version: info.version });
+    setUpdateState("ready", { version: info.version, progress: 100, error: "" });
+    promptUpdateReady();
   });
-  autoUpdater.on("error", () => {
-    updateState = "offline";
-    setUpdateTitle();
+  autoUpdater.on("error", (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    logUpdater("updater_error", { message });
+    setUpdateState("error", { error: message });
+    manualUpdateCheck = false;
   });
 
-  const check = () => autoUpdater.checkForUpdates().catch(() => undefined);
-  void check();
-  const interval = setInterval(check, 6 * 60 * 60 * 1000);
+  void checkForUpdates();
+  const interval = setInterval(() => void checkForUpdates(), 6 * 60 * 60 * 1000);
   interval.unref();
 }
 
@@ -251,19 +381,46 @@ function installApplicationMenu() {
   const connectionText = addresses.length > 0
     ? `No computador do jogador, use um destes endereços:\n\n${addresses.join("\n")}\n\nO jogador precisa estar na mesma LAN ou VPN. Não use localhost no outro dispositivo. Configure o firewall somente para os jogadores.`
     : "Nenhum endereço LAN/VPN foi detectado. Conecte o computador à rede e tente novamente.";
+  const updateLabel = updateState === "ready"
+    ? "Reiniciar e instalar atualização"
+    : updateState === "available"
+      ? "Baixar atualização"
+      : updateState === "checking"
+        ? "Verificando atualizações..."
+        : "Verificar atualizações";
+  const updateDetails = updateVersion
+    ? `Nova versão disponível: ${updateVersion}`
+    : `Versão instalada: ${app.getVersion()}${updateState === "error" ? " — última verificação falhou" : ""}`;
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
       label: "Ajuda",
       submenu: [
         { label: "Como conectar jogadores", click: () => void dialog.showMessageBox({ type: "info", title: "Conexão de jogadores", message: connectionText }) },
-        { label: "Atualizações", enabled: updateState !== "disabled", click: () => {
-          if (updateState === "ready") return installDownloadedUpdate();
-          return dialog.showMessageBox({ type: "info", title: "Atualizações", message: updateState === "offline" ? "A verificação será repetida quando houver conexão." : "O aplicativo verifica atualizações automaticamente em segundo plano." });
-        } },
+        {
+          label: `Atualizações — ${updateDetails}`,
+          enabled: updateState !== "disabled",
+          submenu: [
+            { label: `Versão instalada: ${app.getVersion()}`, enabled: false },
+            ...(updateVersion ? [{ label: `Versão disponível: ${updateVersion}`, enabled: false }] : []),
+            { type: "separator" },
+            {
+              label: updateLabel,
+              enabled: updateState !== "checking" && updateState !== "downloading",
+              click: () => {
+                if (updateState === "ready") return installDownloadedUpdate();
+                if (updateState === "available") return downloadAvailableUpdate();
+                return checkForUpdates(true);
+              },
+            },
+            ...(updateState === "downloading" ? [{ label: `Download: ${Math.round(updateProgress)}%`, enabled: false }] : []),
+            ...(updateState === "error" && updateError ? [{ label: "Consulte o log updater.log para detalhes.", enabled: false }] : []),
+          ],
+        },
         { role: "about" },
       ],
     },
   ]));
+  applicationMenuReady = true;
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {

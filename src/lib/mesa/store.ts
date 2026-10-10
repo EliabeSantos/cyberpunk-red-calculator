@@ -3269,10 +3269,17 @@ async function startCombatLocalTransactional(input: {
   try {
     const repository = context.repository;
     const sessionId = input.session.id;
+    // Instalações antigas podem ainda não ter a tabela opcional de histórico
+    // de partidas. Detectamos isso sem consultar a relação diretamente (o que
+    // abortaria a transação) e preservamos o início do combate básico.
+    const battleTableResult = await context.query(
+      "select to_regclass('public.mesa_battles') as table_name",
+    );
+    const battlesAvailable = Boolean((battleTableResult.rows[0] as { table_name?: string | null } | undefined)?.table_name);
 
     // A reserva do encontro e o combate vivo são serializados no mesmo
     // contexto. O UNIQUE continua sendo a autoridade final contra corridas.
-    if (input.encounter) {
+    if (input.encounter && battlesAvailable) {
       await context.query(
         "select id from public.mesa_battles where encounter_id = $1 for update",
         [input.encounter.id],
@@ -3287,7 +3294,7 @@ async function startCombatLocalTransactional(input: {
       [sessionId],
     );
 
-    const priorBattle = input.encounter
+    const priorBattle = input.encounter && battlesAvailable
       ? await repository.findBattleByEncounter(input.encounter.id)
       : null;
     let reuseBattleId: string | null = null;
@@ -3335,7 +3342,7 @@ async function startCombatLocalTransactional(input: {
     }
 
     let battleId = reuseBattleId;
-    if (!battleId) {
+    if (battlesAvailable && !battleId) {
       try {
         const battle = await repository.createBattle({
           sessionId,
@@ -3469,12 +3476,14 @@ async function startCombatLocalTransactional(input: {
     const updatedCombat = await repository.replaceCombatEventLog(combatId, sessionId, [event]);
     if (updatedCombat.length === 0) throw new MesaError("Combate não encontrado.", 404, "combat_not_found");
 
-     const battleCombatants = await repository.listCombatantsByCombat(combatId, sessionId) as unknown as CombatantRow[];
-     if (!battleId) throw new MesaError("Partida não encontrada.", 500, "battle_not_found");
-     const updatedBattle = await repository.updateBattle(battleId, sessionId, {
-      combatants: startBattleSnapshot(battleCombatants.map((row) => toCombatant(row))),
-    });
-    if (updatedBattle.length === 0) throw new MesaError("Partida não encontrada.", 404, "battle_not_found");
+      if (battlesAvailable) {
+        const battleCombatants = await repository.listCombatantsByCombat(combatId, sessionId) as unknown as CombatantRow[];
+        if (!battleId) throw new MesaError("Partida não encontrada.", 500, "battle_not_found");
+        const updatedBattle = await repository.updateBattle(battleId, sessionId, {
+          combatants: startBattleSnapshot(battleCombatants.map((row) => toCombatant(row))),
+        });
+        if (updatedBattle.length === 0) throw new MesaError("Partida não encontrada.", 404, "battle_not_found");
+      }
 
     await context.commit();
   } catch (error) {

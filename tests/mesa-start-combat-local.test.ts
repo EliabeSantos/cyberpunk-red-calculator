@@ -5,6 +5,8 @@ import test from "node:test";
 
 const databaseUrl = process.env.MESA_LOCAL_TEST_DATABASE_URL;
 const postgresTest = databaseUrl ? test : test.skip;
+const legacyDatabaseUrl = process.env.MESA_LOCAL_LEGACY_TEST_DATABASE_URL;
+const legacyPostgresTest = legacyDatabaseUrl ? test : test.skip;
 
 function poolConfig(url: string): { host?: string; database?: string; connectionString?: string } {
   const socket = url.match(/^(?:postgres|postgresql):\/\/(?:[^/@]*@)?\/([^?#]+)/);
@@ -57,6 +59,43 @@ postgresTest("inicia combate local e persiste o snapshot JSON da partida", async
       combatants: 1,
       snapshot_size: 1,
     });
+  } finally {
+    await pool.query("delete from public.mesa_sessions where id = $1", [sessionId]);
+    await pool.end();
+  }
+});
+
+legacyPostgresTest("inicia combate local sem mesa_battles em schema legado", async () => {
+  if (!legacyDatabaseUrl) return;
+  const pool = new Pool(poolConfig(legacyDatabaseUrl));
+  const sessionId = randomUUID();
+  const participantId = randomUUID();
+  const token = `gm-legacy-${randomUUID()}`;
+
+  try {
+    const table = await pool.query("select to_regclass('public.mesa_battles') as table_name");
+    if (table.rows[0]?.table_name) return;
+    await pool.query(
+      "insert into public.mesa_sessions (id,name,gm_id,status,join_code) values ($1,$2,$3,'active',$4)",
+      [sessionId, "Legacy combat test", participantId, sessionId.replaceAll("-", "").slice(0, 5).toUpperCase()],
+    );
+    await pool.query(
+      "insert into public.mesa_participants (id,session_id,player_token,display_name,role) values ($1,$2,$3,'GM','gm')",
+      [participantId, sessionId, token],
+    );
+
+    process.env.MESA_HOSTING_MODE = "local";
+    process.env.MESA_LOCAL_DATABASE_URL = legacyDatabaseUrl;
+    const { POST } = await import("../src/app/api/mesa/[id]/combat/route.ts");
+    const response = await POST(new Request(`http://localhost/api/mesa/${sessionId}/combat`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-mesa-token": token },
+      body: JSON.stringify({ encounter: { id: `legacy-${sessionId}`, name: "Legacy" }, enemies: [{ name: "Alvo legado", hp: 20 }] }),
+    }), { params: Promise.resolve({ id: sessionId }) });
+
+    assert.equal(response.status, 200, JSON.stringify(await response.json()));
+    const combat = await pool.query("select count(*)::int as count from public.mesa_combats where session_id = $1", [sessionId]);
+    assert.equal(combat.rows[0]?.count, 1);
   } finally {
     await pool.query("delete from public.mesa_sessions where id = $1", [sessionId]);
     await pool.end();
