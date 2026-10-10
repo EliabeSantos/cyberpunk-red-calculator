@@ -51,6 +51,9 @@ jobs:
             "installer\windows\stage\app\scripts\backup-local.mjs",
             "installer\windows\stage\app\scripts\restore-local.mjs",
             "installer\windows\stage\app\scripts\postgres-binaries.mjs",
+            "installer\windows\stage\app\desktop\main.cjs",
+            "installer\windows\stage\app\node_modules\electron\dist\electron.exe",
+            "installer\windows\stage\app\favicon.ico",
             "installer\windows\stage\node",
             "installer\windows\stage\postgres"
           )

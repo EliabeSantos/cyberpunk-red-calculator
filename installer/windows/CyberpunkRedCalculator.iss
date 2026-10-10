@@ -19,12 +19,13 @@ Source: "..\..\scripts\windows\bootstrap-host.ps1"; DestDir: "{app}\windows"; Fl
 Source: "..\..\scripts\windows\stop-host.ps1"; DestDir: "{app}\windows"; Flags: ignoreversion
 Source: "..\..\scripts\windows\open-host.ps1"; DestDir: "{app}\windows"; Flags: ignoreversion
 [Icons]
-Name: "{group}\Cyberpunk RED Calculator"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; WorkingDir: "{app}"
-Name: "{group}\Abrir Cyberpunk RED Calculator"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\open-host.ps1"""; WorkingDir: "{app}"
+Name: "{group}\Cyberpunk RED Calculator"; Filename: "{app}\app\node_modules\electron\dist\electron.exe"; Parameters: """{app}\app\desktop\main.cjs"""; WorkingDir: "{app}\app"; IconFilename: "{app}\app\favicon.ico"
+Name: "{commondesktop}\Cyberpunk RED Calculator"; Filename: "{app}\app\node_modules\electron\dist\electron.exe"; Parameters: """{app}\app\desktop\main.cjs"""; WorkingDir: "{app}\app"; IconFilename: "{app}\app\favicon.ico"
+Name: "{group}\Abrir Cyberpunk RED Calculator"; Filename: "{app}\app\node_modules\electron\dist\electron.exe"; Parameters: """{app}\app\desktop\main.cjs"""; WorkingDir: "{app}\app"; IconFilename: "{app}\app\favicon.ico"
 Name: "{group}\Parar Cyberpunk RED Calculator"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\stop-host.ps1"""; WorkingDir: "{app}"
-Name: "{userstartup}\Cyberpunk RED Calculator"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; WorkingDir: "{app}"
+Name: "{userstartup}\Cyberpunk RED Calculator"; Filename: "{app}\app\node_modules\electron\dist\electron.exe"; Parameters: """{app}\app\desktop\main.cjs"""; WorkingDir: "{app}\app"; IconFilename: "{app}\app\favicon.ico"
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\bootstrap-host.ps1"""; Flags: postinstall nowait
+Filename: "{app}\app\node_modules\electron\dist\electron.exe"; Parameters: """{app}\app\desktop\main.cjs"""; WorkingDir: "{app}\app"; Flags: postinstall nowait
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows\stop-host.ps1"""; Flags: runhidden
 [Code]

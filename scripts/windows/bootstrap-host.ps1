@@ -25,6 +25,8 @@ if (-not $node -or -not $pg) { throw "Portable Node.js/PostgreSQL payload is inc
 $pgBin = Split-Path $pg.FullName
 $pgCtl = Join-Path $pgBin "pg_ctl.exe"
 $createdb = Join-Path $pgBin "createdb.exe"
+$psql = Join-Path $pgBin "psql.exe"
+if (-not (Test-Path $psql)) { throw "Portable PostgreSQL payload is missing psql.exe." }
 # Keep the bundled database separate from common WSL/development PostgreSQL
 # forwarding, which frequently occupies 127.0.0.1:5432 on developer machines.
 $pgPort = 55432
@@ -53,6 +55,14 @@ function Start-Postgres {
   }
   & $pgCtl -D $cluster -o "-h 127.0.0.1 -p $pgPort" -l (Join-Path $logs "postgres.log") start
   if ($LASTEXITCODE -ne 0) { throw "PostgreSQL failed to start. See $logs\postgres.log." }
+}
+
+function Ensure-LocalDatabase {
+  $exists = (& $psql -h 127.0.0.1 -p $pgPort -U mesa_app -d postgres -tAc "select 1 from pg_database where datname = 'cyberpunk_red'" 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0) { throw "Could not inspect the local database catalog." }
+  if ($exists -eq "1") { return }
+  & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app cyberpunk_red
+  if ($LASTEXITCODE -ne 0) { throw "Local database creation failed." }
 }
 
 function Start-App {
@@ -134,22 +144,20 @@ if ($configuredMode -eq "local" -and -not $clusterExisted) {
   $previousPgPassword = $env:PGPASSWORD
   $env:PGPASSWORD = $password
   try {
-    & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app cyberpunk_red
+    Ensure-LocalDatabase
   } finally {
     $env:PGPASSWORD = $previousPgPassword
   }
-  if ($LASTEXITCODE -ne 0) { throw "Local database creation failed." }
 }
 if ($configuredMode -eq "local" -and $clusterExisted -and -not $hostEnvExists -and (Test-Path $pwFile)) {
   Start-Postgres
   $previousPgPassword = $env:PGPASSWORD
   $env:PGPASSWORD = $password
   try {
-    & $createdb -h 127.0.0.1 -p $pgPort -U mesa_app cyberpunk_red
+    Ensure-LocalDatabase
   } finally {
     $env:PGPASSWORD = $previousPgPassword
   }
-  if ($LASTEXITCODE -ne 0) { throw "Local database recovery failed." }
 }
 if ($configuredMode -eq "local" -and $clusterExisted -and -not $hostEnvExists -and -not (Test-Path $pwFile)) {
   throw "Database exists but host.env is missing; restore the configuration or use the documented recovery procedure."

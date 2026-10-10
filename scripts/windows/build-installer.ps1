@@ -36,6 +36,8 @@ Copy-Item "$root\public" "$stage\app\public" -Recurse
 Copy-Item "$root\package.json","$root\package-lock.json" "$stage\app"
 Copy-Item "$root\node_modules" "$stage\app\node_modules" -Recurse
 Copy-Item "$root\scripts" "$stage\app\scripts" -Recurse
+Copy-Item "$root\desktop" "$stage\app\desktop" -Recurse
+Copy-Item "$root\src\app\favicon.ico" "$stage\app\favicon.ico"
 Remove-Item "$stage\app\scripts\windows" -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\supabase" "$stage\app\supabase" -Recurse
 & $InnoSetup "$root\installer\windows\CyberpunkRedCalculator.iss"

@@ -17,6 +17,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.117.1",
     "ably": "^2.29.0",
+    "electron": "^37.10.3",
     "next": "16.3.5",
     "pg": "^8.23.1",
     "react": "19.2.8",

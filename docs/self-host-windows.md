@@ -11,9 +11,9 @@ Requisitos para montar o instalador: Windows x64, Node/npm apenas na máquina de
 
 As versões e hashes SHA-256 dos runtimes estão em `installer/windows/RUNTIME-MANIFEST.md`; o script de build recusa qualquer arquivo baixado que não corresponda ao hash fixado. Inno Setup é necessário somente na máquina de build. Os avisos/licenças distribuídos nos arquivos oficiais de Node.js e PostgreSQL permanecem no pacote.
 
-Na primeira execução, o bootstrap cria um cluster em `%ProgramData%\Cyberpunk RED Calculator\postgres`, uma configuração protegida, um token administrativo aleatório em `%ProgramData%\Cyberpunk RED Calculator\config\host-admin-token` e aplica todas as migrations. O instalador também cria um atalho de inicialização automática; após reiniciar o Windows, PostgreSQL e o servidor são recuperados pelo mesmo bootstrap. Não copie essa pasta ou o token para chats ou repositórios.
+O instalador inclui Electron, Node.js, PostgreSQL e o build do aplicativo. O atalho abre uma janela nativa sem barra de endereço; o processo Electron inicia ou recupera o host automaticamente, aguarda PostgreSQL, aplica as migrations e só então carrega a interface. Na primeira execução, o bootstrap cria um cluster UTF-8 em `%ProgramData%\Cyberpunk RED Calculator\postgres`, uma configuração protegida, um token administrativo aleatório em `%ProgramData%\Cyberpunk RED Calculator\config\host-admin-token` e aplica todas as migrations. Não copie essa pasta ou o token para chats ou repositórios.
 
-O atalho **Cyberpunk RED Calculator** inicia o host e abre `http://localhost:3000`. O primeiro GM cria o usuário/mesa pela interface; não há usuário ou senha de aplicação padrão. O PostgreSQL empacotado usa a porta local dedicada `55432` (não fica acessível pela LAN); se ela ou a porta 3000 estiver ocupada, o bootstrap interrompe com erro e grava o diagnóstico em `%ProgramData%\Cyberpunk RED Calculator\logs`.
+O atalho **Cyberpunk RED Calculator** abre a janela desktop e inicia o host se necessário. O primeiro GM cria o usuário/mesa pela interface; não há usuário ou senha de aplicação padrão. O PostgreSQL empacotado usa a porta local dedicada `55432` (não fica acessível pela LAN). Se a porta web preferida estiver ocupada, o bootstrap escolhe uma porta livre próxima e persiste a escolha em `host.env`; o Electron e as instruções exibidas usam essa porta automaticamente.
 
 O modo de hospedagem não é uma configuração da mesa e não aparece na UI de jogadores ou mestres. Para consultar ou alterar `/api/hosting/config`, use o token do arquivo protegido somente no cabeçalho `Authorization: Bearer <token>` ou `x-host-admin-token`; `x-mesa-token`, `Host`, `Origin` e loopback não concedem administração. A troca entre Local e Supabase grava somente `MESA_HOSTING_MODE` no `host.env` protegido e exige reiniciar o servidor; o processo atual não muda de adapter no meio da execução e a alteração não é permitida enquanto há mesas ativas. O Supabase só aparece se `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` já estiverem configuradas no ambiente do host.
 
@@ -40,7 +40,7 @@ O grupo de atalhos também inclui **Abrir** e **Parar**. O atalho de parada ence
 ## Uso e rede
 
 1. Execute o atalho **Cyberpunk RED Calculator** como host.
-2. Abra `http://localhost:3000` e crie a mesa.
+2. A janela desktop abre a interface e o GM cria a mesa.
 3. Use `ipconfig` para descobrir o endereço LAN ou VPN que os jogadores realmente alcançam.
 4. Libere TCP 3000 somente para os jogadores:
 
@@ -77,7 +77,7 @@ Em falha, consulte `%ProgramData%\Cyberpunk RED Calculator\logs`, confirme o pro
 
 Problemas comuns:
 
-* **Porta ocupada:** encerre somente um processo identificado por `Get-NetTCPConnection -LocalPort 3000` ou `55432`; não encerre o `wslrelay.exe` se ele pertencer a outro ambiente. Não altere a porta no banco sem atualizar `host.env`.
+* **Porta ocupada:** o host local escolhe automaticamente uma porta web livre. O PostgreSQL continua preso a `127.0.0.1:55432`; não encerre o `wslrelay.exe` se ele pertencer a outro ambiente.
 * **Bootstrap interrompido:** preserve `ProgramData`, consulte `postgres.log` e `host-error.log`, corrija a causa e execute o atalho novamente. Não apague o cluster para “reparar” sem backup.
 * **Após reiniciar o Windows:** confirme o atalho em `shell:common startup`; o bootstrap deve iniciar PostgreSQL antes do Next.js.
 * **Acesso remoto:** confirme primeiro firewall, IP alcançável e `MESA_HOSTNAME`; nunca exponha a porta 5432.
