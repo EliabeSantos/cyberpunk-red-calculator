@@ -320,6 +320,41 @@ test("8b — estado mutável de armor e Critical Injury sobrevive ao adapter e �
   });
   assert.deepEqual(reconstructed?.combat.armor, { head: 0, body: 4 });
   assert.deepEqual(reconstructed?.combat.criticalInjuries, [injury]);
+
+  const legacySnapshot = {
+    ...mutable.state.participants[0],
+    combat: {
+      ...mutable.state.participants[0].combat,
+      criticalInjuries: { legacy: true },
+    },
+  } as unknown as Parameters<typeof combatParticipantFromRow>[0]["combat_snapshot"];
+  const reconstructedLegacy = combatParticipantFromRow({
+    ...({
+      id: "legacy-target",
+      combat_id: "combat",
+      session_id: "session",
+      kind: "enemy",
+      character_id: null,
+      participant_id: null,
+      name: "Legacy target",
+      combat_snapshot: legacySnapshot,
+      critical_injuries: null,
+      combat_armor: null,
+      combat_ammo: null,
+      initiative: null,
+      initiative_detail: null,
+      actions_max: 2,
+      actions_remaining: 2,
+      movement_max: 6,
+      movement_remaining: 6,
+      hp_current: 10,
+      hp_max: 10,
+      is_dead: false,
+      conditions: null,
+      sort_order: 0,
+    } as unknown as Parameters<typeof combatParticipantFromRow>[0]),
+  });
+  assert.deepEqual(reconstructedLegacy?.combat.criticalInjuries, []);
 });
 
 test("9 — duas resoluções simultâneas perdem por CAS, nunca silenciosamente", async () => {

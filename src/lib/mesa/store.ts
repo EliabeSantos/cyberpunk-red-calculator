@@ -693,6 +693,23 @@ interface CombatantRow {
   brain_damage?: number;
 }
 
+/**
+ * JSON vindo do banco é runtime data: linhas antigas podem conter null ou um
+ * objeto onde o contrato atual espera um array. Nunca espalhar esse valor
+ * diretamente, pois isso derruba a rota inteira com "is not iterable".
+ */
+function criticalInjuriesForRow(row: CombatantRow): CombatParticipant["combat"]["criticalInjuries"] {
+  if (Array.isArray(row.critical_injuries)) return row.critical_injuries;
+  const snapshot = row.combat_snapshot?.combat?.criticalInjuries;
+  return Array.isArray(snapshot) ? snapshot : [];
+}
+
+function conditionsForRow(row: CombatantRow): string[] {
+  return Array.isArray(row.conditions)
+    ? row.conditions.filter((condition): condition is string => typeof condition === "string")
+    : [];
+}
+
 type IntegratedAttackResponse = {
   attackResult: NonNullable<ReturnType<typeof execute>["attackResult"]>;
   /** Geometria server-side usada nesta resolução; não é um modificador. */
@@ -1084,7 +1101,7 @@ function effectiveMovementForRow(row: CombatantRow, round = Number.POSITIVE_INFI
     ? getCriticalInjuryModifiers({
         combat: {
           ...row.combat_snapshot.combat,
-          criticalInjuries: row.critical_injuries ?? row.combat_snapshot.combat.criticalInjuries,
+          criticalInjuries: criticalInjuriesForRow(row),
         } as unknown as Character["combat"],
       })
     : null;
@@ -1096,7 +1113,7 @@ function effectiveMovementForRow(row: CombatantRow, round = Number.POSITIVE_INFI
 }
 
 function unconsciousUntilRoundForRow(row: CombatantRow): number | undefined {
-  const rounds = (row.critical_injuries ?? [])
+  const rounds = criticalInjuriesForRow(row)
     .map((injury) => injury.unconsciousUntilRound ?? 0)
     .filter((round) => round > 0);
   const quickhackRounds = (row.net_effects ?? [])
@@ -1121,7 +1138,7 @@ function toCombatant(row: CombatantRow, round = Number.POSITIVE_INFINITY): MesaC
     sourceKey: row.source_key ?? null,
     supplies: row.supplies ?? null,
     armor: row.combat_armor ?? null,
-    criticalInjuries: row.critical_injuries ?? [],
+    criticalInjuries: criticalInjuriesForRow(row),
     ammoByWeapon: row.combat_ammo ?? null,
     initiative: row.initiative,
     initiativeDetail: row.initiative_detail ?? null,
@@ -1389,10 +1406,10 @@ function puppetControlsAction(row: CombatantRow, round: number): boolean {
  */
 export function combatParticipantFromRow(row: CombatantRow): CombatParticipant | null {
   if (!row.combat_snapshot) return null;
-  const weapons = row.combat_snapshot.weapons?.map((weapon) => {
+  const weapons = Array.isArray(row.combat_snapshot.weapons) ? row.combat_snapshot.weapons.map((weapon) => {
     const ammo = weapon.id ? row.combat_ammo?.[weapon.id] : undefined;
     return ammo === undefined ? weapon : { ...weapon, ammo };
-  });
+  }) : undefined;
   return {
     ...row.combat_snapshot,
     ...(weapons ? { weapons } : {}),
@@ -1400,8 +1417,8 @@ export function combatParticipantFromRow(row: CombatantRow): CombatParticipant |
       ...row.combat_snapshot.combat,
       hp: { current: row.hp_current, max: row.hp_max },
       armor: row.combat_armor ?? { ...row.combat_snapshot.combat.armor },
-      criticalInjuries: row.critical_injuries ?? [...row.combat_snapshot.combat.criticalInjuries],
-      conditions: (row.conditions ?? []).map((name) => ({ id: name, name })),
+      criticalInjuries: criticalInjuriesForRow(row),
+      conditions: conditionsForRow(row).map((name) => ({ id: name, name })),
       initiative: row.initiative,
       isDead: row.is_dead,
       deathSave: row.kind === "character"
