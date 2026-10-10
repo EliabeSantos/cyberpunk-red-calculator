@@ -349,19 +349,6 @@ export default function MesaEntry() {
                       maxLength={40}
                     />
                   </label>
-                  {electronRenderer && (
-                    <label>
-                      Servidor remoto (opcional)
-                      <input
-                        value={serverUrl}
-                        onChange={(event) => setServerUrl(event.target.value)}
-                        placeholder="http://26.50.194.224:3001"
-                        inputMode="url"
-                        autoComplete="url"
-                      />
-                      <small>Deixe vazio para usar o host local deste aplicativo.</small>
-                    </label>
-                  )}
                   <button
                     type="submit"
                     className="mesa-primary"
@@ -396,6 +383,19 @@ export default function MesaEntry() {
                       maxLength={40}
                     />
                   </label>
+                  {electronRenderer && (
+                    <label>
+                      Servidor da mesa (opcional)
+                      <input
+                        value={serverUrl}
+                        onChange={(event) => setServerUrl(event.target.value)}
+                        placeholder="http://26.50.194.224:3001"
+                        inputMode="url"
+                        autoComplete="url"
+                      />
+                      <small>Informe o IP do anfitrião para procurar o convite nele. Vazio usa este PC.</small>
+                    </label>
+                  )}
                   <button type="submit" className="mesa-primary" disabled={busy || !displayName.trim()}>
                     {busy ? "Entrando..." : "Entrar na mesa"}
                   </button>

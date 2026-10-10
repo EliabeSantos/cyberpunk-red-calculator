@@ -52,13 +52,20 @@ export function formatAttackGatewayError(message: string, code?: string): string
 
 async function api<T>(
   path: string,
-  options: { method?: string; body?: unknown } = {},
+  options: { method?: string; body?: unknown; serverUrl?: string | null } = {},
 ): Promise<T> {
   const body = options.body as Record<string, unknown> | undefined;
   const action = actionName(path, body);
   const sessionId = path.match(/\/api\/mesa\/([^/]+)/)?.[1];
   const membership = sessionId ? listMemberships().find((entry) => entry.sessionId === decodeURIComponent(sessionId)) : undefined;
-  const serverUrl = membership?.serverUrl ?? getConfiguredMesaServerUrl();
+  // Uma membership local deve continuar local mesmo que exista uma origem
+  // remota salva de uma entrada anterior. Sem membership (por exemplo, ao
+  // resolver um convite), a origem configurada é a escolhida no formulário.
+  const serverUrl = membership
+    ? (membership.serverUrl ?? null)
+    : options.serverUrl !== undefined
+      ? options.serverUrl
+      : getConfiguredMesaServerUrl();
   const resolutionId = typeof body?.resolutionId === "string" ? body.resolutionId : undefined;
   const traceId = startMesaTelemetry({ action, sessionId, resolutionId });
   const requestStartedAt = performance.now();
@@ -127,21 +134,21 @@ export interface JoinResult {
 }
 
 export async function createMesa(input: { name: string; displayName: string }): Promise<JoinResult> {
-  const serverUrl = getConfiguredMesaServerUrl();
-  const result = await api<JoinResult>("/api/mesa", { method: "POST", body: input });
+  // Criar Mesa sempre usa o host local deste aplicativo; o campo remoto só
+  // pertence ao fluxo de entrada por convite.
+  const result = await api<JoinResult>("/api/mesa", { method: "POST", body: input, serverUrl: null });
   rememberMembership(result.session.joinCode, {
     sessionId: result.session.id,
     participantId: result.participant.id,
     displayName: result.participant.displayName,
     role: result.participant.role,
-    ...(serverUrl ? { serverUrl } : {}),
   });
   return result;
 }
 
 export async function joinMesa(input: { joinCode: string; displayName: string }): Promise<JoinResult> {
   const serverUrl = getConfiguredMesaServerUrl();
-  const result = await api<JoinResult>("/api/mesa/join", { method: "POST", body: input });
+  const result = await api<JoinResult>("/api/mesa/join", { method: "POST", body: input, serverUrl });
   rememberMembership(result.session.joinCode, {
     sessionId: result.session.id,
     participantId: result.participant.id,
