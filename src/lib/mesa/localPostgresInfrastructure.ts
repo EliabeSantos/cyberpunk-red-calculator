@@ -210,7 +210,10 @@ export class LocalPostgresMesaRepository implements MesaRepository, ToolkitRepos
   async upsertToolkitRecord(input: ToolkitRecordWrite): Promise<ToolkitRecord> {
     const params: unknown[] = [input.id, input.ownerToken, input.kind, input.name, jsonParameter(input.payload)];
     const expected = input.expectedVersion;
-    const where = expected === undefined ? "" : " and version = $6";
+     // `version` também existe no pseudo-registro `excluded` do ON CONFLICT;
+     // qualificar a coluna evita o erro PostgreSQL "column reference version
+     // is ambiguous" ao salvar uma versão existente do toolkit.
+     const where = expected === undefined ? "" : " and public.mesa_toolkit_records.version = $6";
     if (expected !== undefined) params.push(expected);
     const rows = await this.rows<ToolkitRecord>(
       `insert into public.mesa_toolkit_records (id,owner_token,kind,name,payload)
