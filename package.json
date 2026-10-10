@@ -2,6 +2,7 @@
   "name": "cyberpunk-red-calculator",
   "version": "0.1.0",
   "private": true,
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
