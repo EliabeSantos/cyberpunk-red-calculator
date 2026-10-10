@@ -72,8 +72,8 @@ async function requireHostAdmin(request: Request): Promise<Response | null> {
 }
 
 export async function GET(_request: Request): Promise<Response> {
-  // O estado do ambiente não contém credenciais. A alteração continua
-  // protegida abaixo por authenticateHostAdmin.
+  const unauthorized = await requireHostAdmin(_request);
+  if (unauthorized) return unauthorized;
   return ok({
     mode: currentMode(),
     availableModes: availableModes(),

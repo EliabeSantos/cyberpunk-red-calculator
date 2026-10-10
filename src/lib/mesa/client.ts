@@ -51,7 +51,7 @@ export function formatAttackGatewayError(message: string, code?: string): string
 
 async function api<T>(
   path: string,
-  options: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
+  options: { method?: string; body?: unknown } = {},
 ): Promise<T> {
   const body = options.body as Record<string, unknown> | undefined;
   const action = actionName(path, body);
@@ -68,7 +68,6 @@ async function api<T>(
         "content-type": "application/json",
         [TOKEN_HEADER]: getPlayerToken(),
         "x-mesa-telemetry-id": traceId,
-        ...options.headers,
       },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
@@ -133,28 +132,6 @@ export async function createMesa(input: { name: string; displayName: string }): 
     role: result.participant.role,
   });
   return result;
-}
-
-export type HostingMode = "local" | "supabase";
-
-export interface HostingConfig {
-  mode: HostingMode | null;
-  pendingMode?: HostingMode;
-  availableModes: HostingMode[];
-  configurable: boolean;
-  restartRequired: boolean;
-}
-
-export function getHostingConfig(): Promise<HostingConfig> {
-  return api<HostingConfig>("/api/hosting/config");
-}
-
-export function setHostingMode(mode: HostingMode, adminToken: string): Promise<HostingConfig> {
-  return api<HostingConfig>("/api/hosting/config", {
-    method: "POST",
-    body: { mode },
-    headers: { "x-host-admin-token": adminToken },
-  });
 }
 
 export async function joinMesa(input: { joinCode: string; displayName: string }): Promise<JoinResult> {

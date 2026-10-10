@@ -112,6 +112,11 @@ em uma variável `NEXT_PUBLIC_*`.
 
 ### Configuração
 
+No deployment online, configure explicitamente `MESA_HOSTING_MODE=supabase`
+nas variáveis server-side da Vercel. A seleção pertence ao ambiente do servidor,
+não ao modal público de criação de Mesa. O token administrativo do host é
+exclusivo do self-hosted e nunca é necessário para jogadores do site.
+
 1. Rode no SQL Editor do Supabase (junto com a migração do Discord) os arquivos `supabase/migrations/20260926000000_mesa_sessions.sql`, `supabase/migrations/20260927000000_mesa_combatant_source_key.sql`, `supabase/migrations/20260927000001_mesa_battles.sql` e `supabase/migrations/20260930000000_mesa_combatant_supplies.sql` — as tabelas `mesa_sessions`, `mesa_participants`, `mesa_characters`, `mesa_combats`, `mesa_combatants` e `mesa_battles` (RLS habilitado sem policies: só o servidor acessa, via service role) e as colunas `mesa_combatants.source_key` (identifica **qual inimigo do encontro** é cada linha da mesa; sem ela o app funciona, só não espelha a vida dos inimigos) e `mesa_combatants.supplies` (a **mochila do inimigo** — pente, reserva e cura; sem ela a linha da mesa não mostra munição nem item de cura). A tabela `mesa_battles` guarda o **histórico de partidas** e torna cada encontro de uso único (sem ela o combate continua funcionando, só não há histórico nem bloqueio de encontro repetido). As duas colunas são opcionais: o servidor detecta a ausência, regrava sem elas e o combate começa do mesmo jeito.
 2. Adicione ao `.env.local` (as duas últimas variáveis são públicas, vão para o navegador):
 
