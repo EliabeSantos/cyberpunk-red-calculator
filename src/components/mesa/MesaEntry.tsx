@@ -72,8 +72,11 @@ export default function MesaEntry() {
   const [electronRenderer, setElectronRenderer] = useState(false);
 
   useEffect(() => {
-    setElectronRenderer(isElectronRenderer());
-    setServerUrl(getConfiguredMesaServerUrl() ?? "");
+    const timer = window.setTimeout(() => {
+      setElectronRenderer(isElectronRenderer());
+      setServerUrl(getConfiguredMesaServerUrl() ?? "");
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   // Lista REATIVA das mesas deste navegador (mudou → re-render, sem efeito).

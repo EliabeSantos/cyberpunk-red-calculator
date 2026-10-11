@@ -11,8 +11,9 @@ export default function LandingPage() {
   const [characters, setCharacters] = useState<Character[]>([]);
 
   useEffect(() => {
-    setCharacters(loadCharacters());
+    const timer = window.setTimeout(() => setCharacters(loadCharacters()), 0);
     void loadRemoteCharacters().then(setCharacters).catch(() => undefined);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const active = characters[0] ?? null;

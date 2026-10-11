@@ -31,7 +31,10 @@ export default function HistoryPageClient() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh, refreshKey]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void refresh(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [refresh, refreshKey]);
 
   return (
     <div className="gm-page gm-history-page">
