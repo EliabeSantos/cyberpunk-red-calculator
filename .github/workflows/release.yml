@@ -144,11 +144,19 @@ jobs:
           if (-not (Test-Path $metadataPath)) { throw "electron-builder did not create latest.yml." }
           $metadata = Get-Content $metadataPath -Raw
           if ($metadata -notmatch "(?m)^version:\s*$([regex]::Escape($env:VERSION))\s*$") { throw "latest.yml does not describe version $($env:VERSION)." }
-           # electron-builder may serialize spaces and other filename characters
-           # URL-encoded in latest.yml. Validate the decoded metadata instead of
-           # comparing only the literal text.
-           $decodedMetadata = [System.Uri]::UnescapeDataString($metadata)
-           if ($decodedMetadata -notmatch [regex]::Escape($installers[0].Name)) { throw "latest.yml does not reference the generated NSIS installer." }
+           # electron-builder may normalize/encode the artifact filename in
+           # latest.yml. Compare the actual metadata URL with the generated
+           # installer after decoding and removing presentation-only separators.
+           $metadataUrls = [regex]::Matches($metadata, '(?im)^\s*-?\s*(?:url|path):\s*["'']?(?<url>[^"''\r\n]+\.exe)["'']?\s*$') |
+             ForEach-Object { [System.Uri]::UnescapeDataString($_.Groups['url'].Value.Trim()) }
+           $installerToken = [regex]::Replace($installers[0].Name.ToLowerInvariant(), '[^a-z0-9]', '')
+           $metadataTokens = @($metadataUrls | ForEach-Object {
+             $fileName = [System.IO.Path]::GetFileName($_)
+             [regex]::Replace($fileName.ToLowerInvariant(), '[^a-z0-9]', '')
+           })
+           if ($metadataTokens -notcontains $installerToken) {
+             throw "latest.yml does not reference the generated NSIS installer. Generated='$($installers[0].Name)'; Metadata='$($metadataUrls -join ', ')'."
+           }
           $blockmaps = @(Get-ChildItem (Join-Path $output "*.blockmap") -File -ErrorAction SilentlyContinue)
           if ($blockmaps.Count -lt 1) { throw "electron-builder did not create a .blockmap artifact." }
           Write-Host "NSIS: $($installers[0].Name)"
