@@ -2364,16 +2364,64 @@ textarea:disabled {
 .tactical-hackable-object.is-camera-offline { opacity: .5; border-color: rgb(126 231 215 / 30%); color: rgb(126 231 215 / 65%); filter: grayscale(.75) saturate(.4); }
 .tactical-hackable-object.is-camera-offline .tactical-hackable-icon { opacity: .45; }
 .tactical-hackable-icon { display: grid; place-items: center; width: 1.25rem; height: 1.25rem; border: 1px solid currentColor; border-radius: .18rem; font-size: .9rem; }
-.tactical-hackable-object > span:last-child { max-width: 6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tactical-access-point { position: absolute; z-index: 4; display: grid; justify-items: center; gap: .08rem; min-width: 2.8rem; padding: .25rem .35rem; border: 1px solid var(--redline-teal); border-radius: 50%; background: rgb(8 28 30 / 94%); color: var(--redline-teal); transform: translate(-50%, -50%); cursor: pointer; font: 700 .52rem var(--font-geist-mono), monospace; letter-spacing: .04em; touch-action: manipulation; }
-.tactical-access-point > span { display: grid; width: 1.3rem; height: 1.3rem; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 1rem; }
-.tactical-access-point > small { max-width: 6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tactical-access-point:hover, .tactical-access-point:focus-visible, .tactical-access-point.is-selected { border-color: var(--redline-paper); outline: none; box-shadow: 0 0 0 .25rem rgb(126 231 215 / 24%), 0 0 1rem rgb(126 231 215 / 32%); }
+.tactical-hackable-object > span:last-child { max-width: 0; overflow: hidden; opacity: 0; text-overflow: ellipsis; white-space: nowrap; transition: max-width .16s ease, opacity .16s ease; }
+.tactical-hackable-object:hover > span:last-child, .tactical-hackable-object:focus-visible > span:last-child { max-width: 6rem; opacity: 1; }
+.tactical-access-point { position: absolute; z-index: 4; display: grid; justify-items: center; gap: .1rem; min-width: 4.2rem; padding: .35rem .45rem .3rem; border: 1px solid rgb(126 231 215 / 78%); border-radius: .35rem; background: linear-gradient(145deg, rgb(8 44 45 / 96%), rgb(8 15 18 / 96%)); color: var(--redline-teal); transform: translate(-50%, -50%); cursor: pointer; font: 700 .5rem var(--font-geist-mono), monospace; letter-spacing: .08em; touch-action: manipulation; box-shadow: 0 0 .7rem rgb(126 231 215 / 15%), inset 0 0 0 1px rgb(255 255 255 / 4%); }
+.tactical-access-point::before { position: absolute; inset: -.35rem; z-index: -1; border: 1px dashed rgb(126 231 215 / 32%); border-radius: .55rem; content: ""; pointer-events: none; }
+.tactical-access-point::after { position: absolute; right: .35rem; top: .32rem; width: .28rem; height: .28rem; border-radius: 50%; background: currentColor; box-shadow: 0 0 .45rem currentColor; content: ""; }
+.tactical-access-point > span { display: flex; align-items: end; justify-content: center; width: 2rem; height: 1rem; gap: .12rem; border-bottom: 1px solid rgb(126 231 215 / 40%); }
+.tactical-access-point > span i { display: block; width: .18rem; background: currentColor; box-shadow: 0 0 .3rem currentColor; }
+.tactical-access-point > span i:nth-child(1) { height: .35rem; opacity: .55; }
+.tactical-access-point > span i:nth-child(2) { height: .62rem; }
+.tactical-access-point > span i:nth-child(3) { height: .9rem; opacity: .75; }
+.tactical-access-point > strong { color: var(--redline-paper); font-size: .48rem; letter-spacing: .14em; }
+.tactical-access-point > small { max-width: 6rem; overflow: hidden; color: var(--redline-muted); font-size: .45rem; text-overflow: ellipsis; white-space: nowrap; }
+.tactical-access-point:hover, .tactical-access-point:focus-visible, .tactical-access-point.is-selected { border-color: var(--redline-paper); outline: none; box-shadow: 0 0 0 .25rem rgb(126 231 215 / 24%), 0 0 1.2rem rgb(126 231 215 / 38%); }
+.tactical-access-point.is-selected::before { border-color: var(--redline-paper); animation: tactical-access-pulse 1.6s ease-in-out infinite; }
 .tactical-access-point.is-disabled { opacity: .4; filter: grayscale(.8); }
+.tactical-access-point.is-disabled::after { background: var(--redline-coral); box-shadow: 0 0 .45rem var(--redline-coral); }
+.tactical-geometry-layer.is-editing ~ .tactical-access-point { cursor: grab; }
+.tactical-geometry-layer.is-editing ~ .tactical-access-point:active { cursor: grabbing; }
+@keyframes tactical-access-pulse { 50% { opacity: .45; transform: scale(1.08); } }
 .tactical-hackable-tools { display: grid; gap: .35rem; padding: .55rem 0; border-top: 1px solid rgb(247 196 90 / 18%); }
-.tactical-hackable-editor { display: grid; grid-template-columns: repeat(4, minmax(8rem, 1fr)); gap: .5rem; padding: .65rem; border: 1px solid rgb(247 196 90 / 35%); background: rgb(247 196 90 / 5%); }
-.tactical-hackable-editor label { display: grid; gap: .2rem; color: var(--redline-muted); font-size: .58rem; }
-.tactical-hackable-editor input, .tactical-hackable-editor select { min-width: 0; width: 100%; box-sizing: border-box; }
+.tactical-access-point-tool { border-color: rgb(247 196 90 / 45%) !important; color: var(--redline-yellow) !important; }
+.tactical-access-point-editor { display: grid; gap: .45rem; margin-top: .55rem; padding: .6rem; border: 1px solid rgb(247 196 90 / 42%); background: rgb(247 196 90 / 6%); }
+.tactical-access-point-editor header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.tactical-access-point-editor header strong { color: var(--redline-yellow); font: 700 .62rem var(--font-geist-mono), monospace; }
+.tactical-access-point-editor label { display: grid; gap: .2rem; color: var(--redline-muted); font-size: .58rem; }
+.tactical-access-point-editor input, .tactical-access-point-editor select { min-height: 1.9rem; padding: .3rem; border: 1px solid var(--redline-line-bright); background: var(--redline-ink); color: var(--redline-paper); }
+.tactical-access-point-fields { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+.tactical-access-point-connections { display: grid; gap: .3rem; color: var(--redline-muted); font-size: .58rem; }
+.tactical-access-point-connections > span { color: var(--redline-yellow); font: 700 .55rem var(--font-geist-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
+.tactical-access-point-connections label { display: flex; align-items: center; gap: .35rem; }
+.tactical-hackable-editor { display: grid; gap: .75rem; margin-top: .55rem; padding: .75rem; border: 1px solid rgb(247 196 90 / 48%); background: linear-gradient(135deg, rgb(247 196 90 / 9%), rgb(8 15 18 / 72%) 48%, rgb(126 231 215 / 4%)); box-shadow: inset 0 1px rgb(255 255 255 / 5%), 0 8px 22px rgb(0 0 0 / 16%); }
+.tactical-hackable-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding-bottom: .65rem; border-bottom: 1px solid rgb(247 196 90 / 18%); }
+.tactical-hackable-editor-title { display: flex; align-items: center; gap: .55rem; min-width: 0; }
+.tactical-hackable-editor-title > div { display: grid; gap: .12rem; min-width: 0; }
+.tactical-hackable-editor-title strong { overflow: hidden; color: var(--redline-paper); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
+.tactical-hackable-editor-title small { color: var(--redline-muted); font: 500 .5rem var(--font-geist-mono), monospace; letter-spacing: .06em; }
+.tactical-hackable-editor-icon { display: grid; flex: 0 0 auto; width: 2rem; height: 2rem; place-items: center; border: 1px solid var(--redline-yellow); background: rgb(247 196 90 / 10%); color: var(--redline-yellow); font-size: 1.05rem; }
+.tactical-hackable-status { display: inline-flex; align-items: center; gap: .3rem; flex: 0 0 auto; color: var(--redline-teal); font: 700 .52rem var(--font-geist-mono), monospace; letter-spacing: .07em; }
+.tactical-hackable-status i { width: .38rem; height: .38rem; border-radius: 50%; background: currentColor; box-shadow: 0 0 .45rem currentColor; }
+.tactical-hackable-status.is-inactive { color: var(--redline-coral); }
+.tactical-hackable-editor-fields { display: grid; grid-template-columns: minmax(10rem, 1.5fr) repeat(2, minmax(8rem, 1fr)) minmax(7rem, .8fr); gap: .55rem; }
+.tactical-hackable-editor label { display: grid; gap: .28rem; min-width: 0; color: var(--redline-muted); font: 700 .52rem var(--font-geist-mono), monospace; letter-spacing: .05em; text-transform: uppercase; }
+.tactical-hackable-editor input, .tactical-hackable-editor select { min-width: 0; width: 100%; min-height: 2rem; box-sizing: border-box; padding: .4rem .45rem; border: 1px solid var(--redline-line-bright); background: rgb(8 15 18 / 82%); color: var(--redline-paper); font: 500 .65rem var(--font-geist-mono), monospace; }
+.tactical-hackable-editor input:focus, .tactical-hackable-editor select:focus { border-color: var(--redline-yellow); outline: 2px solid rgb(247 196 90 / 18%); outline-offset: 1px; }
+.tactical-hackable-active > span { color: var(--redline-muted); }
+.tactical-hackable-switch { display: flex; align-items: center; gap: .4rem; min-height: 2rem; padding: .3rem .45rem; border: 1px solid rgb(255 105 92 / 45%); background: rgb(255 105 92 / 7%); color: var(--redline-coral); cursor: pointer; text-align: left; }
+.tactical-hackable-switch i { width: 1.55rem; height: .8rem; position: relative; border: 1px solid currentColor; border-radius: 1rem; }
+.tactical-hackable-switch i::after { content: ""; position: absolute; top: .1rem; left: .12rem; width: .5rem; height: .5rem; border-radius: 50%; background: currentColor; transition: transform .16s ease; }
+.tactical-hackable-switch.is-on { border-color: rgb(126 231 215 / 45%); background: rgb(126 231 215 / 7%); color: var(--redline-teal); }
+.tactical-hackable-switch.is-on i::after { transform: translateX(.72rem); }
+.tactical-hackable-switch b { font: 700 .55rem var(--font-geist-mono), monospace; }
+.tactical-hackable-editor-advanced { display: flex; align-items: end; flex-wrap: wrap; gap: .55rem; padding-top: .65rem; border-top: 1px solid rgb(247 196 90 / 14%); }
+.tactical-hackable-section-label { flex: 1 0 100%; color: var(--redline-yellow); font: 700 .5rem var(--font-geist-mono), monospace; letter-spacing: .1em; text-transform: uppercase; }
+.tactical-hackable-editor-advanced label { min-width: min(100%, 16rem); flex: 1 1 14rem; }
+.tactical-hackable-secondary-action { min-height: 2rem; padding: .4rem .55rem; border: 1px solid rgb(247 196 90 / 45%); background: rgb(247 196 90 / 8%); color: var(--redline-yellow); font: 700 .52rem var(--font-geist-mono), monospace; cursor: pointer; }
+.tactical-hackable-editor-footer { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding-top: .55rem; border-top: 1px solid rgb(247 196 90 / 14%); color: var(--redline-muted); font-size: .52rem; }
+.tactical-hackable-delete { padding: .25rem 0; border: 0; background: none; color: var(--redline-coral); font: 700 .52rem var(--font-geist-mono), monospace; cursor: pointer; }
+.tactical-hackable-delete:hover, .tactical-hackable-delete:focus-visible { color: var(--redline-paper); text-decoration: underline; }
 .netrunner-resource-hud { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin: .7rem 0; }
 .netrunner-resource-hud > div { display: grid; gap: .25rem; }
 .netrunner-resource-hud span { color: var(--redline-muted); font: 700 .55rem var(--font-geist-mono), monospace; letter-spacing: .12em; }
@@ -2407,10 +2455,17 @@ textarea:disabled {
 .net-demon-card span { color: var(--redline-muted); }
 .player-mesa-events-list li.is-net-event { border-left: 2px solid var(--redline-yellow); background: rgb(247 196 90 / 4%); }
 .mesa-event-kind { display: inline-block; margin-right: .35rem; color: var(--redline-yellow); font: 700 .48rem var(--font-geist-mono), monospace; letter-spacing: .06em; }
-.netrunner-jackout { display: grid; gap: .3rem; margin: .55rem 0; }
-.netrunner-jackout.has-ice { padding: .5rem; border: 1px solid rgb(255 105 92 / 55%); background: rgb(255 105 92 / 7%); }
-.netrunner-jackout.has-ice strong { color: var(--redline-coral); font: 700 .58rem var(--font-geist-mono), monospace; }
-.netrunner-jackout.has-ice span { color: var(--redline-muted); font-size: .62rem; line-height: 1.35; }
+.netrunner-jackout { display: flex; align-items: center; justify-content: space-between; gap: .7rem; margin: .65rem 0; padding: .65rem; border: 1px solid rgb(126 231 215 / 38%); background: linear-gradient(100deg, rgb(126 231 215 / 9%), rgb(8 15 18 / 60%)); box-shadow: inset 3px 0 var(--redline-teal); }
+.netrunner-jackout-copy { display: grid; gap: .16rem; min-width: 0; }
+.netrunner-jackout-copy .mesa-eyebrow { color: var(--redline-teal); font-size: .48rem; }
+.netrunner-jackout-copy strong { color: var(--redline-paper); font: 700 .62rem var(--font-geist-mono), monospace; letter-spacing: .06em; }
+.netrunner-jackout-copy > span:last-child { color: var(--redline-muted); font-size: .58rem; line-height: 1.35; }
+.netrunner-jackout.has-ice { border-color: rgb(255 105 92 / 55%); background: rgb(255 105 92 / 7%); box-shadow: inset 3px 0 var(--redline-coral); }
+.netrunner-jackout.has-ice .netrunner-jackout-copy .mesa-eyebrow, .netrunner-jackout.has-ice .netrunner-jackout-copy strong { color: var(--redline-coral); }
+.netrunner-safe-jackout { flex: 0 0 auto; min-height: 2.15rem; padding: .45rem .65rem; border: 1px solid var(--redline-teal); background: rgb(126 231 215 / 12%); color: var(--redline-teal); font: 700 .56rem var(--font-geist-mono), monospace; letter-spacing: .05em; cursor: pointer; }
+.netrunner-safe-jackout:hover:not(:disabled) { background: var(--redline-teal); color: var(--redline-ink); box-shadow: 0 0 14px rgb(126 231 215 / 22%); }
+.netrunner-jackout.has-ice .netrunner-safe-jackout { border-color: var(--redline-coral); background: rgb(255 105 92 / 10%); color: var(--redline-coral); }
+.netrunner-jackout.has-ice .netrunner-safe-jackout:hover:not(:disabled) { background: var(--redline-coral); color: var(--redline-ink); }
 .quickhack-actions { display: grid; gap: .45rem; margin-top: .7rem; }
 .quickhack-actions > header, .net-architecture-view > header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: var(--redline-teal); font: 700 .58rem var(--font-geist-mono), monospace; letter-spacing: .08em; }
 .quickhack-actions > header span { color: var(--redline-muted); font-size: .5rem; letter-spacing: .04em; }
@@ -2451,7 +2506,63 @@ textarea:disabled {
 .net-target-context h4, .net-target-context p { margin: 0; }
 .net-target-context h4 { color: var(--redline-coral); font: 800 .76rem var(--font-geist-mono), monospace; }
 .net-target-context p { color: var(--redline-muted); font: 600 .55rem var(--font-geist-mono), monospace; }
-@media (max-width: 720px) { .tactical-hackable-editor { grid-template-columns: 1fr 1fr; } .netrunner-resource-hud { gap: .4rem; } .tactical-hackable-object { min-width: 2.4rem; } }
+
+/* O painel NET vive no rail estreito do jogador: leitura em camadas, não uma
+ * coluna infinita de cards. Recursos e a ação principal ficam sempre visíveis;
+ * configuração e detalhes ocupam espaço só quando solicitados. */
+.player-mesa-net-panel {
+  max-height: calc(100vh - 11rem);
+  overflow-y: auto;
+  padding: .75rem;
+  scrollbar-color: var(--redline-teal) transparent;
+}
+.netrunner-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.netrunner-panel-heading h3 { margin: .15rem 0 0; font-size: 1rem; }
+.netrunner-panel-state { padding: .2rem .35rem; border: 1px solid; font: 700 .5rem var(--font-geist-mono), monospace; letter-spacing: .08em; }
+.netrunner-panel-state.is-online { border-color: var(--redline-teal); color: var(--redline-teal); }
+.netrunner-panel-state.is-offline { border-color: var(--redline-coral); color: var(--redline-coral); }
+.netrunner-panel-meta { margin: .25rem 0 .45rem; color: var(--redline-muted); font: 600 .52rem var(--font-geist-mono), monospace; }
+.netrunner-panel-warning { margin: .35rem 0; padding: .35rem .45rem; border-left: 2px solid var(--redline-coral); background: rgb(255 105 92 / 6%); color: var(--redline-coral); font-size: .62rem; }
+.player-mesa-net-panel .netrunner-resource-hud { gap: .4rem; margin: .45rem 0; }
+.player-mesa-net-panel .netrunner-resource-hud strong { font-size: .78rem; }
+.player-mesa-net-panel .netrunner-connection-status { padding: .3rem .4rem; }
+.player-mesa-net-panel .netrunner-turn-hud { margin: .35rem 0; }
+.player-mesa-net-panel .netrunner-turn-hud span { padding: .25rem .3rem; font-size: .48rem; }
+.netrunner-collapsible { margin: .45rem 0; border: 1px solid rgb(126 231 215 / 22%); background: rgb(8 15 18 / 42%); }
+.netrunner-collapsible > summary { display: flex; align-items: center; justify-content: space-between; gap: .4rem; padding: .4rem .45rem; color: var(--redline-teal); cursor: pointer; font: 700 .56rem var(--font-geist-mono), monospace; letter-spacing: .07em; list-style: none; }
+.netrunner-collapsible > summary::-webkit-details-marker { display: none; }
+.netrunner-collapsible > summary::after { color: var(--redline-muted); content: "+"; font-size: .8rem; }
+.netrunner-collapsible[open] > summary::after { content: "−"; }
+.netrunner-collapsible > summary strong { color: var(--redline-paper); font-size: .52rem; letter-spacing: 0; }
+.quickhack-loadout-options { display: grid; gap: .2rem; padding: 0 .45rem .45rem; }
+.quickhack-loadout-options label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .35rem; min-width: 0; padding: .32rem .35rem; border: 1px solid transparent; color: var(--redline-soft); font-size: .62rem; cursor: pointer; }
+.quickhack-loadout-options label:hover { border-color: rgb(126 231 215 / 35%); background: rgb(126 231 215 / 5%); }
+.quickhack-loadout-options label.is-selected { border-color: rgb(126 231 215 / 48%); background: rgb(126 231 215 / 9%); }
+.quickhack-loadout-options label > input { accent-color: var(--redline-teal); }
+.quickhack-loadout-options label > span { display: grid; gap: .08rem; min-width: 0; overflow: hidden; }
+.quickhack-loadout-options label strong { overflow: hidden; color: var(--redline-paper); font-size: .58rem; text-overflow: ellipsis; white-space: nowrap; }
+.quickhack-loadout-options label small { color: var(--redline-muted); font: 500 .48rem var(--font-geist-mono), monospace; }
+.quickhack-loadout-options label > b { color: var(--redline-teal); font: 700 .45rem var(--font-geist-mono), monospace; letter-spacing: .04em; }
+.quickhack-loadout-options button { min-height: 1.8rem; margin-top: .2rem; }
+.player-mesa-net-panel .quickhack-actions { gap: .25rem; margin-top: .45rem; }
+.player-mesa-net-panel .quickhack-card { gap: .1rem .35rem; padding: .35rem; }
+.player-mesa-net-panel .quickhack-card > div strong { font-size: .6rem; }
+.player-mesa-net-panel .quickhack-card p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 1; font-size: .52rem; }
+.player-mesa-net-panel .quickhack-card small { display: none; }
+.player-mesa-net-panel .quickhack-card button { min-width: 4.6rem; min-height: 1.75rem; font-size: .48rem; }
+.player-mesa-net-panel .netrunner-access-point-context,
+.player-mesa-net-panel .netrunner-object-context,
+.player-mesa-net-panel .net-target-context { gap: .2rem; margin: .45rem 0; padding: .45rem; }
+.player-mesa-net-panel .netrunner-action-reason { color: var(--redline-coral); font: 600 .5rem var(--font-geist-mono), monospace; }
+.player-mesa-net-panel .net-architecture-view { gap: .25rem; margin-top: .45rem; padding-top: .45rem; }
+.player-mesa-net-panel .net-node-list { gap: .2rem; }
+.player-mesa-net-panel .net-node-card { padding: .28rem; }
+.player-mesa-net-panel .net-actions { display: grid; gap: .25rem; margin-top: .45rem; }
+
+@media (max-width: 720px) {
+  .player-mesa-net-panel { max-height: none; }
+}
+@media (max-width: 720px) { .tactical-hackable-editor-fields { grid-template-columns: 1fr 1fr; } .tactical-hackable-editor-heading { align-items: flex-start; flex-direction: column; } .netrunner-resource-hud { gap: .4rem; } .tactical-hackable-object { min-width: 2.4rem; } }
 @media (max-width: 720px) { .quickhack-card > div { display: grid; gap: .12rem; } .quickhack-card button { min-width: 5rem; } .net-target-list { grid-template-columns: 1fr 1fr; } .net-demon-card, .net-ice-turn-banner { align-items: flex-start; flex-direction: column; } }
 .tactical-movement-readout { position: absolute; z-index: 5; display: grid; gap: .1rem; min-width: 5.5rem; padding: .35rem .45rem; border: 1px solid rgb(126 231 215 / 45%); background: rgb(8 15 18 / 88%); color: var(--redline-paper); font: 600 .58rem var(--font-geist-mono), monospace; line-height: 1.2; pointer-events: none; transform: translate(.8rem, calc(-100% - .7rem)); }
 .tactical-movement-readout b { color: var(--redline-teal); }
@@ -3993,7 +4104,7 @@ textarea:disabled {
 .gm-map-tools-slot .tactical-cover-editor-grid { grid-template-columns: 1fr; gap: .5rem; }
 .gm-map-tools-slot .tactical-material-picker { flex-wrap: wrap; }
 .gm-map-tools-slot .tactical-material-option { min-width: 0; }
-.gm-map-tools-slot .tactical-hackable-editor { grid-template-columns: 1fr; }
+.gm-map-tools-slot .tactical-hackable-editor-fields { grid-template-columns: 1fr; }
 
 .player-mesa-gm-combatants,
 .player-mesa-gm-turn-state,

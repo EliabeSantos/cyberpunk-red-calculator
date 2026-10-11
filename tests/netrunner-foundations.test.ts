@@ -43,12 +43,27 @@ test("os 11 Quickhacks possuem custo RAM e DV de catálogo", () => {
 test("efeitos de Quickhack usam duração/rolagem server-side sem inventar Brain Damage", () => {
   const overheat = resolveQuickhackEffect({ quickhackId: "overheat", sourceCombatantId: "n", currentRound: 3, rng: createTestRandomSource([]) });
   assert.equal(overheat.effect.damageAtEndOfTurn, 4);
+  assert.deepEqual(overheat.effect.conditionIds, ["OVERHEAT"]);
   assert.equal(overheat.damage, undefined);
   const slow = resolveQuickhackEffect({ quickhackId: "slow", sourceCombatantId: "n", currentRound: 3, rng: createTestRandomSource([6]) });
   assert.equal(slow.effect.moveModifier, -6);
   const puppet = resolveQuickhackEffect({ quickhackId: "puppet", sourceCombatantId: "n", currentRound: 3, rng: createTestRandomSource([]) });
   assert.equal(puppet.effect.controlsAction, true);
   assert.equal(puppet.effect.controlsMove, true);
+});
+
+test("todos os Quickhacks deixam um efeito mecânico ou condição autoritativa", () => {
+  const ids = Object.keys(quickhackDefinitions);
+  const effects = ids.map((quickhackId) => resolveQuickhackEffect({ quickhackId, sourceCombatantId: "n", currentRound: 3, rng: createTestRandomSource([4, 4, 4, 4]) }));
+  assert.ok(effects.every(({ effect, damage }) =>
+    (effect.conditionIds?.length ?? 0) > 0
+    || effect.moveModifier !== undefined
+    || effect.damageAtEndOfTurn !== undefined
+    || effect.controlsMove === true
+    || effect.controlsAction === true
+    || damage !== undefined
+    || effect.quickhackId === "shard_ejection",
+  ));
 });
 
 test("Skill Interface legada não altera disponibilidade de Netrunner", () => {

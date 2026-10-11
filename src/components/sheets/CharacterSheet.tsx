@@ -15,7 +15,7 @@ import {
   upgradeSpecialization,
   downgradeSpecialization,
 } from "@/lib/progression";
-import { equipInventoryItem, isEquippableItem } from "@/lib/inventory";
+import { equipInventoryItem, isCyberdeckItem, isEquippableItem } from "@/lib/inventory";
 import { applyHealingItem, getItemHealAmount, isHealingItem } from "@/lib/healing";
 import { stableItemId } from "@/data/supplyItems";
 import {
@@ -2157,6 +2157,7 @@ export default function CharacterSheet({
                 // Camada de leitura: id ESTÁVEL do item (F1.13.2) e se a Mesa
                 // o acompanha — a ficha não ganha uma segunda fonte de verdade.
                 const itemId = stableItemId(item.name);
+                const cyberdeckEquipped = isCyberdeckItem(item) && item.equipped === true;
                 const mesaTracked = playerHealing?.isTracked(itemId) ?? false;
                 const healingButton =
                   healAmount === null
@@ -2193,6 +2194,8 @@ export default function CharacterSheet({
                             type="button"
                             className="inventory-action-btn sell"
                             onClick={() => sellItem(item.id)}
+                            disabled={cyberdeckEquipped}
+                            title={cyberdeckEquipped ? "Desequipe o Cyberdeck antes de vender." : undefined}
                           >
                             Vender
                           </button>
@@ -2203,19 +2206,25 @@ export default function CharacterSheet({
                             className="inventory-action-btn equip"
                             onClick={() => equipItem(item.id)}
                           >
-                            {item.category === "cyberware" ? "Instalar" : "Equipar"}
+                            {item.category === "cyberware"
+                              ? "Instalar"
+                              : isCyberdeckItem(item) && item.equipped === true
+                                ? "Desequipar"
+                                : "Equipar"}
                           </button>
                         )}
-                        <button
-                          type="button"
-                          className="inventory-action-btn remove"
-                          onClick={() => removeInventoryItem(item.id)}
-                          disabled={playerHealing !== undefined && mesaTracked}
-                          title={
-                            playerHealing !== undefined && mesaTracked
+                          <button
+                            type="button"
+                            className="inventory-action-btn remove"
+                            onClick={() => removeInventoryItem(item.id)}
+                            disabled={cyberdeckEquipped || (playerHealing !== undefined && mesaTracked)}
+                            title={
+                              cyberdeckEquipped
+                                ? "Desequipe o Cyberdeck antes de remover."
+                                : playerHealing !== undefined && mesaTracked
                               ? "Quantidade em disputa na Mesa — o item sai só quando o combate acabar."
                               : "Remover da ficha"
-                          }
+                            }
                         >
                           ×
                         </button>

@@ -99,6 +99,7 @@ import {
 } from "@/lib/mesa/rollPolicy";
 import { rollInitiative } from "@/lib/initiative";
 import type { Character } from "@/types/character";
+import { isCyberdeckItem } from "@/lib/inventory";
 import type { EncounterParticipant } from "@/types/encounter";
 import { toCombatParticipant } from "@/lib/combat/adapters";
 import { formatMesaAttackEvent } from "@/lib/mesa/attackAudit";
@@ -828,10 +829,15 @@ function criticalInjuriesForRow(row: CombatantRow): CombatParticipant["combat"][
   return Array.isArray(snapshot) ? snapshot : [];
 }
 
-function conditionsForRow(row: CombatantRow): string[] {
-  return Array.isArray(row.conditions)
+function conditionsForRow(row: CombatantRow, round = 0): string[] {
+  const persisted = Array.isArray(row.conditions)
     ? row.conditions.filter((condition): condition is string => typeof condition === "string")
     : [];
+  const quickhackConditions = (Array.isArray(row.net_effects) ? row.net_effects : [])
+    .filter((effect) => effect.expiresRound === null || effect.expiresRound >= round)
+    .flatMap((effect) => effect.conditionIds ?? [])
+    .filter((condition): condition is string => typeof condition === "string");
+  return [...new Set([...persisted, ...quickhackConditions])];
 }
 
 type IntegratedAttackResponse = {
@@ -1220,7 +1226,7 @@ function toCombat(row: CombatRow): MesaCombat {
   };
 }
 
-function effectiveMovementForRow(row: CombatantRow, round = Number.POSITIVE_INFINITY): { max: number; remaining: number } {
+function effectiveMovementForRow(row: CombatantRow, round = 0): { max: number; remaining: number } {
   const injuryState = row.combat_snapshot?.combat
     ? getCriticalInjuryModifiers({
         combat: {
@@ -1282,7 +1288,7 @@ function toCombatant(row: CombatantRow, round = Number.POSITIVE_INFINITY): MesaC
     isDead: row.is_dead,
     deathSaveDC: row.death_save_dc ?? 0,
     deathSaveFailures: row.death_save_failures ?? 0,
-    conditions: Array.isArray(row.conditions) ? row.conditions : [],
+     conditions: conditionsForRow(row, round),
     sortOrder: row.sort_order,
     position: normalizeTacticalPosition(row.position, { x: row.kind === "enemy" ? 0.78 : 0.22, y: 0.2 + (row.sort_order % 5) * 0.15 }),
     stealthState: row.stealth_state === "stealthed" ? "stealthed" : "not_stealthed",
@@ -1540,9 +1546,18 @@ export function combatParticipantFromRow(row: CombatantRow): CombatParticipant |
     const ammo = weapon.id ? row.combat_ammo?.[weapon.id] : undefined;
     return ammo === undefined ? weapon : { ...weapon, ammo };
   }) : undefined;
+  const disabledCyberwareIds = new Set(
+    (Array.isArray(row.net_effects) ? row.net_effects : [])
+      .flatMap((effect) => effect.disabledCyberwareIds ?? [])
+      .filter((id): id is string => typeof id === "string"),
+  );
+  const cyberware = Array.isArray(row.combat_snapshot.cyberware)
+    ? row.combat_snapshot.cyberware.filter((item) => !disabledCyberwareIds.has(item.catalogItemId ?? item.name))
+    : undefined;
   return {
     ...row.combat_snapshot,
     ...(weapons ? { weapons } : {}),
+    ...(cyberware ? { cyberware } : {}),
     combat: {
       ...row.combat_snapshot.combat,
       hp: { current: row.hp_current, max: row.hp_max },
@@ -1574,7 +1589,7 @@ function ammoStateForParticipant(participant: CombatParticipant | null): Record<
   return entries.length > 0 ? Object.fromEntries(entries) : null;
 }
 
-/** Materializa munição relevante E itens de cura: os dois são mochila da Mesa. */
+/** Materializa munição, cura e equipamento NET preparado na mochila da Mesa. */
 function suppliesForCharacter(
   sheet: Character,
   snapshot: CombatState["participants"][number] | null,
@@ -1586,7 +1601,9 @@ function suppliesForCharacter(
   const inventory = (sheet.inventory ?? [])
     .filter(
       (item) =>
-        isAmmoRelevantToWeapons(item.name, weapons) || getSupplyHealAmount(item.name) !== null,
+        isAmmoRelevantToWeapons(item.name, weapons) ||
+        getSupplyHealAmount(item.name) !== null ||
+        (item.equipped === true && isCyberdeckItem(item)),
     )
     .map((item) => ({
       itemId: stableItemId(item.name),
@@ -1871,15 +1888,18 @@ export async function setCombatantStealth(input: {
 }
 
 function hasCyberdeck(sheet: Character | null): boolean {
-  return Boolean(sheet?.inventory?.some((item) => {
-    const id = (item.catalogItemId ?? item.id ?? "").toLowerCase();
-    const name = item.name.toLowerCase();
-    return item.quantity > 0 && (id === "cyberdeck" || name === "cyberdeck");
-  }));
+  return Boolean(sheet?.inventory?.some((item) => item.quantity > 0 && item.equipped === true && isCyberdeckItem(item)));
 }
 
 function interfaceRankForSheet(sheet: Character | null): number {
-  return sheet?.roleAbilities.find((ability) => ability.abilityId === "interface")?.rank ?? 0;
+  if (!sheet) return 0;
+  const abilityRank = sheet.roleAbilities.find((ability) => ability.abilityId === "interface")?.rank;
+  if (typeof abilityRank === "number" && abilityRank > 0) return abilityRank;
+  // Fichas antigas podem ter o Netrunner salvo antes da Role Ability
+  // Interface ser persistida. Mantém o mesmo fallback usado pela UI.
+  return sheet.primaryRole === "netrunner" || sheet.identity.role.trim().toLowerCase() === "netrunner"
+    ? sheet.skills.interface?.level ?? 0
+    : 0;
 }
 
 function requireNetrunnerOwnership(participant: MesaParticipant, row: CombatantRow): void {
@@ -2632,7 +2652,11 @@ export async function executeCombatQuickhack(input: {
       const resolved = resolveQuickhackEffect({ quickhackId, sourceCombatantId: actor.id, currentRound: combat.round, rng: serverRandom });
       const effect: MesaQuickhackEffect = { ...resolved.effect, id: createId(), ...(quickhackId === "short_circuit" ? { disabledCyberwareIds: cyberwareIds.slice(0, 3) } : {}), ...(quickhackId === "cyberware_malfunction" ? { disabledCyberwareIds: cyberwareIds.slice(0, 1) } : {}) };
       targetEffectsNext = [...targetEffects.filter((effect) => effect.quickhackId !== quickhackId), effect];
-      targetConditions = [...new Set([...targetConditions, ...(effect.conditionIds ?? [])])];
+      const replacedEffect = targetEffects.find((entry) => entry.quickhackId === quickhackId);
+      targetConditions = [...new Set([
+        ...targetConditions.filter((condition) => !replacedEffect?.conditionIds?.includes(condition)),
+        ...(effect.conditionIds ?? []),
+      ])];
       if (quickhackId === "shard_ejection") {
         const ejected = ejectChipware(target);
         targetSuppliesNext = ejected.supplies;

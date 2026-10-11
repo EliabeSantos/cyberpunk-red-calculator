@@ -28,7 +28,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import MesaCharacterLink from "@/components/mesa/MesaCharacterLink";
-import { closeMesa, endCombat, fetchMesaControlMetadata, leaveMesa, MesaApiError } from "@/lib/mesa/client";
+import { closeMesa, endCombat, fetchMesaControlMetadata, jackInMesa, leaveMesa, MesaApiError } from "@/lib/mesa/client";
 import { attackTargets, myCombatant } from "@/lib/mesa/playerScreen";
 import type { MesaState } from "@/lib/mesa/types";
 import type { CombatWeapon } from "@/lib/combat/contract";
@@ -39,6 +39,7 @@ import { useAutoLinkCharacter } from "@/lib/mesa/useAutoLinkCharacter";
 import { loadCharacters, upsertCharacter } from "@/lib/storage";
 import { syncMesaCharacterState } from "@/lib/mesa/characterSync";
 import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
+import { canConnectToAccessPoint } from "@/lib/mesa/netrunner";
 import { shouldReconcileAfterAction } from "@/lib/mesa/useMesaState";
 
 import CombatLog from "./CombatLog";
@@ -84,6 +85,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
   const [selectedHackableObjectId, setSelectedHackableObjectId] = useState<string | null>(null);
   const [selectedAccessPointId, setSelectedAccessPointId] = useState<string | null>(null);
   const [gmControlMode, setGmControlMode] = useState<"enemy" | "map">("enemy");
+  const [playerControlMode, setPlayerControlMode] = useState<"combat" | "net">("combat");
   const [controlWeapons, setControlWeapons] = useState<Record<string, { weapons: CombatWeapon[]; attacks: AvailableAttack[] }>>({});
 
   const onNotice = useCallback<NoticeFn>((message, kind) => {
@@ -168,6 +170,49 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
   // Ler a fonte persistida a cada render mantém a miniatura e a arma alinhadas
   // ao equipamento atual, sem criar estado paralelo para a regra de combate.
   const localCharacter = linkedCharacterId ? loadCharacters().find((entry) => entry.id === linkedCharacterId) ?? null : null;
+  const canUseNetPanel = !isGM && Boolean(
+    localCharacter?.primaryRole === "netrunner"
+      || localCharacter?.identity.role.trim().toLowerCase() === "netrunner"
+      || localCharacter?.roleAbilities.some((ability) => ability.abilityId === "interface" && ability.rank > 0)
+      || (me?.netrunnerState?.interfaceRank ?? 0) > 0,
+  );
+  const activePlayerControlMode = canUseNetPanel ? playerControlMode : "combat";
+
+  function directJackIn(accessPointId: string): void {
+    if (!canUseNetPanel || !me || busy || me.netrunnerState?.isJackedIn) return;
+    const accessPoint = state.session.tacticalMap?.accessPoints?.find((entry) => entry.id === accessPointId);
+    if (!accessPoint) {
+      onNotice("Access Point não encontrado.", "error");
+      return;
+    }
+    const tacticalMap = state.session.tacticalMap ?? {
+      imageUrl: "",
+      enabled: false,
+      width: 1000,
+      height: 600,
+      pixelsPerMeter: 50,
+    };
+    const position = me.position ?? { x: 0.22, y: 0.5 };
+    const wireless = accessPoint.connectionTypes.includes("wireless")
+      ? canConnectToAccessPoint({ accessPoint, connectionType: "wireless", netrunnerPosition: position, map: tacticalMap })
+      : null;
+    const connectionType = wireless?.ok
+      ? "wireless"
+      : accessPoint.connectionTypes.includes("cable")
+        ? "cable"
+        : null;
+    if (!connectionType) {
+      onNotice(wireless && !wireless.ok && wireless.reason === "out_of_range" ? "Fora do alcance Wireless e sem conexão por cabo disponível." : "Este Access Point não está disponível.", "error");
+      return;
+    }
+    void run(
+      async () => {
+        await jackInMesa({ sessionId: state.session.id, combatantId: me.id, accessPointId, connectionType });
+        setSelectedAccessPointId(null);
+      },
+      { success: `Jack In realizado por ${connectionType === "wireless" ? "Wireless" : "Cabo"}.` },
+    );
+  }
   const characterName = localCharacter?.identity.name ?? null;
   const weapons = localCharacter?.weapons ?? EMPTY_WEAPONS;
   const attacks = useMemo<AvailableAttack[]>(
@@ -327,12 +372,16 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
                   setTargetDraft("");
                 }
               }}
-              selectedAccessPointId={selectedAccessPointId}
-              onSelectAccessPoint={(id) => {
-                setSelectedAccessPointId(id);
-                if (id) {
-                  setSelectedHackableObjectId(null);
-                  setTargetDraft("");
+               selectedAccessPointId={selectedAccessPointId}
+               onSelectAccessPoint={(id) => {
+                 setSelectedAccessPointId(id);
+                 if (id && canUseNetPanel) {
+                   setPlayerControlMode("net");
+                   directJackIn(id);
+                 }
+                 if (id) {
+                   setSelectedHackableObjectId(null);
+                   setTargetDraft("");
                 }
               }}
              gmMapToolsVisible={!isGM || gmControlMode === "map"}
@@ -363,24 +412,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
               onChanged={onChanged}
              characterId={linkedCharacterId}
            />
-           <PlayerNetrunnerPanel
-             state={state}
-             me={me}
-              character={localCharacter}
-              target={selectedAccessPointId || selectedHackableObjectId ? null : targets.find((target) => target.id === selectedTargetId) ?? null}
-              selectedHackableObject={(state.session.tacticalMap?.hackableObjects ?? []).find((object) => object.id === selectedHackableObjectId) ?? null}
-              selectedAccessPointId={selectedAccessPointId}
-              onSelectAccessPoint={(id) => {
-                setSelectedAccessPointId(id);
-                if (id) {
-                  setSelectedHackableObjectId(null);
-                  setTargetDraft("");
-                }
-              }}
-              busy={busy}
-              run={run}
-            />
-           <GmNetArchitecturePanel state={state} />
+            <GmNetArchitecturePanel state={state} />
           </div>
         </section>
 
@@ -402,25 +434,61 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
                 controlMode={gmControlMode}
                 onControlModeChange={setGmControlMode}
              />
-          ) : (
-            <PlayerActionsPanel
-              state={state}
-              me={me}
-              busy={busy}
-              run={run}
-              onChanged={onChanged}
-               weapons={weapons}
-               attacks={attacks}
-              targets={targets}
-              selectedTargetId={selectedTargetId}
-               selectedWeaponId={selectedWeaponId}
-               onSelectWeapon={setSelectedWeaponId}
-               selectedAttackId={selectedAttackId}
-               onSelectAttack={setSelectedAttackId}
-               sessionFinished={sessionFinished}
-               onAttackAnimation={playAttackAnimation}
-            />
-          )}
+           ) : (
+             <>
+               {canUseNetPanel && (
+                 <div className="gm-control-switch player-control-tabs" role="tablist" aria-label="Controles do jogador">
+                   <button
+                     type="button"
+                     role="tab"
+                     aria-selected={activePlayerControlMode === "combat"}
+                     className={activePlayerControlMode === "combat" ? "is-active" : ""}
+                     onClick={() => setPlayerControlMode("combat")}
+                   >
+                     AÇÕES
+                   </button>
+                   <button
+                     type="button"
+                     role="tab"
+                     aria-selected={activePlayerControlMode === "net"}
+                     className={activePlayerControlMode === "net" ? "is-active" : ""}
+                     onClick={() => setPlayerControlMode("net")}
+                   >
+                     NET
+                   </button>
+                 </div>
+               )}
+               {activePlayerControlMode === "net" ? (
+                 <PlayerNetrunnerPanel
+                   state={state}
+                   me={me}
+                   character={localCharacter}
+                    target={selectedHackableObjectId ? null : targets.find((target) => target.id === selectedTargetId) ?? null}
+                    selectedHackableObject={(state.session.tacticalMap?.hackableObjects ?? []).find((object) => object.id === selectedHackableObjectId) ?? null}
+                    busy={busy}
+                   run={run}
+                 />
+               ) : (
+                 <PlayerActionsPanel
+                   state={state}
+                   me={me}
+                   busy={busy}
+                   run={run}
+                   onChanged={onChanged}
+                   weapons={weapons}
+                   attacks={attacks}
+                   targets={targets}
+                   selectedTargetId={selectedTargetId}
+                   selectedWeaponId={selectedWeaponId}
+                   onSelectWeapon={setSelectedWeaponId}
+                   selectedAttackId={selectedAttackId}
+                   onSelectAttack={setSelectedAttackId}
+                   sessionFinished={sessionFinished}
+                   onAttackAnimation={playAttackAnimation}
+                 />
+               )}
+             </>
+           )}
 
            <details className="player-mesa-panel player-mesa-secondary">
              <summary>Mesa, jogadores e vínculo</summary>

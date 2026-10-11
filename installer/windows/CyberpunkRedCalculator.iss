@@ -1,5 +1,5 @@
 #define AppName "Cyberpunk RED Calculator"
-#define AppVersion "0.1.0"
+#define AppVersion "0.1.1"
 [Setup]
 AppId={{B3C4A50A-2E35-4F26-A0B9-4A1C0C0A1A10}
 AppName={#AppName}

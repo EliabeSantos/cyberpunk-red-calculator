@@ -227,18 +227,14 @@ test("a especialização sobe pelo bolso da perícia-mãe e respeita o saldo dis
   );
 });
 
-test("a lista de ataques tem um único card Martial Arts, rolando a perícia-mãe", () => {
+test("a lista de ataques inclui a perícia-mãe e cada forma de Martial Arts treinada", () => {
   const character = fighter();
   const attacks = getAvailableAttacks(character);
   const maCards = attacks.filter((attack) =>
     attack.id.startsWith("skill:martial_arts"),
   );
 
-  assert.strictEqual(
-    maCards.length,
-    1,
-    "as formas não viram cards de ataque próprios",
-  );
+  assert.strictEqual(maCards.length, 4, "inclui Martial Arts, Karate, Aikido e Taekwondo treinados");
   assert.strictEqual(maCards[0].id, "skill:martial_arts");
   assert.strictEqual(maCards[0].label, "Martial Arts");
   assert.strictEqual(

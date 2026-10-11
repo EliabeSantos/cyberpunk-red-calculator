@@ -2,6 +2,7 @@ import { getSkillBase, getCriticalInjuryModifiers, getCriticalInjuryRestrictions
 import { rollDice } from "@/lib/dice";
 import type { RandomSource } from "@/lib/combat/contract";
 import { getCatalogItem } from "@/data/items";
+import { MARTIAL_ARTS_FORMS } from "@/data/skills";
 import { findAmmoIndexByNames, getAmmoKind } from "@/data/enemySupplies";
 import { getCyberwareAttackModifiers, getCyberwareEvasionModifiers, getCyberwarePhysicalModifiers, getCyberwareUnarmedDamageModifiers, hasInstalledCyberarm, isSmartWeapon } from "@/lib/cyberwareEffects";
 import { createId } from "@/lib/id";
@@ -29,23 +30,25 @@ export function getAvailableAttacks(character: Character): AvailableAttack[] {
       context: { type: "weapon", weaponId: weapon.id },
     }));
 
-  // Artes Marciais: UM card só, "Martial Arts", que rola a perícia-mãe (decisão da mesa
-  // de 26/09/2026). As formas (Karate/Taekwondo/Judo/Aikido) não viram ataque próprio:
-  // elas alimentam apenas os Special Moves.
+  // Artes Marciais: a perícia-mãe legada continua disponível, e cada forma
+  // especializada comprada pelo personagem também vira um ataque desarmado
+  // próprio. O servidor valida o skillId no snapshot autoritativo.
   const martialArts = character.skills.martial_arts;
-  const skillAttacks: AvailableAttack[] =
-    martialArts && martialArts.level > 0
-      ? [
-          {
-            id: "skill:martial_arts",
-            label: martialArts.name,
-            detail: `${martialArts.stat} + ${martialArts.name} + 1d10 · ROF ${UNARMED_ROF}`,
-            source: "skill",
-            rof: UNARMED_ROF,
-            context: { type: "martial_arts", skillId: "martial_arts" },
-          },
-        ]
-      : [];
+  const martialArtsSkills = [
+    ...(martialArts && martialArts.level > 0 ? [{ skillId: "martial_arts", skill: martialArts }] : []),
+    ...MARTIAL_ARTS_FORMS.flatMap(({ skillId }) => {
+      const skill = character.skills[skillId];
+      return skill && skill.level > 0 ? [{ skillId, skill }] : [];
+    }),
+  ];
+  const skillAttacks: AvailableAttack[] = martialArtsSkills.map(({ skillId, skill }) => ({
+    id: `skill:${skillId}`,
+    label: skill.name,
+    detail: `${skill.stat} + ${skill.name} + 1d10 · ROF ${UNARMED_ROF}`,
+    source: "skill",
+    rof: UNARMED_ROF,
+    context: { type: "martial_arts", skillId },
+  }));
   const brawling = character.skills.brawling;
   const brawlingAttack: AvailableAttack[] =
     brawling && brawling.level > 0

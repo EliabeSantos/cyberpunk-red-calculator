@@ -45,8 +45,8 @@ export default function MesaCharacterLink({
   const [characters] = useState(listLocalCharacters);
   const [linking, setLinking] = useState(false);
 
-  async function handleLink(characterId: string) {
-    if (characterId === selectedCharacterId || (!characterId && !selectedCharacterId)) return;
+  async function handleLink(characterId: string, force = false) {
+    if ((!force && characterId === selectedCharacterId) || (!characterId && !selectedCharacterId)) return;
     setLinking(true);
     try {
       if (!characterId) {
@@ -74,7 +74,7 @@ export default function MesaCharacterLink({
     <div className="mesa-link-character">
       <label>
         Meu personagem nesta mesa
-        <select
+      <select
           value={selectedCharacterId ?? ""}
           disabled={linking || disabled}
           onChange={(event) => void handleLink(event.target.value)}
@@ -87,8 +87,18 @@ export default function MesaCharacterLink({
           ))}
         </select>
       </label>
+      {selectedCharacterId && (
+        <button
+          type="button"
+          className="mesa-secondary mesa-refresh-character-link"
+          disabled={linking || disabled}
+          onClick={() => void handleLink(selectedCharacterId, true)}
+        >
+          {linking ? "Atualizando ficha…" : "Atualizar ficha na Mesa"}
+        </button>
+      )}
       <small>
-        A ficha continua no seu navegador. Só uma cópia vai para o servidor, para o mestre validar as ações.
+        A ficha continua no seu navegador. Atualize a cópia da Mesa depois de equipar itens importantes.
       </small>
     </div>
   );

@@ -35,15 +35,15 @@ export function resolveQuickhackEffect(input: {
 }): QuickhackEffectResolution {
   const base = { quickhackId: input.quickhackId, sourceCombatantId: input.sourceCombatantId, appliedRound: input.currentRound, expiresRound: null as number | null };
   switch (input.quickhackId) {
-    case "impair_movement": return { effect: { ...base, expiresRound: input.currentRound + 1, moveModifier: -1 } };
-    case "sonic_shock": return { effect: { ...base, expiresRound: input.currentRound, conditionIds: ["sonic_shock"] } };
-    case "overheat": return { effect: { ...base, expiresRound: input.currentRound + 1, damageAtEndOfTurn: 4, lastDamageRound: -1 } };
-    case "short_circuit": return { effect: { ...base, expiresRound: input.currentRound + 1 } };
-    case "cyberware_malfunction": return { effect: { ...base, expiresRound: input.currentRound } };
-    case "lure": return { effect: { ...base, expiresRound: input.currentRound + 1, controlsMove: true } };
-    case "slow": return { effect: { ...base, expiresRound: input.currentRound, moveModifier: -input.rng.roll("1d6").total } };
+    case "impair_movement": return { effect: { ...base, expiresRound: input.currentRound + 1, conditionIds: ["IMPAIRED_MOVEMENT"], moveModifier: -1 } };
+    case "sonic_shock": return { effect: { ...base, expiresRound: input.currentRound, conditionIds: ["DAMAGED_EAR"] } };
+    case "overheat": return { effect: { ...base, expiresRound: input.currentRound + 1, conditionIds: ["OVERHEAT"], damageAtEndOfTurn: 4, lastDamageRound: -1 } };
+    case "short_circuit": return { effect: { ...base, expiresRound: input.currentRound + 1, conditionIds: ["SHORT_CIRCUIT"] } };
+    case "cyberware_malfunction": return { effect: { ...base, expiresRound: input.currentRound, conditionIds: ["CYBERWARE_MALFUNCTION"] } };
+    case "lure": return { effect: { ...base, expiresRound: input.currentRound + 1, conditionIds: ["LURED"], controlsMove: true } };
+    case "slow": return { effect: { ...base, expiresRound: input.currentRound, conditionIds: ["SLOWED"], moveModifier: -input.rng.roll("1d6").total } };
     case "synapse_burnout": return { effect: { ...base }, damage: { amount: input.rng.roll("3d6").total, ignoreArmor: true } };
-    case "puppet": return { effect: { ...base, expiresRound: input.currentRound + 1, controlsMove: true, controlsAction: true } };
+    case "puppet": return { effect: { ...base, expiresRound: input.currentRound + 1, conditionIds: ["PUPPET"], controlsMove: true, controlsAction: true } };
     case "shard_ejection": return { effect: { ...base } };
     case "system_reset": return { effect: { ...base, expiresRound: input.currentRound + 1, conditionIds: ["unconscious", "prone"], unconscious: true, prone: true } };
     default: throw new Error("UNKNOWN_QUICKHACK");

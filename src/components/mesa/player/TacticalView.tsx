@@ -113,6 +113,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
   const [selectedGeometryId, setSelectedGeometryId] = useState<string | null>(null);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(selectedHackableObjectId ?? null);
   const objectDragRef = useRef<string | null>(null);
+  const accessPointDragRef = useRef<string | null>(null);
   const [geometryInteraction, setGeometryInteraction] = useState<{ kind: "draw"; start: TacticalPosition; current: TacticalPosition } | { kind: "handle"; id: string; type: "wall" | "door"; endpoint: "start" | "end" } | null>(null);
   const geometryDraftRef = useRef<TacticalGeometry>({ walls: [], doors: [] });
   const geometryBeforeInteractionRef = useRef<TacticalGeometry>({ walls: [], doors: [] });
@@ -361,6 +362,40 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
     finally { setSavingMap(false); }
   }
 
+  function persistMapDraft(next: TacticalMap, message: string): void {
+    mapDraftRef.current = next;
+    setMapDraft(next);
+    void saveTacticalMap(state.session.id, stripDerivedTacticalCoverValues(next))
+      .then(() => onNotice(message, "ok"))
+      .catch((error) => onNotice(error instanceof MesaApiError ? error.message : "Não foi possível salvar o mapa.", "error"));
+  }
+
+  function addAccessPoint(): void {
+    if (!isGM) return;
+    const accessPoint: TacticalAccessPoint = {
+      id: `AP-${createId().slice(0, 8).toUpperCase()}`,
+      position: { x: 0.5, y: 0.5 },
+      connectionTypes: ["wireless", "cable"],
+      architectureId: state.netArchitectures?.[0]?.id ?? null,
+      wirelessRangeMeters: 6,
+      active: true,
+    };
+    const next = { ...mapDraft, accessPoints: [...(mapDraft.accessPoints ?? []), accessPoint] };
+    onSelectAccessPoint?.(accessPoint.id);
+    persistMapDraft(next, "Access Point criado.");
+  }
+
+  function updateAccessPoint(accessPointId: string, patch: Partial<TacticalAccessPoint>): void {
+    const next = { ...mapDraft, accessPoints: (mapDraft.accessPoints ?? []).map((entry) => entry.id === accessPointId ? { ...entry, ...patch } : entry) };
+    persistMapDraft(next, "Access Point atualizado.");
+  }
+
+  function removeAccessPoint(accessPointId: string): void {
+    const next = { ...mapDraft, accessPoints: (mapDraft.accessPoints ?? []).filter((entry) => entry.id !== accessPointId) };
+    onSelectAccessPoint?.(null);
+    persistMapDraft(next, "Access Point removido.");
+  }
+
   function selectHackableObject(id: string | null) {
     setSelectedObjectId(id);
     onSelectHackableObject?.(id);
@@ -373,6 +408,15 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
     if (geometryEditing) return;
     onSelectAccessPoint?.(accessPoint.id);
     onSelectHackableObject?.(null);
+  }
+
+  function startAccessPointDrag(accessPoint: TacticalAccessPoint, event: React.PointerEvent) {
+    if (!isGM || !geometryEditing) return;
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    onSelectAccessPoint?.(accessPoint.id);
+    onSelectHackableObject?.(null);
+    accessPointDragRef.current = accessPoint.id;
   }
 
   function persistHackableObjects(next: TacticalMap) {
@@ -623,10 +667,11 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
                 {deriveTacticalCoverProfile(selectedObstacle.coverMaterial, selectedObstacle.coverThickness) ? (() => { const profile = deriveTacticalCoverProfile(selectedObstacle.coverMaterial, selectedObstacle.coverThickness)!; return <div className="tactical-cover-derived" aria-label="Valores derivados da Cover"><span><small>HP atual / máximo</small><b>{selectedObstacle.coverHP ?? profile.hp} / {profile.hp}</b></span><span><small>DV para atacar</small><b>{profile.dv}</b></span></div>; })() : <p className="tactical-cover-legacy">Selecione material e espessura para ativar os valores automáticos.</p>}
               </div>
             </section> : <div className="tactical-geometry-empty"><b>Nenhum obstáculo selecionado</b><span>Use Selecionar e toque em uma parede ou porta para configurar a Cover.</span></div>}
-             <div className="tactical-hackable-tools" aria-label="Objetos hackeáveis">
-               <span className="tactical-geometry-tools-label">Objeto hackeável</span>
-               {HACKABLE_OBJECT_TYPES.map((type) => <button key={type} type="button" className="tactical-geometry-tool" onClick={() => addHackableObject(type)}><i aria-hidden="true">{hackableIcon(type)}</i>{hackableLabel(type)}</button>)}
-             </div>
+              <div className="tactical-hackable-tools" aria-label="Objetos hackeáveis">
+                <span className="tactical-geometry-tools-label">Objeto hackeável</span>
+                {HACKABLE_OBJECT_TYPES.map((type) => <button key={type} type="button" className="tactical-geometry-tool" onClick={() => addHackableObject(type)}><i aria-hidden="true">{hackableIcon(type)}</i>{hackableLabel(type)}</button>)}
+                <button type="button" className="tactical-geometry-tool tactical-access-point-tool" onClick={addAccessPoint}><i aria-hidden="true">⌁</i>Access Point</button>
+              </div>
              {selectedObjectId && (() => {
                const object = (mapDraft.hackableObjects ?? []).find((entry) => entry.id === selectedObjectId);
                if (!object) return null;
@@ -637,33 +682,66 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
                const linkedDoor = doors.find((door) => door.id === selectedDoor) ?? null;
                const setObject = (patch: Partial<TacticalHackableObject>) => { const next = { ...mapDraft, hackableObjects: (mapDraft.hackableObjects ?? []).map((entry) => entry.id === object.id ? { ...entry, ...patch } : entry) }; setMapDraft(next); persistHackableObjects(next); };
                return (
-                 <section className="tactical-hackable-editor" aria-label="Editor de objeto hackeável">
-                   <label>Tipo<select value={object.type} onChange={(event) => setObject({ type: event.target.value as TacticalHackableObjectType })}>{HACKABLE_OBJECT_TYPES.map((type) => <option key={type} value={type}>{hackableLabel(type)}</option>)}</select></label>
-                   <label>Nome<input value={object.name ?? ""} onChange={(event) => updateSelectedHackableObject({ name: event.target.value })} onBlur={() => persistHackableObjects(mapDraft)} /></label>
-                   <label className="tactical-grid-toggle"><input type="checkbox" checked={object.active} onChange={(event) => setObject({ active: event.target.checked })} /> Ativo</label>
-                   <label>Control Node<select value={selectedControlNode} onChange={(event) => updateSelectedHackableObject({ controlNodeId: event.target.value || undefined })} onBlur={() => persistHackableObjects(mapDraft)}><option value="">Nenhum</option>{controlNodes.map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}{selectedControlNode && !controlNodes.some((node) => node.id === selectedControlNode) ? <option value={selectedControlNode}>{selectedControlNode}</option> : null}</select></label>
-                   {object.type === "door" && (
-                     <label>Porta (geometria)<select value={selectedDoor} onChange={(event) => setObject({ geometryDoorId: event.target.value || undefined })}><option value="">Nenhuma</option>{doors.map((door) => <option key={door.id} value={door.id}>{door.id} · {door.state === "open" ? "aberta" : "fechada"}</option>)}{selectedDoor && !doors.some((door) => door.id === selectedDoor) ? <option value={selectedDoor}>{selectedDoor}</option> : null}</select></label>
-                   )}
-                   {object.type === "door" && linkedDoor && (
-                     <button type="button" className="mesa-ghost" onClick={() => { const next = { ...mapDraft, geometry: { walls: mapDraft.geometry?.walls ?? [], doors: doors.map((entry) => entry.id === linkedDoor.id ? { ...entry, state: entry.state === "open" ? "closed" as const : "open" as const } : entry) } }; setMapDraft(next); persistHackableObjects(next); }}>
-                       {linkedDoor.state === "open" ? "Fechar porta" : "Abrir porta"}
-                     </button>
-                   )}
-                   {object.type === "camera" && (
-                     <label>Estado inicial<select value={hackableObjectCameraState(object, mapDraft) ?? "online"} onChange={(event) => setObject({ deviceState: event.target.value as TacticalHackableDeviceState })}><option value="online">Online</option><option value="disabled">Desativada</option></select></label>
-                   )}
-                   <button type="button" className="mesa-ghost" onClick={() => { const next = { ...mapDraft, hackableObjects: (mapDraft.hackableObjects ?? []).filter((entry) => entry.id !== object.id) }; setMapDraft(next); selectHackableObject(null); persistHackableObjects(next); }}>Excluir objeto</button>
-                 </section>
+                  <section className="tactical-hackable-editor" aria-label="Editor de objeto hackeável">
+                    <header className="tactical-hackable-editor-heading">
+                      <div className="tactical-hackable-editor-title"><span className="tactical-hackable-editor-icon" aria-hidden="true">{hackableIcon(object.type)}</span><div><span className="mesa-eyebrow">OBJETO HACKEÁVEL</span><strong>{object.name || hackableLabel(object.type)}</strong><small>ID {object.id.slice(0, 8)}</small></div></div>
+                      <span className={`tactical-hackable-status ${object.active ? "is-active" : "is-inactive"}`}><i />{object.active ? "ATIVO" : "DESATIVADO"}</span>
+                    </header>
+                    <div className="tactical-hackable-editor-fields">
+                      <label className="tactical-hackable-name">Nome<input value={object.name ?? ""} onChange={(event) => updateSelectedHackableObject({ name: event.target.value })} onBlur={() => persistHackableObjects(mapDraft)} /></label>
+                      <label>Tipo<select value={object.type} onChange={(event) => setObject({ type: event.target.value as TacticalHackableObjectType })}>{HACKABLE_OBJECT_TYPES.map((type) => <option key={type} value={type}>{hackableLabel(type)}</option>)}</select></label>
+                      <label>Control Node<select value={selectedControlNode} onChange={(event) => updateSelectedHackableObject({ controlNodeId: event.target.value || undefined })} onBlur={() => persistHackableObjects(mapDraft)}><option value="">Nenhum</option>{controlNodes.map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}{selectedControlNode && !controlNodes.some((node) => node.id === selectedControlNode) ? <option value={selectedControlNode}>{selectedControlNode}</option> : null}</select></label>
+                      <label className="tactical-hackable-active"><span>Disponibilidade</span><button type="button" role="switch" aria-checked={object.active} className={`tactical-hackable-switch ${object.active ? "is-on" : ""}`} onClick={() => setObject({ active: !object.active })}><i /><b>{object.active ? "Ativo" : "Desativado"}</b></button></label>
+                    </div>
+                    {(object.type === "door" || object.type === "camera") && <div className="tactical-hackable-editor-advanced"><span className="tactical-hackable-section-label">Vínculos e estado inicial</span>
+                      {object.type === "door" && <label>Porta (geometria)<select value={selectedDoor} onChange={(event) => setObject({ geometryDoorId: event.target.value || undefined })}><option value="">Nenhuma</option>{doors.map((door) => <option key={door.id} value={door.id}>{door.id} · {door.state === "open" ? "aberta" : "fechada"}</option>)}{selectedDoor && !doors.some((door) => door.id === selectedDoor) ? <option value={selectedDoor}>{selectedDoor}</option> : null}</select></label>}
+                      {object.type === "door" && linkedDoor && <button type="button" className="tactical-hackable-secondary-action" onClick={() => { const next = { ...mapDraft, geometry: { walls: mapDraft.geometry?.walls ?? [], doors: doors.map((entry) => entry.id === linkedDoor.id ? { ...entry, state: entry.state === "open" ? "closed" as const : "open" as const } : entry) } }; setMapDraft(next); persistHackableObjects(next); }}>{linkedDoor.state === "open" ? "Fechar porta" : "Abrir porta"}</button>}
+                      {object.type === "camera" && <label>Estado inicial<select value={hackableObjectCameraState(object, mapDraft) ?? "online"} onChange={(event) => setObject({ deviceState: event.target.value as TacticalHackableDeviceState })}><option value="online">Online</option><option value="disabled">Desativada</option></select></label>}
+                    </div>}
+                    <footer className="tactical-hackable-editor-footer"><span>Alterações salvas automaticamente</span><button type="button" className="tactical-hackable-delete" onClick={() => { const next = { ...mapDraft, hackableObjects: (mapDraft.hackableObjects ?? []).filter((entry) => entry.id !== object.id) }; setMapDraft(next); selectHackableObject(null); persistHackableObjects(next); }}>Excluir objeto</button></footer>
+                  </section>
                );
-             })()}
-             </div>}
+              })()}
+              {selectedAccessPointId && (() => {
+                const accessPoint = (mapDraft.accessPoints ?? []).find((entry) => entry.id === selectedAccessPointId);
+                if (!accessPoint) return null;
+                const toggleConnection = (connectionType: "wireless" | "cable") => {
+                  const connectionTypes = accessPoint.connectionTypes.includes(connectionType)
+                    ? accessPoint.connectionTypes.filter((entry) => entry !== connectionType)
+                    : [...accessPoint.connectionTypes, connectionType];
+                  if (connectionTypes.length === 0) return;
+                  updateAccessPoint(accessPoint.id, { connectionTypes });
+                };
+                return (
+                  <section className="tactical-access-point-editor" aria-label="Editor de Access Point">
+                    <header><div><span className="mesa-eyebrow">NET ACCESS</span><strong>{accessPoint.id}</strong></div><button type="button" className="mesa-ghost" onClick={() => removeAccessPoint(accessPoint.id)}>Excluir</button></header>
+                    <label className="tactical-grid-toggle"><input type="checkbox" checked={accessPoint.active} onChange={(event) => updateAccessPoint(accessPoint.id, { active: event.target.checked })} /> Access Point ativo</label>
+                    <div className="tactical-access-point-fields">
+                      <label>X<input type="number" min="0" max="1" step="0.01" value={accessPoint.position.x} onChange={(event) => updateAccessPoint(accessPoint.id, { position: validPosition({ ...accessPoint.position, x: Number(event.target.value) }) })} /></label>
+                      <label>Y<input type="number" min="0" max="1" step="0.01" value={accessPoint.position.y} onChange={(event) => updateAccessPoint(accessPoint.id, { position: validPosition({ ...accessPoint.position, y: Number(event.target.value) }) })} /></label>
+                    </div>
+                    <label>NET Architecture<select value={accessPoint.architectureId ?? ""} onChange={(event) => updateAccessPoint(accessPoint.id, { architectureId: event.target.value || null })}><option value="">Sem arquitetura</option>{(state.netArchitectures ?? []).map((architecture) => <option key={architecture.id} value={architecture.id}>{architecture.name}</option>)}</select></label>
+                    <div className="tactical-access-point-connections" aria-label="Tipos de conexão">
+                      <span>Conexão</span>
+                      <label><input type="checkbox" checked={accessPoint.connectionTypes.includes("wireless")} onChange={() => toggleConnection("wireless")} /> Wireless · 6m</label>
+                      <label><input type="checkbox" checked={accessPoint.connectionTypes.includes("cable")} onChange={() => toggleConnection("cable")} /> Cabo</label>
+                    </div>
+                  </section>
+                );
+              })()}
+              </div>}
            </div>}
            </>, mapToolsHost)}
            </div>
-         <div className="tactical-surface" ref={surfaceRef} style={mapStyle} onWheel={(event) => { event.preventDefault(); event.stopPropagation(); changeMapZoom(event.deltaY < 0 ? MAP_ZOOM_STEP : -MAP_ZOOM_STEP); }} onPointerDown={startMapPan} onPointerUp={() => { mapPanRef.current = null; if (objectDragRef.current) { objectDragRef.current = null; persistHackableObjects(mapDraftRef.current); } finishGeometry(); }} onPointerMove={(event) => {
-          if (mapPanRef.current) { moveMapPan(event); return; }
-         if (objectDragRef.current) {
+          <div className="tactical-surface" ref={surfaceRef} style={mapStyle} onWheel={(event) => { event.preventDefault(); event.stopPropagation(); changeMapZoom(event.deltaY < 0 ? MAP_ZOOM_STEP : -MAP_ZOOM_STEP); }} onPointerDown={startMapPan} onPointerUp={() => { mapPanRef.current = null; if (objectDragRef.current) { objectDragRef.current = null; persistHackableObjects(mapDraftRef.current); } if (accessPointDragRef.current) { accessPointDragRef.current = null; void saveTacticalMap(state.session.id, stripDerivedTacticalCoverValues(mapDraftRef.current)).then(() => onNotice("Access Point reposicionado.", "ok")).catch((error) => onNotice(error instanceof MesaApiError ? error.message : "Não foi possível salvar o Access Point.", "error")); } finishGeometry(); }} onPointerMove={(event) => {
+           if (mapPanRef.current) { moveMapPan(event); return; }
+          if (accessPointDragRef.current) {
+            const point = positionFromPointer(event);
+            const id = accessPointDragRef.current;
+            if (point) setMapDraft((current) => { const next = { ...current, accessPoints: (current.accessPoints ?? []).map((accessPoint) => accessPoint.id === id ? { ...accessPoint, position: snapTacticalPosition(point, map) } : accessPoint) }; mapDraftRef.current = next; return next; });
+            return;
+          }
+          if (objectDragRef.current) {
            const point = positionFromPointer(event);
            const id = objectDragRef.current;
            if (point) setMapDraft((current) => { const next = { ...current, hackableObjects: (current.hackableObjects ?? []).map((object) => object.id === id ? { ...object, position: snapTacticalPosition(point, map) } : object) }; mapDraftRef.current = next; return next; });
@@ -732,7 +810,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
             })()}
          </svg>
              {(isGM ? (mapDraft.hackableObjects ?? []) : (map.hackableObjects ?? [])).filter((object) => object.active || isGM).map((object) => <button key={object.id} type="button" className={`tactical-hackable-object ${object.id === selectedObjectId ? "is-selected" : ""} ${object.active ? "" : "is-disabled"} ${object.type === "camera" && hackableObjectCameraState(object) === "disabled" ? "is-camera-offline" : ""}`} style={{ left: `${object.position.x * 100}%`, top: `${object.position.y * 100}%` }} onPointerDown={(event) => startHackableObjectDrag(object, event)} onClick={(event) => { event.stopPropagation(); selectHackableObject(object.id); }} aria-pressed={object.id === selectedObjectId} aria-label={`${hackableLabel(object.type)} ${object.name ?? ""}`}><span className="tactical-hackable-icon" aria-hidden="true">{hackableIcon(object.type)}</span><span>{object.name ?? hackableLabel(object.type)}</span></button>)}
-             {(map.accessPoints ?? []).map((accessPoint) => <button key={`access-point:${accessPoint.id}`} type="button" className={`tactical-access-point ${selectedAccessPointId === accessPoint.id ? "is-selected" : ""} ${accessPoint.active ? "" : "is-disabled"}`} style={{ left: `${accessPoint.position.x * 100}%`, top: `${accessPoint.position.y * 100}%` }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectAccessPoint(accessPoint); }} aria-pressed={selectedAccessPointId === accessPoint.id} aria-label={`Access Point ${accessPoint.id}`}><span aria-hidden="true">⌁</span><small>{accessPoint.id}</small></button>)}
+              {(isGM ? (mapDraft.accessPoints ?? []) : (map.accessPoints ?? [])).map((accessPoint) => <button key={`access-point:${accessPoint.id}`} type="button" className={`tactical-access-point ${selectedAccessPointId === accessPoint.id ? "is-selected" : ""} ${accessPoint.active ? "" : "is-disabled"}`} style={{ left: `${accessPoint.position.x * 100}%`, top: `${accessPoint.position.y * 100}%` }} onPointerDown={(event) => { if (isGM && geometryEditing) startAccessPointDrag(accessPoint, event); else event.stopPropagation(); }} onClick={(event) => { event.stopPropagation(); selectAccessPoint(accessPoint); }} aria-pressed={selectedAccessPointId === accessPoint.id} aria-label={`Access Point ${accessPoint.id}`}><span className="tactical-access-point-signal" aria-hidden="true"><i /><i /><i /></span><strong>ACCESS</strong><small>{accessPoint.id}</small></button>)}
            {dragging && combatActive && initiativeStarted && localMoves[dragging] && (() => {
             const move = localMoves[dragging];
             const invalid = !move.withinMovement || !move.pathValid;

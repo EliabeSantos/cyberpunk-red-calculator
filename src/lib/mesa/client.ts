@@ -310,7 +310,8 @@ export async function setMesaCyberdeckStatus(sessionId: string, combatantId: str
 }
 
 export async function executeMesaQuickhack(input: { sessionId: string; quickhackId: string; targetCombatantId: string; resolutionId?: string }): Promise<unknown> {
-  return api(`/api/mesa/${input.sessionId}/combat/net/quickhack`, { method: "POST", body: { ...input, resolutionId: input.resolutionId ?? createId() } });
+  const { sessionId, ...intent } = input;
+  return api(`/api/mesa/${sessionId}/combat/net/quickhack`, { method: "POST", body: { ...intent, resolutionId: intent.resolutionId ?? createId() } });
 }
 
 export async function updateMesaNetArchitectures(sessionId: string, architectures: NetArchitecture[]): Promise<void> {
