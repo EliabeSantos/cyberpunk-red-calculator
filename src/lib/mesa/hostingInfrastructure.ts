@@ -320,7 +320,14 @@ export async function withLocalPostgresTransaction<T>(
   }
 }
 
-function requestedMode(raw: string | undefined): MesaHostingMode {
+/**
+ * Modalidade de hospedagem exigida pela configuração do host.
+ *
+ * `MESA_HOSTING_MODE` é obrigatória e não tem fallback: Supabase e
+ * PostgreSQL local jamais são misturados silenciosamente. Exportada para os
+ * novos serviços (identidade visual) seguirem o mesmo mecanismo de escolha.
+ */
+export function resolveMesaHostingMode(raw: string | undefined = process.env.MESA_HOSTING_MODE): MesaHostingMode {
   const mode = raw?.trim().toLowerCase() ?? "";
   if (!mode) throw new MesaHostingConfigurationError("missing_mode", "MESA_HOSTING_MODE é obrigatória e deve ser 'supabase' ou 'local'.", null);
   if (mode !== "supabase" && mode !== "local") {
@@ -374,7 +381,7 @@ export async function createMesaHostingInfrastructure(
   rawMode = process.env.MESA_HOSTING_MODE,
   options: MesaHostingFactoryOptions = {},
 ): Promise<MesaHostingInfrastructure> {
-  const mode = requestedMode(rawMode);
+  const mode = resolveMesaHostingMode(rawMode);
   if (mode === "local") {
     const eventTransport = options.localEventTransport ?? new LocalMesaEventTransport();
     const pool = options.localPool ?? await localPoolFromEnvironment();

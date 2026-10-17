@@ -2319,6 +2319,14 @@ textarea:disabled {
 .combatant-figure.is-attacking-ranged .combatant-figure-weapon-ranged { animation: combatant-ranged-recoil .3s ease-out; transform-origin: center; }
 .combatant-figure.is-attacking-melee .combatant-figure-weapon-staff,
 .combatant-figure.is-attacking-melee .combatant-figure-weapon-melee { animation: combatant-melee-hit .46s cubic-bezier(.2, .8, .25, 1); transform-origin: 50% 90%; }
+/* Figura personalizada (Etapa 2): imagem de corpo inteiro do estado ativo.
+   `contain` preserva a proporção original sem cortar cabeça nem pés; o
+   boneco genérico (SVG) fica escondido enquanto a imagem carrega e volta a
+   aparecer se a imagem falhar (o onError do <img> remove a classe). */
+.combatant-figure-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; object-position: bottom center; pointer-events: none; }
+.combatant-figure.has-image .combatant-figure-generic { display: none; }
+.combatant-figure.has-image.is-attacking-ranged .combatant-figure-image { animation: combatant-image-recoil .3s ease-out; }
+.combatant-figure.has-image.is-attacking-melee .combatant-figure-image { animation: combatant-image-lunge .46s cubic-bezier(.2, .8, .25, 1); }
 @keyframes combatant-figure-pulse { 50% { opacity: .52; } }
 @keyframes tactical-projectile-flight {
   0% { left: var(--projectile-from-x); top: var(--projectile-from-y); opacity: 0; transform: translate(-50%, -50%) scale(.35); }
@@ -2338,13 +2346,22 @@ textarea:disabled {
   38% { transform: translate(.38rem, -.18rem) rotate(-18deg); }
   62% { transform: translate(-.08rem, .04rem) rotate(5deg); }
 }
+@keyframes combatant-image-recoil {
+  35% { transform: translate(-.14rem, .06rem); }
+}
+@keyframes combatant-image-lunge {
+  38% { transform: translate(.3rem, -.12rem); }
+  62% { transform: translate(-.06rem, .03rem); }
+}
 @media (prefers-reduced-motion: reduce) {
   .combatant-figure.is-active .figure-core { animation: none; }
   .tactical-projectile,
   .tactical-hit-card,
   .combatant-figure.is-attacking-ranged .combatant-figure-weapon-ranged,
   .combatant-figure.is-attacking-melee .combatant-figure-weapon-staff,
-  .combatant-figure.is-attacking-melee .combatant-figure-weapon-melee { animation: none; }
+  .combatant-figure.is-attacking-melee .combatant-figure-weapon-melee,
+  .combatant-figure.has-image.is-attacking-ranged .combatant-figure-image,
+  .combatant-figure.has-image.is-attacking-melee .combatant-figure-image { animation: none; }
 }
 
 .mesa-combatant-main .combatant-figure { width: 3.2rem; height: 4.1rem; }
@@ -5144,3 +5161,44 @@ textarea:disabled {
 .gm-history-empty h2 { margin: 0; color: var(--redline-paper, #e8eee8); text-transform: none; letter-spacing: 0; }
 .gm-history-empty p { max-width: 30rem; margin: 0 0 1rem; line-height: 1.5; }
 @media (max-width: 760px) { .gm-history-page .gm-page-header-meta { align-items: stretch; flex-direction: column; width: 100%; } .gm-history-page .gm-page-header-meta .gm-button { width: 100%; } .gm-history-list { grid-template-columns: 1fr; } .gm-history-list .encounter-history-card { padding: 1rem; } }
+
+/* --- Personalização visual (/ficha/aparencia) ---------------------------- */
+
+.visual-shell { width: calc(100% - 2rem); max-width: none; margin-inline: auto; padding: clamp(3.5rem, 8vw, 7rem) 0 4rem; display: flex; flex-direction: column; gap: 1rem; }
+
+.visual-notice { padding: 0.85rem 1rem; border: 1px solid rgb(126 231 215 / 30%); border-radius: var(--redline-radius-sm); background: rgb(126 231 215 / 6%); color: var(--redline-teal); font-size: 0.72rem; letter-spacing: 0.02em; }
+
+.visual-identity-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 3fr); gap: 1rem; align-items: end; }
+.visual-identity-fields .identity-field { display: flex; flex-direction: column; gap: 0.35rem; }
+.visual-identity-fields .identity-field > span { color: var(--redline-muted); font-size: 0.6rem; letter-spacing: 0.06em; text-transform: uppercase; }
+.visual-identity-fields select.gm-form-input,
+.visual-identity-fields input.gm-form-input { width: 100%; min-height: 2.6rem; padding: 0.5rem 0.65rem; border-radius: var(--redline-radius-sm); }
+.visual-character-id { display: block; overflow: hidden; padding: 0.65rem; border: 1px solid var(--redline-line); border-radius: var(--redline-radius-sm); background: var(--redline-ink); color: var(--redline-muted); font: 0.68rem var(--font-geist-mono), monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+.visual-portrait-row { display: flex; gap: 1.25rem; align-items: center; flex-wrap: wrap; }
+.visual-portrait-frame { display: grid; place-items: center; flex: 0 0 auto; width: 8rem; height: 8rem; overflow: hidden; border: 1px solid var(--redline-line-bright); border-radius: var(--redline-radius-md); background: radial-gradient(circle at 50% 35%, rgb(126 231 215 / 10%), transparent 70%), var(--redline-ink); color: var(--redline-faint); font: 0.6rem var(--font-geist-mono), monospace; }
+.visual-portrait-frame img { width: 100%; height: 100%; object-fit: cover; }
+.visual-portrait-actions { display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-start; }
+.visual-hint { max-width: 28rem; color: var(--redline-muted); font-size: 0.68rem; line-height: 1.5; }
+
+.visual-idle-warning { margin-bottom: 1rem; padding: 0.85rem 1rem; border: 1px solid rgb(243 201 105 / 40%); border-left: 2px solid var(--redline-yellow); border-radius: var(--redline-radius-sm); background: rgb(243 201 105 / 6%); color: var(--redline-yellow); font-size: 0.72rem; line-height: 1.5; }
+
+.visual-state-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.9rem; }
+.visual-state-card { display: flex; flex-direction: column; gap: 0.7rem; padding: 0.9rem; border: 1px solid var(--redline-line); border-radius: var(--redline-radius-md); background: linear-gradient(160deg, rgb(21 35 38 / 38%), transparent 60%), var(--redline-panel); }
+.visual-state-card > header { display: flex; gap: 0.6rem; align-items: flex-start; }
+.visual-state-card h3 { margin: 0; color: var(--redline-paper); font-size: 0.78rem; letter-spacing: 0.02em; }
+.visual-state-card header p { margin: 0.2rem 0 0; color: var(--redline-muted); font-size: 0.62rem; line-height: 1.45; }
+.visual-state-index { flex: 0 0 auto; color: var(--redline-coral); font: 0.62rem var(--font-geist-mono), monospace; }
+.visual-state-thumb { display: grid; place-items: center; aspect-ratio: 3 / 4; overflow: hidden; border: 1px solid var(--redline-line); border-radius: var(--redline-radius-sm); background: radial-gradient(circle at 50% 30%, rgb(126 231 215 / 8%), transparent 70%), var(--redline-ink); }
+.visual-state-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.visual-state-thumb.is-empty { border-style: dashed; color: var(--redline-faint); font: 0.58rem var(--font-geist-mono), monospace; }
+.visual-state-card > footer { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: space-between; }
+.visual-state-badge { padding: 0.2rem 0.45rem; border: 1px solid var(--redline-line); border-radius: 999px; color: var(--redline-muted); font: 0.56rem var(--font-geist-mono), monospace; letter-spacing: 0.04em; }
+.visual-state-badge.is-on { border-color: rgb(126 231 215 / 40%); color: var(--redline-teal); }
+.visual-state-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.visual-state-actions .secondary-button { min-height: 2rem; padding: 0.35rem 0.6rem; font-size: 0.6rem; }
+
+.visual-footer { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+
+@media (max-width: 900px) { .visual-identity-fields { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .visual-portrait-row { flex-direction: column; align-items: stretch; } .visual-portrait-frame { width: 100%; height: 12rem; } .visual-portrait-actions { align-items: stretch; } .visual-portrait-actions .secondary-button { width: 100%; } }

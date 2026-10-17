@@ -846,6 +846,7 @@ export default function CharacterSheet({
             ⚔️ Encontros
           </Link>
           <button onClick={onEdit}>Editar ficha</button>
+          <Link href="/ficha/aparencia">🎨 Aparência</Link>
           <button type="button" onClick={() => downloadCharacterFile(character)}>Exportar ficha</button>
           <button type="button" onClick={() => importInputRef.current?.click()}>Importar ficha</button>
           <input

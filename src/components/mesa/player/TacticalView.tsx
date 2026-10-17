@@ -13,6 +13,7 @@ import { TACTICAL_COVER_THICKNESSES } from "@/lib/mesa/tacticalCoverCatalog";
 import type { MesaState, TacticalAccessPoint, TacticalCoverMaterial, TacticalCoverThickness, TacticalGeometry, TacticalHackableDeviceState, TacticalHackableObject, TacticalHackableObjectType, TacticalMap, TacticalPosition } from "@/lib/mesa/types";
 import type { CombatWeapon } from "@/lib/combat/contract";
 import CombatantFigure from "@/components/mesa/CombatantFigure";
+import type { CombatVisualsApi } from "@/lib/characterVisual/useCombatVisuals";
 import type { AttackType } from "@/types/attack";
 import { tacticalDistance } from "@/lib/mesa/tacticalMap";
 import { markMesaVisualConfirmation } from "@/lib/mesa/telemetry";
@@ -45,6 +46,8 @@ interface Props {
   onSelectAccessPoint?: (accessPointId: string | null) => void;
   gmMapToolsVisible?: boolean;
   attackAnimation?: TacticalAttackAnimation | null;
+  /** Estados visuais personalizados por combatente (Etapa 2; opcional). */
+  combatVisuals?: CombatVisualsApi | null;
 }
 type MoveStatus = "dragging" | "processing" | "confirmed" | "rejected";
 type GeometryMode = "select" | "wall" | "door" | "erase";
@@ -95,7 +98,7 @@ function geometryDependency(geometry: TacticalGeometry): string {
     .join("|");
 }
 
-export default function TacticalView({ state, onNotice, selectedTargetId, onSelectTarget, controlledCombatantId, selectedWeapon, selectedAttackType, selectedSkillId, selectedHackableObjectId, onSelectHackableObject, selectedAccessPointId, onSelectAccessPoint, gmMapToolsVisible = true, attackAnimation }: Props) {
+export default function TacticalView({ state, onNotice, selectedTargetId, onSelectTarget, controlledCombatantId, selectedWeapon, selectedAttackType, selectedSkillId, selectedHackableObjectId, onSelectHackableObject, selectedAccessPointId, onSelectAccessPoint, gmMapToolsVisible = true, attackAnimation, combatVisuals = null }: Props) {
   const map = state.session.tacticalMap ?? DEFAULT_MAP;
   const isGM = state.viewer.role === "gm";
   const combatActive = state.combat?.status === "active";
@@ -908,7 +911,7 @@ export default function TacticalView({ state, onNotice, selectedTargetId, onSele
           >
             {showTacticalInfo ? "Ocultar info" : "Mostrar info"}
           </button>
-           {state.combatants.map((combatant) => { const position = positionFor(combatant); const movable = canDrag(combatant); const remote = !localMoves[combatant.id] && !movable; const move = localMoves[combatant.id]; const status = move?.status; const selected = selectedTargetId === combatant.id; const movementInvalid = move && (!move.withinMovement || !move.pathValid); const figureWeapon = selectedWeapon && (combatant.id === controlledCombatantId || (!isGM && combatant.participantId === state.viewer.participantId)) ? selectedWeapon : null; return <button key={combatant.id} data-testid={`mesa-tactical-token-${combatant.id}`} type="button" className={`tactical-token ${combatant.kind === "enemy" ? "is-enemy" : "is-player"} ${combatant.id === state.combat?.activeCombatantId ? "is-active" : ""} ${selected ? "is-target-selected" : ""} ${movable ? "is-movable" : ""} ${remote ? "is-remote" : ""} ${status ? `is-${status}` : ""} ${movementInvalid ? "is-out-of-range" : ""}`} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}%` }} onPointerDown={(event) => startDrag(combatant.id, event)} onPointerUp={(event) => handleTokenPointerUp(combatant.id, event)} onPointerCancel={() => cancelDrag(combatant.id)} onClick={(event) => { if (geometryEditing) return; if (suppressClickRef.current) { suppressClickRef.current = false; return; } if (canSelectTarget(combatant) && selectedTargetId !== combatant.id) { event.preventDefault(); onSelectTarget(combatant.id); } }} aria-pressed={selected} aria-label={`${combatant.name}${canSelectTarget(combatant) ? ", selecionar alvo" : movable ? ", arraste para mover" : ""}`}><CombatantFigure combatant={combatant} weapon={figureWeapon} visualWeaponKind={combatant.visualWeaponKind} animation={attackAnimation?.attackerId === combatant.id ? attackAnimation.kind : undefined} active={combatant.id === state.combat?.activeCombatantId} compact /><span>{combatant.name}</span></button>; })}
+           {state.combatants.map((combatant) => { const position = positionFor(combatant); const movable = canDrag(combatant); const remote = !localMoves[combatant.id] && !movable; const move = localMoves[combatant.id]; const status = move?.status; const selected = selectedTargetId === combatant.id; const movementInvalid = move && (!move.withinMovement || !move.pathValid); const figureWeapon = selectedWeapon && (combatant.id === controlledCombatantId || (!isGM && combatant.participantId === state.viewer.participantId)) ? selectedWeapon : null; return <button key={combatant.id} data-testid={`mesa-tactical-token-${combatant.id}`} type="button" className={`tactical-token ${combatant.kind === "enemy" ? "is-enemy" : "is-player"} ${combatant.id === state.combat?.activeCombatantId ? "is-active" : ""} ${selected ? "is-target-selected" : ""} ${movable ? "is-movable" : ""} ${remote ? "is-remote" : ""} ${status ? `is-${status}` : ""} ${movementInvalid ? "is-out-of-range" : ""}`} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}%` }} onPointerDown={(event) => startDrag(combatant.id, event)} onPointerUp={(event) => handleTokenPointerUp(combatant.id, event)} onPointerCancel={() => cancelDrag(combatant.id)} onClick={(event) => { if (geometryEditing) return; if (suppressClickRef.current) { suppressClickRef.current = false; return; } if (canSelectTarget(combatant) && selectedTargetId !== combatant.id) { event.preventDefault(); onSelectTarget(combatant.id); } }} aria-pressed={selected} aria-label={`${combatant.name}${canSelectTarget(combatant) ? ", selecionar alvo" : movable ? ", arraste para mover" : ""}`}><CombatantFigure combatant={combatant} weapon={figureWeapon} visualWeaponKind={combatant.visualWeaponKind} animation={attackAnimation?.attackerId === combatant.id ? attackAnimation.kind : undefined} active={combatant.id === state.combat?.activeCombatantId} compact figureImage={combatVisuals?.imageFor(combatant.id) ?? null} /><span>{combatant.name}</span></button>; })}
           </div>
        </div>
       <div className="tactical-legend"><span><i className="player-dot" /> Players</span><span><i className="enemy-dot" /> Enemies</span>{dragging && <em>Movendo...</em>}</div>

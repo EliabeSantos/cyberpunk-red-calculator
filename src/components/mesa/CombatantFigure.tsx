@@ -1,5 +1,7 @@
 import type { CombatWeapon } from "@/lib/combat/contract";
 import type { MesaCombatant } from "@/lib/mesa/types";
+import type { ResolvedCombatStateImage } from "@/lib/characterVisual/combatVisualState";
+import { markVisualUrlFailed } from "@/lib/characterVisual/visualManifestCache";
 
 type FigureWeaponKind = "ranged" | "melee" | "thrown" | "staff" | "unarmed";
 
@@ -10,6 +12,12 @@ interface Props {
   animation?: "ranged" | "melee";
   active?: boolean;
   compact?: boolean;
+  /**
+   * Imagem personalizada de corpo inteiro do estado visual ativo (Etapa 2).
+   * `null`/ausente = boneco genérico SVG — personagens legados e inimigos
+   * continuam renderizando como antes. O retrato de perfil NUNCA é usado aqui.
+   */
+  figureImage?: ResolvedCombatStateImage | null;
 }
 
 function weaponKind(weapon: CombatWeapon | null | undefined): FigureWeaponKind {
@@ -62,7 +70,7 @@ function WeaponLayer({ kind }: { kind: FigureWeaponKind }) {
 }
 
 /** Corpo inteiro modular para a Mesa; a ficha continua sendo a fonte dos dados. */
-export default function CombatantFigure({ combatant, weapon, visualWeaponKind, animation, active = false, compact = false }: Props) {
+export default function CombatantFigure({ combatant, weapon, visualWeaponKind, animation, active = false, compact = false, figureImage }: Props) {
   const kind = weapon ? weaponKind(weapon) : visualWeaponKind ?? weaponKind(weapon);
   const enemy = combatant.kind === "enemy";
   const status = combatant.isDead ? "derrotado" : combatant.conditions.length > 0 ? "ferido" : "em prontidão";
@@ -70,12 +78,29 @@ export default function CombatantFigure({ combatant, weapon, visualWeaponKind, a
 
   return (
     <span
-      className={`combatant-figure ${enemy ? "is-enemy" : "is-player"} ${active ? "is-active" : ""} ${combatant.isDead ? "is-dead" : ""} ${combatant.conditions.length > 0 ? "is-injured" : ""} ${compact ? "is-compact" : ""} ${animation ? `is-attacking-${animation}` : ""}`}
+      className={`combatant-figure ${enemy ? "is-enemy" : "is-player"} ${active ? "is-active" : ""} ${combatant.isDead ? "is-dead" : ""} ${combatant.conditions.length > 0 ? "is-injured" : ""} ${compact ? "is-compact" : ""} ${animation ? `is-attacking-${animation}` : ""} ${figureImage ? "has-image" : ""}`}
       data-weapon-kind={kind}
+      data-visual-state={figureImage?.state}
       aria-label={label}
       role="img"
     >
-      <svg viewBox="0 0 176 224" aria-hidden="true" focusable="false">
+      {figureImage ? (
+        <img
+          className="combatant-figure-image"
+          src={figureImage.url}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          onError={(event) => {
+            // URL vencida/quebrada: marca no cache de sessão (próxima consulta
+            // cai no fallback) e revela o boneco genérico imediatamente.
+            markVisualUrlFailed(figureImage.url);
+            event.currentTarget.style.display = "none";
+            event.currentTarget.parentElement?.classList.remove("has-image");
+          }}
+        />
+      ) : null}
+      <svg className="combatant-figure-generic" viewBox="0 0 176 224" aria-hidden="true" focusable="false">
         <defs>
           <linearGradient id="figure-suit" x1="0" x2="1" y1="0" y2="1">
             <stop offset="0" stopColor="currentColor" stopOpacity=".95" />

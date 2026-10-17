@@ -30,6 +30,7 @@ import { isHealingSupply } from "@/data/enemySupplies";
 import type { MesaCombatant, MesaState } from "@/lib/mesa/types";
 import RollAuditDetails from "@/components/mesa/RollAuditDetails";
 import CombatantFigure from "@/components/mesa/CombatantFigure";
+import type { CombatVisualsApi } from "@/lib/characterVisual/useCombatVisuals";
 
 interface Props {
   sessionId: string;
@@ -38,6 +39,8 @@ interface Props {
   sessionFinished: boolean;
   onNotice: (message: string, kind: "error" | "ok") => void;
   onChanged: () => Promise<void>;
+  /** Estados visuais personalizados por combatente (Etapa 2; opcional). */
+  combatVisuals?: CombatVisualsApi | null;
 }
 
 /** Metros digitados: vazio/inválido/zero → 0 (botão de mover fica desabilitado). */
@@ -46,7 +49,7 @@ function metersFrom(raw: string): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinished, onNotice, onChanged }: Props) {
+export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinished, onNotice, onChanged, combatVisuals = null }: Props) {
   const [busy, setBusy] = useState(false);
   const movePending = useRef(false);
   const [conditionDraft, setConditionDraft] = useState<{ id: string; value: string } | null>(null);
@@ -261,7 +264,7 @@ export default function MesaCombatPanel({ sessionId, state, isGM, sessionFinishe
           return (
             <li key={combatant.id} className={isActive ? "is-active" : combatant.isDead ? "is-dead" : ""}>
               <div className="mesa-combatant-main">
-                <CombatantFigure combatant={combatant} visualWeaponKind={combatant.visualWeaponKind} active={isActive} compact />
+                <CombatantFigure combatant={combatant} visualWeaponKind={combatant.visualWeaponKind} active={isActive} compact figureImage={combatVisuals?.imageFor(combatant.id) ?? null} />
                 <span className="mesa-initiative">{combatant.initiative ?? "—"}</span>
                 <div className="mesa-combatant-info">
                   <strong>{combatant.name}</strong>

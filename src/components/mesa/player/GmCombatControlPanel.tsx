@@ -37,7 +37,7 @@ interface Props {
   onSelectAttack: (attackId: string) => void;
   controlMode: "enemy" | "map";
   onControlModeChange: (mode: "enemy" | "map") => void;
-  onAttackAnimation?: (attackerId: string, targetId: string, kind: "ranged" | "melee", hit: boolean, damage: number | null) => void;
+  onAttackAnimation?: (attackerId: string, targetId: string, kind: "ranged" | "melee", hit: boolean, damage: number | null, defenseType?: "dv" | "evasion") => void;
 }
 
 type AttackMode = "normal" | "aimed";
@@ -118,7 +118,7 @@ export default function GmCombatControlPanel({
           setFeedback(`${selected.name} atacou ${coverObstacleId ? "a Cover" : target?.name ?? "o alvo"}.${range}${result.coverDamage ? ` Cover: ${result.coverDamage.hpBefore}→${result.coverDamage.hpAfter} HP${result.coverDamage.destroyed ? " · DESTRUÍDA" : ""}` : result.tacticalCover ? ` Cover: ${result.tacticalCover.status.toUpperCase()} (${result.tacticalCover.blockedSamples}/${result.tacticalCover.totalSamples})${result.tacticalCover.status !== "clear" ? " · sem modificador mecânico definido" : ""}` : ""}`);
           if (!coverObstacleId && target) {
             const melee = ["melee", "martial_arts", "brawling", "unarmed"].includes(selectedWeapon?.attackType ?? selectedAttack.context.type);
-            onAttackAnimation?.(selected.id, target.id, melee ? "melee" : "ranged", result.attackResult.hit, result.damageResult?.damageAfterArmor ?? null);
+            onAttackAnimation?.(selected.id, target.id, melee ? "melee" : "ranged", result.attackResult.hit, result.damageResult?.damageAfterArmor ?? null, result.attackResult.defenseType);
           }
       },
       { onError: (message, code) => setAttackError(formatAttackGatewayError(message, code)) },

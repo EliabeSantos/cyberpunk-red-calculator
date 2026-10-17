@@ -13,6 +13,7 @@ import { rosterInInitiativeOrder } from "@/lib/mesa/playerScreen";
 import type { MesaCombatant, MesaState } from "@/lib/mesa/types";
 import type { CombatWeapon } from "@/lib/combat/contract";
 import CombatantFigure from "@/components/mesa/CombatantFigure";
+import type { CombatVisualsApi } from "@/lib/characterVisual/useCombatVisuals";
 import type { TacticalAttackAnimation } from "./TacticalView";
 
 interface Props {
@@ -26,6 +27,8 @@ interface Props {
   figureCombatantId?: string | null;
   figureWeapon?: CombatWeapon | null;
   attackAnimation?: TacticalAttackAnimation | null;
+  /** Estados visuais personalizados por combatente (Etapa 2; opcional). */
+  combatVisuals?: CombatVisualsApi | null;
 }
 
 export default function InitiativePanel({
@@ -38,6 +41,7 @@ export default function InitiativePanel({
   figureCombatantId,
   figureWeapon,
   attackAnimation,
+  combatVisuals = null,
 }: Props) {
   const roster = rosterInInitiativeOrder(state);
   const activeCombatantId = state.combat?.activeCombatantId ?? null;
@@ -61,7 +65,7 @@ export default function InitiativePanel({
           const content = (
               <>
                <span className="player-mesa-figure-cell">
-                  <CombatantFigure combatant={combatant} weapon={visibleWeapon} visualWeaponKind={combatant.visualWeaponKind} animation={attackAnimation?.attackerId === combatant.id ? attackAnimation.kind : undefined} active={isActive} compact />
+                  <CombatantFigure combatant={combatant} weapon={visibleWeapon} visualWeaponKind={combatant.visualWeaponKind} animation={attackAnimation?.attackerId === combatant.id ? attackAnimation.kind : undefined} active={isActive} compact figureImage={combatVisuals?.imageFor(combatant.id) ?? null} />
                </span>
                <span className="player-mesa-initiative-num" aria-label="Iniciativa">
                 {combatant.initiative ?? "—"}

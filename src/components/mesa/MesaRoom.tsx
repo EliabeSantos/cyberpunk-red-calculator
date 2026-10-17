@@ -38,6 +38,7 @@ import {
 import type { MesaState } from "@/lib/mesa/types";
 import { useAutoLinkCharacter } from "@/lib/mesa/useAutoLinkCharacter";
 import { useMesaState } from "@/lib/mesa/useMesaState";
+import { useCombatVisuals } from "@/lib/characterVisual/useCombatVisuals";
 import FloatingUpdateCard, { type FloatingUpdate } from "@/components/FloatingUpdateCard";
 import AppDialog from "@/components/AppDialog";
 
@@ -208,6 +209,8 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
 
   const isGM = state.viewer.role === "gm";
   const sessionFinished = state.session.status === "finished";
+  // Etapa 2 — figuras personalizadas no painel de combate da Mesa (apresentação).
+  const combatVisuals = useCombatVisuals(state);
 
   async function copyInvite() {
     try {
@@ -309,6 +312,7 @@ function MesaView({ sessionId, state, joinCode, realtime, notice, onNotice, onCh
         sessionFinished={sessionFinished}
         onNotice={onNotice}
         onChanged={onChanged}
+        combatVisuals={combatVisuals}
       />
 
       <footer className="mesa-footer">

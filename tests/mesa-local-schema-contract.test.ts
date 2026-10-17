@@ -73,6 +73,13 @@ const tables = {
   mesa_toolkit_records: [
     "id", "owner_token", "kind", "name", "payload", "version", "created_at", "updated_at",
   ],
+  mesa_character_visual_profiles: [
+    "character_id", "owner_token", "display_name", "created_at", "updated_at",
+  ],
+  mesa_character_visual_assets: [
+    "id", "character_id", "owner_token", "kind", "state", "storage_mode", "storage_ref",
+    "mime_type", "width", "height", "byte_size", "created_at", "updated_at",
+  ],
 } as const;
 
 const indexes = [
@@ -84,12 +91,20 @@ const indexes = [
   "mesa_reload_resolutions_lookup_idx",
   "mesa_item_consume_resolutions_lookup_idx",
   "mesa_toolkit_records_owner_kind_updated_idx",
+  "mesa_character_visual_profiles_owner_idx",
+  "mesa_character_visual_assets_slot_uniq",
+  "mesa_character_visual_assets_owner_idx",
 ];
 
 const constraints = [
   "mesa_combatants_kind_check",
   "mesa_combatants_position_valid",
   "mesa_attack_resolutions_status_check",
+  "mesa_character_visual_assets_kind_check",
+  "mesa_character_visual_assets_state_check",
+  "mesa_character_visual_assets_storage_mode_check",
+  "mesa_character_visual_assets_mime_type_check",
+  "mesa_character_visual_assets_kind_state_check",
 ];
 
 const functions = [

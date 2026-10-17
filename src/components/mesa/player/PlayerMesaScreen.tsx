@@ -41,6 +41,7 @@ import { syncMesaCharacterState } from "@/lib/mesa/characterSync";
 import { tacticalCoverObstacleId } from "@/lib/mesa/tacticalMap";
 import { canConnectToAccessPoint } from "@/lib/mesa/netrunner";
 import { shouldReconcileAfterAction } from "@/lib/mesa/useMesaState";
+import { useCombatVisuals } from "@/lib/characterVisual/useCombatVisuals";
 
 import CombatLog from "./CombatLog";
 import ActionFeedback from "./ActionFeedback";
@@ -88,6 +89,9 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
   const [playerControlMode, setPlayerControlMode] = useState<"combat" | "net">("combat");
   const [controlWeapons, setControlWeapons] = useState<Record<string, { weapons: CombatWeapon[]; attacks: AvailableAttack[] }>>({});
 
+  // Etapa 2 — qual figura de corpo inteiro cada combatente exibe (apresentação).
+  const combatVisuals = useCombatVisuals(state);
+
   const onNotice = useCallback<NoticeFn>((message, kind) => {
     const id = createId();
     setNotice((current) => [...current.slice(-3), { id, message, kind }]);
@@ -98,11 +102,15 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
     await onRefresh();
   }, [onRefresh]);
 
-  const playAttackAnimation = useCallback((attackerId: string, targetId: string, kind: "ranged" | "melee", hit: boolean, damage: number | null) => {
+  const playAttackAnimation = useCallback((attackerId: string, targetId: string, kind: "ranged" | "melee", hit: boolean, damage: number | null, defenseType?: "dv" | "evasion") => {
+    // Resultado CONFIRMADO do servidor (a rota só responde no commit): alimenta
+    // os estados visuais do atacante (SHOOT/MELEE_ATTACK) e do alvo
+    // (DODGE quando a defesa foi `evasion` sem acerto; HIT quando houve dano).
+    combatVisuals.reportAttack({ attackerId, targetId, kind, hit, damage, defenseType });
     const key = Date.now();
     setAttackAnimation({ attackerId, targetId, kind, hit, damage, key });
     window.setTimeout(() => setAttackAnimation((current) => current?.key === key ? null : current), kind === "ranged" ? 1700 : 700);
-  }, []);
+  }, [combatVisuals]);
 
   const run = useCallback<RunAction>(
     async (action, options?: RunOptions) => {
@@ -346,6 +354,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
             attackAnimation={attackAnimation}
             figureCombatantId={isGM ? gmControlledCombatantId : me?.id}
             figureWeapon={isGM ? gmSelectedWeapon : playerSelectedWeapon}
+            combatVisuals={combatVisuals}
           />
         </aside>
 
@@ -386,6 +395,7 @@ export default function PlayerMesaScreen({ state, realtime, onRefresh, getRefres
               }}
              gmMapToolsVisible={!isGM || gmControlMode === "map"}
              attackAnimation={attackAnimation}
+             combatVisuals={combatVisuals}
            />
           <div className="player-mesa-stage-tools">
             <PlayerEquipmentPanel
