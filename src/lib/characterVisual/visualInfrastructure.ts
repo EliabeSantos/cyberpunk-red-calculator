@@ -14,7 +14,7 @@
  * Mesa em `hostingInfrastructure.ts`).
  */
 import { createMesaHostingInfrastructure, getLocalPostgresLifecycle, resolveMesaHostingMode } from "@/lib/mesa/hostingInfrastructure";
-import { CharacterVisualService, createMesaSessionReadGate } from "@/lib/characterVisual/characterVisualServer";
+import { CharacterVisualService, createMesaSessionReadGate, createMesaSessionWriteGate } from "@/lib/characterVisual/characterVisualServer";
 import type { CharacterAssetStorage, CharacterVisualRepository } from "@/lib/characterVisual/infrastructure";
 
 export async function createCharacterVisualRepository(): Promise<CharacterVisualRepository> {
@@ -40,7 +40,7 @@ export async function createCharacterAssetStorage(): Promise<CharacterAssetStora
   return new SupabaseBucketAssetStorage(getSupabaseAdmin());
 }
 
-/** Serviço completo, com o gate de leitura por Mesa dos demais participantes. */
+/** Serviço completo, com os gates de leitura (participantes da Mesa) e de escrita sincronizada (push para host remoto). */
 export async function createCharacterVisualService(): Promise<CharacterVisualService> {
   const [repository, storage] = await Promise.all([
     createCharacterVisualRepository(),
@@ -50,5 +50,6 @@ export async function createCharacterVisualService(): Promise<CharacterVisualSer
     repository,
     storage,
     sessionGate: createMesaSessionReadGate(createMesaHostingInfrastructure),
+    sessionWriteGate: createMesaSessionWriteGate(),
   });
 }

@@ -28,6 +28,7 @@ import {
 } from "@/lib/characterVisual/visualClient";
 import { COMBAT_VISUAL_STATE_CATALOG, isRequiredVisualState, type CombatVisualState } from "@/lib/characterVisual/visualStates";
 import { invalidateVisualManifest } from "@/lib/characterVisual/visualManifestCache";
+import { maybeSyncCharacterVisualToSessions } from "@/lib/characterVisual/sessionVisualSync";
 import type { CharacterVisualIdentity } from "@/lib/characterVisual/visualIdentity";
 import type { Character } from "@/types/character";
 
@@ -199,6 +200,10 @@ export default function CharacterVisualCustomizer() {
       // estiver aberta nesta sessão, a próxima consulta busca o manifesto
       // novo (assets removidos não continuam parecendo ativos).
       invalidateVisualManifest(characterId);
+      // Mesa remota onde este personagem está vinculado: empurra a identidade
+      // nova para o host (os outros participantes leem do host, não daqui).
+      // Silencioso e assíncrono: salvar local nunca depende disso.
+      void maybeSyncCharacterVisualToSessions(characterId);
       setNotice(next.completion.ready
         ? "Personalização visual salva."
         : "Alterações salvas. Ainda falta a imagem obrigatória de Prontidão (IDLE).");

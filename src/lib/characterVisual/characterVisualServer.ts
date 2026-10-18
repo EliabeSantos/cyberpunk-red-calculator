@@ -62,6 +62,12 @@ export interface CharacterVisualServiceDeps {
   storage: CharacterAssetStorage;
   /** Autorização de leitura para o futuro renderizador; injetável em testes. */
   sessionGate?: CharacterVisualSessionGate;
+  /**
+   * Autorização de ESCRITA sincronizada (push da identidade para o host da
+   * Mesa): mais estrita que a leitura — só o participante cujo vínculo aponta
+   * para ESTE personagem pode criar/escrever o perfil no host.
+   */
+  sessionWriteGate?: CharacterVisualSessionGate;
   now?: () => number;
   /** Espelha `MESA_VISUAL_MAX_IMAGE_BYTES` quando não informado. */
   maxImageBytes?: number;
@@ -74,6 +80,11 @@ export interface CharacterVisualImageWrite {
   token: unknown;
   slot: VisualSlot;
   imageDataUrl: unknown;
+  /**
+   * Presente apenas no PUSH de sincronização para o host de uma Mesa em outra
+   * origem: ativa o gate de escrita por sessão (vínculo obrigatório).
+   */
+  sessionId?: unknown;
 }
 
 function requireOwnerToken(token: unknown): string {
@@ -129,6 +140,7 @@ export class CharacterVisualService {
   private readonly repository: CharacterVisualRepository;
   private readonly storage: CharacterAssetStorage;
   private readonly sessionGate: CharacterVisualSessionGate | undefined;
+  private readonly sessionWriteGate: CharacterVisualSessionGate | undefined;
   private readonly now: () => number;
   private readonly maxImageBytes: number;
 
@@ -136,6 +148,7 @@ export class CharacterVisualService {
     this.repository = deps.repository;
     this.storage = deps.storage;
     this.sessionGate = deps.sessionGate;
+    this.sessionWriteGate = deps.sessionWriteGate;
     this.now = deps.now ?? (() => Date.now());
     this.maxImageBytes = deps.maxImageBytes ?? configuredMaxImageBytes();
   }
@@ -163,6 +176,22 @@ export class CharacterVisualService {
       return;
     }
     throw new MesaError("Esta personalização pertence a outro jogador.", 403, "character_owner_mismatch");
+  }
+
+  /**
+   * Escrita sincronizada por Mesa: quando o dono empurra a própria identidade
+   * para o host de uma Mesa em outra origem, o `sessionId` vem no corpo e o
+   * gate de ESCRITA exige que o chamador seja o participante cujo vínculo
+   * aponta para este personagem — sem gate configurado a escrita é negada
+   * (nunca um fallback silencioso para o caminho do dono puro).
+   */
+  private async authorizeSessionWrite(characterId: string, token: unknown, sessionId: unknown): Promise<void> {
+    if (typeof sessionId !== "string" || sessionId.length === 0) return;
+    const owner = requireOwnerToken(token);
+    if (!this.sessionWriteGate) {
+      throw new MesaError("Escrita sincronizada indisponível nesta configuração.", 403, "visual_write_denied");
+    }
+    await this.sessionWriteGate(characterId, sessionId, owner);
   }
 
   private assetRefOf(record: CharacterVisualAssetRecord): CharacterVisualAssetRef {
@@ -217,9 +246,10 @@ export class CharacterVisualService {
     return resolveCharacterVisualIdentity(await this.buildProfileData(id), fallback);
   }
 
-  async saveDisplayName(input: { characterId: unknown; token: unknown; displayName: unknown }): Promise<CharacterVisualIdentity> {
+  async saveDisplayName(input: { characterId: unknown; token: unknown; displayName: unknown; sessionId?: unknown }): Promise<CharacterVisualIdentity> {
     const characterId = requireCharacterId(input.characterId);
     const owner = await this.requireOwnership(characterId, input.token);
+    await this.authorizeSessionWrite(characterId, input.token, input.sessionId);
     const displayName = normalizeDisplayName(input.displayName);
     await this.repository.upsertProfile({ characterId, ownerToken: owner, displayName });
     return this.loadIdentity(characterId, owner);
@@ -228,6 +258,7 @@ export class CharacterVisualService {
   async saveImage(input: CharacterVisualImageWrite): Promise<CharacterVisualIdentity> {
     const characterId = requireCharacterId(input.characterId);
     const owner = await this.requireOwnership(characterId, input.token);
+    await this.authorizeSessionWrite(characterId, input.token, input.sessionId);
     const slot = parseSlot(input.slot);
 
     let decoded: { bytes: Uint8Array; declaredMimeType: string | null };
@@ -286,9 +317,10 @@ export class CharacterVisualService {
   }
 
   /** Remove apenas a imagem do slot; a ficha mecânica nunca é tocada. */
-  async removeImage(input: { characterId: unknown; token: unknown; slot: VisualSlot }): Promise<CharacterVisualIdentity> {
+  async removeImage(input: { characterId: unknown; token: unknown; slot: VisualSlot; sessionId?: unknown }): Promise<CharacterVisualIdentity> {
     const characterId = requireCharacterId(input.characterId);
     const owner = await this.requireOwnership(characterId, input.token);
+    await this.authorizeSessionWrite(characterId, input.token, input.sessionId);
     const slot = parseSlot(input.slot);
     const kind = slot.kind;
     const state = slot.kind === "combat_state" ? slot.state : null;
@@ -328,6 +360,16 @@ export class CharacterVisualService {
 }
 
 /**
+ * Converte erros inesperados dos adapters (por exemplo um `sessionId` malformado
+ * que estoura o cast de uuid no PostgreSQL) em NEGAÇÃO limpa: id enviado pelo
+ * cliente nunca pode virar 502 nem vazar detalhe de infraestrutura.
+ */
+function asVisualSessionError(error: unknown, message: string, code: string): unknown {
+  if (error instanceof MesaError) return error;
+  return new MesaError(message, 403, code);
+}
+
+/**
  * Gate padrão de leitura por Mesa: o chamador precisa ser participante
  * autenticado da sessão e o personagem precisa estar vinculado nela (link do
  * participante ou combatente inimigo cadastrado pelo mestre).
@@ -336,14 +378,52 @@ export function createMesaSessionReadGate(
   resolveInfrastructure: () => Promise<{ repository: MesaRepository }>,
 ): CharacterVisualSessionGate {
   return async (characterId: string, sessionId: string, token: string): Promise<void> => {
-    const actor = await authenticate(sessionId, token);
+    let actor;
+    try {
+      actor = await authenticate(sessionId, token);
+    } catch (error) {
+      throw asVisualSessionError(error, "Este personagem não participa da mesa informada.", "visual_not_in_session");
+    }
     // O próprio vínculo do participante já autoriza a leitura.
     if (actor.participant.characterId === characterId) return;
-    const { repository } = await resolveInfrastructure();
-    const participants = await repository.listParticipantsBySession(sessionId);
-    const linked = participants.some((participant) => participant.character_id === characterId);
-    if (!linked) {
-      throw new MesaError("Este personagem não participa da mesa informada.", 403, "visual_not_in_session");
+    try {
+      const { repository } = await resolveInfrastructure();
+      const participants = await repository.listParticipantsBySession(sessionId);
+      const linked = participants.some((participant) => participant.character_id === characterId);
+      if (!linked) {
+        throw new MesaError("Este personagem não participa da mesa informada.", 403, "visual_not_in_session");
+      }
+    } catch (error) {
+      throw asVisualSessionError(error, "Este personagem não participa da mesa informada.", "visual_not_in_session");
+    }
+  };
+}
+
+/**
+ * Gate padrão de ESCRITA sincronizada por Mesa (push da identidade visual do
+ * dono para o host de uma Mesa em outra origem): só o participante cujo
+ * vínculo aponta para ESTE personagem pode criar/escrever o perfil no host —
+ * mais estrito que a leitura. Um participante comum nunca escreve a imagem de
+ * outro jogador, mesmo conhecendo o `characterId` e o `sessionId`.
+ */
+export function createMesaSessionWriteGate(): CharacterVisualSessionGate {
+  return async (characterId: string, sessionId: string, token: string): Promise<void> => {
+    let actor;
+    try {
+      actor = await authenticate(sessionId, token);
+    } catch (error) {
+      throw asVisualSessionError(
+        error,
+        "A sincronização exige uma mesa válida com o personagem vinculado.",
+        "visual_write_not_linked",
+      );
+    }
+    if (actor.participant.characterId !== characterId) {
+      throw new MesaError(
+        "Apenas o participante que vinculou este personagem pode sincronizar a identidade visual.",
+        403,
+        "visual_write_not_linked",
+      );
     }
   };
 }

@@ -16,16 +16,31 @@
 import { useEffect, useRef } from "react";
 
 import { linkCharacter } from "@/lib/mesa/client";
+import { syncCharacterVisualToSession } from "@/lib/characterVisual/sessionVisualSync";
 import type { MesaState } from "@/lib/mesa/types";
 import { getActiveCharacter, loadCharacters } from "@/lib/storage";
 
 export function useAutoLinkCharacter(state: MesaState | null, refresh: () => Promise<void>): void {
   const attemptedLinkRef = useRef<string | null>(null);
+  const attemptedVisualSyncRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!state) return;
     const me = state.participants.find((entry) => entry.id === state.viewer.participantId);
     if (!me) return;
+    // Identidade visual é apresentação, não ficha mecânica: a sincronização
+    // para o host remoto roda ANTES dos guards de combate (o servidor revalida
+    // posse + vínculo de qualquer forma) — entrar numa Mesa já em combate com
+    // o personagem vinculado não deixa as imagens para trás.
+    if (me.characterId) {
+      const visualKey = `${state.session.id}:${me.characterId}`;
+      if (attemptedVisualSyncRef.current !== visualKey) {
+        attemptedVisualSyncRef.current = visualKey;
+        void syncCharacterVisualToSession(me.characterId, state.session.id).catch(() => {
+          // Silencioso: a próxima entrada/re-vínculo tenta de novo.
+        });
+      }
+    }
     // Durante um combate já iniciado, a Mesa é autoritativa e a ficha local
     // não pode sobrescrever HP, munição ou lesões.
     if (state.combat?.status === "finished") return;

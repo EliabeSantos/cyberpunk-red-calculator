@@ -26,6 +26,7 @@ import {
 import { finishMesaTelemetry, markMesaTelemetry, startMesaTelemetry } from "@/lib/mesa/telemetry";
 import { createId } from "@/lib/id";
 import { getConfiguredMesaServerUrl } from "@/lib/mesa/remoteServer";
+import { syncCharacterVisualToSession } from "@/lib/characterVisual/sessionVisualSync";
 
 const TOKEN_HEADER = "x-mesa-token";
 
@@ -173,6 +174,13 @@ export async function linkCharacter(
     method: "PATCH",
     body: { characterId, sheet },
   });
+  // Entrada/atualização da Mesa: a identidade visual vai junto para o host
+  // (só faz sentido quando a Mesa vive noutra origem — sem `serverUrl` a
+  // escrita local já é a do host). Fire-and-forget como o próprio vínculo:
+  // falha de sincronização nunca quebra o link da ficha.
+  if (characterId) {
+    void syncCharacterVisualToSession(characterId, sessionId).catch(() => undefined);
+  }
 }
 
 /**

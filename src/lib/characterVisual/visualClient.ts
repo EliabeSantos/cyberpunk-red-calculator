@@ -7,7 +7,7 @@
  * aplicação, com o player token no header `x-mesa-token` (nunca na URL).
  */
 
-import { getPlayerToken } from "@/lib/mesa/membershipStore";
+import { getPlayerToken, listMemberships } from "@/lib/mesa/membershipStore";
 import type { CombatVisualState } from "@/lib/characterVisual/visualStates";
 import type { CharacterVisualIdentity } from "@/lib/characterVisual/visualIdentity";
 
@@ -25,9 +25,30 @@ export class CharacterVisualApiError extends Error {
   }
 }
 
+/**
+ * Origem do host da Mesa para uma sessão deste navegador.
+ *
+ * `null` = a Mesa vive na MESMA origem deste aplicativo (nada a rotear). Um
+ * `serverUrl` presente significa que a Mesa (e o armazenamento persistente
+ * dela) está em outro servidor — mesmo critério de `api()` em
+ * `mesa/client.ts`: quem entra numa Mesa remota precisa falar com o host da
+ * Mesa, não com a instância local (senão só o caminho do dono funciona e os
+ * demais participantes nunca veem as imagens).
+ */
+export function visualSessionOrigin(sessionId: string | null | undefined): string | null {
+  if (!sessionId) return null;
+  const membership = listMemberships().find((entry) => entry.sessionId === sessionId);
+  return membership?.serverUrl ?? null;
+}
+
 async function request(
   method: "GET" | "PUT" | "DELETE",
-  { query, body }: { query?: Record<string, string>; body?: Record<string, unknown> } = {},
+  { query, body, origin }: {
+    query?: Record<string, string>;
+    body?: Record<string, unknown>;
+    /** Origem do host da Mesa; ausente = mesma origem (caminho local). */
+    origin?: string | null;
+  } = {},
 ): Promise<CharacterVisualIdentity> {
   const search = query
     ? Object.entries(query)
@@ -35,7 +56,8 @@ async function request(
       .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
       .join("&")
     : "";
-  const response = await fetch(`/api/character-visual${search ? `?${search}` : ""}`, {
+  const path = `/api/character-visual${search ? `?${search}` : ""}`;
+  const response = await fetch(origin ? `${origin}${path}` : path, {
     method,
     headers: { "content-type": "application/json", "x-mesa-token": getPlayerToken() },
     body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
@@ -53,6 +75,22 @@ async function request(
   return result.identity;
 }
 
+/**
+ * Requisição bruta da rota `/api/character-visual` (usada também pela
+ * sincronização de identidade para o host da Mesa). Lança
+ * `CharacterVisualApiError` em qualquer falha.
+ */
+export async function requestCharacterVisual(
+  method: "GET" | "PUT" | "DELETE",
+  options: {
+    query?: Record<string, string>;
+    body?: Record<string, unknown>;
+    origin?: string | null;
+  } = {},
+): Promise<CharacterVisualIdentity> {
+  return request(method, options);
+}
+
 export function slotBody(slot: ClientVisualSlot): Record<string, unknown> {
   return slot.kind === "portrait" ? { slot: "portrait" } : { slot: "combat_state", state: slot.state };
 }
@@ -61,7 +99,10 @@ export async function fetchCharacterVisual(
   characterId: string,
   options: { sessionId?: string; fallbackName?: string } = {},
 ): Promise<CharacterVisualIdentity> {
+  // Com `sessionId`, a consulta é roteada para o host da Mesa (membership
+  // `serverUrl`); sem sessão, é a leitura local do próprio dono.
   return request("GET", {
+    origin: visualSessionOrigin(options.sessionId),
     query: {
       characterId,
       ...(options.sessionId ? { sessionId: options.sessionId } : {}),
