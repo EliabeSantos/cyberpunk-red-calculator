@@ -27,6 +27,7 @@ let updateProgress = 0;
 let updateError = "";
 let updatePromptOpen = false;
 let manualUpdateCheck = false;
+let lastLoggedDownloadPercent = -100;
 app.setName("Cyberpunk RED Calculator");
 app.setAppUserModelId("com.cyberpunkred.calculator");
 
@@ -223,12 +224,12 @@ function setUpdateTitle() {
 async function installDownloadedUpdate() {
   if (updateState !== "ready") return;
   try {
-    logUpdater("install_requested", { version: updateVersion });
+    logUpdater("install_requested", { version: updateVersion, currentVersion: app.getVersion() });
     await stopHost();
     autoUpdater.quitAndInstall(false, true);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logUpdater("install_failed", { message });
+    logUpdater("install_failed", { message, version: updateVersion, currentVersion: app.getVersion() });
     setUpdateState("error", { error: message });
     void dialog.showMessageBox(mainWindow, {
       type: "error",
@@ -243,12 +244,13 @@ async function installDownloadedUpdate() {
 async function downloadAvailableUpdate() {
   if (updateState !== "available") return;
   try {
-    logUpdater("download_requested", { version: updateVersion });
+    logUpdater("download_requested", { version: updateVersion, currentVersion: app.getVersion() });
+    lastLoggedDownloadPercent = -100;
     setUpdateState("downloading", { progress: 0 });
     await autoUpdater.downloadUpdate();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logUpdater("download_failed", { message });
+    logUpdater("download_failed", { message, version: updateVersion, currentVersion: app.getVersion() });
     setUpdateState("error", { error: message });
     void dialog.showMessageBox(mainWindow, {
       type: "error",
@@ -263,6 +265,7 @@ async function downloadAvailableUpdate() {
 function promptUpdateAvailable() {
   if (updatePromptOpen || !mainWindow) return;
   updatePromptOpen = true;
+  logUpdater("prompt_available_shown", { version: updateVersion, currentVersion: app.getVersion() });
   void dialog.showMessageBox(mainWindow, {
     type: "info",
     title: "Nova versão disponível",
@@ -273,16 +276,19 @@ function promptUpdateAvailable() {
     cancelId: 1,
   }).then((result) => {
     updatePromptOpen = false;
+    logUpdater("prompt_available_choice", { version: updateVersion, choice: result.response === 0 ? "download_now" : "later" });
     if (result.response === 0) return downloadAvailableUpdate();
     return undefined;
   }).catch(() => {
     updatePromptOpen = false;
+    logUpdater("prompt_available_failed", { version: updateVersion });
   });
 }
 
 function promptUpdateReady() {
   if (updatePromptOpen || !mainWindow) return;
   updatePromptOpen = true;
+  logUpdater("prompt_ready_shown", { version: updateVersion });
   void dialog.showMessageBox(mainWindow, {
     type: "info",
     title: "Atualização pronta",
@@ -293,10 +299,12 @@ function promptUpdateReady() {
     cancelId: 1,
   }).then((result) => {
     updatePromptOpen = false;
+    logUpdater("prompt_ready_choice", { version: updateVersion, choice: result.response === 0 ? "install_now" : "later" });
     if (result.response === 0) return installDownloadedUpdate();
     return undefined;
   }).catch(() => {
     updatePromptOpen = false;
+    logUpdater("prompt_ready_failed", { version: updateVersion });
   });
 }
 
@@ -325,22 +333,32 @@ async function checkForUpdates(manual = false) {
 
 function configureAutoUpdater() {
   const manifest = path.join(process.resourcesPath, "app-update.yml");
-  if (!app.isPackaged || !fs.existsSync(manifest)) return;
+  if (!app.isPackaged) {
+    // Instalações que rodam electron.exe direto (ex.: wrapper Inno Setup) não
+    // são apps empacotados: o electron-updater não tem como atualizá-las.
+    logUpdater("disabled", { reason: "not_packaged", resourcesPath: process.resourcesPath, currentVersion: app.getVersion() });
+    return;
+  }
+  if (!fs.existsSync(manifest)) {
+    logUpdater("disabled", { reason: "app_update_manifest_missing", manifest, currentVersion: app.getVersion() });
+    return;
+  }
 
-  logUpdater("configured", { currentVersion: app.getVersion() });
+  logUpdater("configured", { currentVersion: app.getVersion(), manifest });
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowDowngrade = false;
   autoUpdater.on("checking-for-update", () => {
+    logUpdater("checking_for_update", { currentVersion: app.getVersion() });
     setUpdateState("checking");
   });
   autoUpdater.on("update-available", (info) => {
-    logUpdater("update_available", { version: info.version });
+    logUpdater("update_available", { version: info.version, currentVersion: app.getVersion() });
     setUpdateState("available", { version: info.version, progress: 0, error: "" });
     promptUpdateAvailable();
   });
   autoUpdater.on("update-not-available", (info) => {
-    logUpdater("up_to_date", { version: info?.version ?? app.getVersion() });
+    logUpdater("up_to_date", { version: info?.version ?? app.getVersion(), currentVersion: app.getVersion() });
     setUpdateState("current", { version: "", progress: 0, error: "" });
     if (manualUpdateCheck) {
       void dialog.showMessageBox(mainWindow, {
@@ -354,16 +372,27 @@ function configureAutoUpdater() {
     manualUpdateCheck = false;
   });
   autoUpdater.on("download-progress", (progress) => {
-    setUpdateState("downloading", { progress: progress.percent });
+    // Log em degraus (não a cada evento) para o diagnóstico não inundar o log.
+    const percent = progress.percent ?? 0;
+    if (percent - lastLoggedDownloadPercent >= 10 || percent >= 100) {
+      lastLoggedDownloadPercent = percent;
+      logUpdater("download_progress", {
+        version: updateVersion,
+        percent: Math.round(percent),
+        transferredBytes: progress.transferred,
+        totalBytes: progress.total,
+      });
+    }
+    setUpdateState("downloading", { progress: percent });
   });
   autoUpdater.on("update-downloaded", (info) => {
-    logUpdater("download_completed", { version: info.version });
+    logUpdater("download_completed", { version: info.version, currentVersion: app.getVersion() });
     setUpdateState("ready", { version: info.version, progress: 100, error: "" });
     promptUpdateReady();
   });
   autoUpdater.on("error", (error) => {
     const message = error instanceof Error ? error.message : String(error);
-    logUpdater("updater_error", { message });
+    logUpdater("updater_error", { message, stage: updateState, version: updateVersion, currentVersion: app.getVersion() });
     setUpdateState("error", { error: message });
     manualUpdateCheck = false;
   });

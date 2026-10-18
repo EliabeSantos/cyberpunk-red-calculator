@@ -144,19 +144,19 @@ jobs:
           if (-not (Test-Path $metadataPath)) { throw "electron-builder did not create latest.yml." }
           $metadata = Get-Content $metadataPath -Raw
           if ($metadata -notmatch "(?m)^version:\s*$([regex]::Escape($env:VERSION))\s*$") { throw "latest.yml does not describe version $($env:VERSION)." }
-           # electron-builder may normalize/encode the artifact filename in
-           # latest.yml. Compare the actual metadata URL with the generated
-           # installer after decoding and removing presentation-only separators.
-           $metadataUrls = [regex]::Matches($metadata, '(?im)^\s*-?\s*(?:url|path):\s*["'']?(?<url>[^"''\r\n]+\.exe)["'']?\s*$') |
-             ForEach-Object { [System.Uri]::UnescapeDataString($_.Groups['url'].Value.Trim()) }
-           $installerToken = [regex]::Replace($installers[0].Name.ToLowerInvariant(), '[^a-z0-9]', '')
-           $metadataTokens = @($metadataUrls | ForEach-Object {
-             $fileName = [System.IO.Path]::GetFileName($_)
-             [regex]::Replace($fileName.ToLowerInvariant(), '[^a-z0-9]', '')
-           })
-           if ($metadataTokens -notcontains $installerToken) {
-             throw "latest.yml does not reference the generated NSIS installer. Generated='$($installers[0].Name)'; Metadata='$($metadataUrls -join ', ')'."
-           }
+            # O download do electron-updater usa o `path`/`url` do latest.yml
+            # com apenas espaços→hífens; o `gh release create` preserva o nome
+            # do arquivo (sem espaços). A comparação precisa ser EXATA — uma
+            # normalização que ignora separadores já escondeu um desalinhamento
+            # hífen×ponto que quebrava todo o auto-update (release v0.2.0).
+            $metadataUrls = [regex]::Matches($metadata, '(?im)^\s*-?\s*(?:url|path):\s*["'']?(?<url>[^"''\r\n]+\.exe)["'']?\s*$') |
+              ForEach-Object { [System.Uri]::UnescapeDataString($_.Groups['url'].Value.Trim()) }
+            if ($metadataUrls.Count -lt 1) { throw "latest.yml does not list any installer URL." }
+            $installerName = $installers[0].Name
+            $metadataNames = @($metadataUrls | ForEach-Object { [System.IO.Path]::GetFileName($_) })
+            if ($metadataNames -notcontains $installerName) {
+              throw "latest.yml does not reference the generated NSIS installer EXACTLY. Generated='$installerName'; Metadata='$($metadataNames -join ', ')'. The auto-update download URL would not resolve."
+            }
           $blockmaps = @(Get-ChildItem (Join-Path $output "*.blockmap") -File -ErrorAction SilentlyContinue)
           if ($blockmaps.Count -lt 1) { throw "electron-builder did not create a .blockmap artifact." }
           Write-Host "NSIS: $($installers[0].Name)"

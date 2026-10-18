@@ -1,6 +1,6 @@
 {
   "name": "cyberpunk-red-calculator",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "main": "desktop/main.cjs",
   "scripts": {
@@ -44,6 +44,7 @@
     "productName": "Cyberpunk RED Calculator",
     "asar": false,
     "icon": "src/app/icon.ico",
+    "artifactName": "Cyberpunk-RED-Calculator-Setup-${version}.${ext}",
     "directories": {
       "output": "installer/windows/electron-output"
     },
